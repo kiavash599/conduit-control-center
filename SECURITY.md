@@ -19,7 +19,7 @@ A public issue exposes the vulnerability to everyone before a fix is available, 
 
 ### How to report
 
-Send an email to: **[ADD YOUR SECURITY EMAIL HERE]**
+Send an email to: kiavashrocky [at] gmail.com
 
 Include in your report:
 - A description of the vulnerability and its potential impact
