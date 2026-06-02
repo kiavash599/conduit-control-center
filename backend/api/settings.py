@@ -4,7 +4,7 @@ backend/api/settings.py
 Application settings endpoints.
 
 Implemented in:
-  Issue #31 — PUT /api/settings/password (change admin password)
+  Issue #31 -- PUT /api/settings/password (change admin password)
 
 Stub phase
 ----------

@@ -3,8 +3,8 @@ backend/config.py
 -----------------
 Loads all runtime configuration from two sources:
 
-  1. Environment variables / .env file  → Pydantic Settings (secrets, ports, keys)
-  2. config.json                        → app behaviour (timeouts, thresholds, paths)
+  1. Environment variables / .env file  -> Pydantic Settings (secrets, ports, keys)
+  2. config.json                        -> app behaviour (timeouts, thresholds, paths)
 
 Usage
 -----
@@ -13,7 +13,7 @@ Usage
     settings = get_settings()          # env-based settings (cached singleton)
     cfg = get_app_config()             # config.json-based values (cached singleton)
 
-Both functions return the same cached object on every call — safe to use as
+Both functions return the same cached object on every call -- safe to use as
 FastAPI dependencies or plain imports.
 
 Security note
@@ -39,13 +39,10 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 
-# When running in production, install.sh places both files under /etc/conduit-cc/.
-# During local development they sit at the project root (next to .env.example).
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_ENV_FILE = _PROJECT_ROOT / ".env"
 _DEFAULT_CONFIG_FILE = _PROJECT_ROOT / "config.json"
 
-# Production paths (used when the dev-path files are absent)
 _PROD_ENV_FILE = Path("/etc/conduit-cc/.env")
 _PROD_CONFIG_FILE = Path("/etc/conduit-cc/config.json")
 
@@ -56,11 +53,11 @@ def _resolve_path(dev: Path, prod: Path) -> Path:
         return dev
     if prod.exists():
         return prod
-    return dev  # return dev path even if absent so Pydantic can report a clear error
+    return dev
 
 
 # ---------------------------------------------------------------------------
-# Environment-based settings  (secrets + runtime tunables)
+# Environment-based settings
 # ---------------------------------------------------------------------------
 
 
@@ -68,10 +65,9 @@ class Settings(BaseSettings):
     """
     Loaded from environment variables and the .env file.
 
-    All fields have sensible defaults so `uvicorn backend.main:app` works
-    on a fresh clone without a .env file.  The only hard requirement in
-    production is SESSION_SECRET — the app will refuse to start if it is
-    left as the placeholder value.
+    All fields have sensible defaults so the app starts on a fresh clone
+    without a .env file.  SESSION_SECRET must be set to a real value in
+    production -- the validator rejects the .env.example placeholder.
     """
 
     model_config = SettingsConfigDict(
@@ -84,7 +80,9 @@ class Settings(BaseSettings):
     # -- Application ----------------------------------------------------------
     session_secret: str = Field(
         default="dev_secret_change_me_in_production",
-        description="32-byte hex secret for signing session IDs. REQUIRED in production.",
+        description=(
+            "32-byte hex secret for signing session IDs. REQUIRED in production."
+        ),
     )
     app_port: int = Field(default=8000)
     log_level: str = Field(default="INFO")
@@ -109,7 +107,8 @@ class Settings(BaseSettings):
         if v == placeholder:
             raise ValueError(
                 "SESSION_SECRET is still set to the placeholder value. "
-                "Generate a real secret: python3 -c \"import secrets; print(secrets.token_hex(32))\""
+                "Generate a real secret: "
+                "python3 -c \"import secrets; print(secrets.token_hex(32))\""
             )
         return v
 
@@ -130,17 +129,8 @@ def get_settings() -> Settings:
 
 
 # ---------------------------------------------------------------------------
-# config.json — app behaviour settings
+# config.json -- app behaviour settings
 # ---------------------------------------------------------------------------
-
-
-class AppSection:
-    host: str
-    port: int
-    session_timeout_minutes: int
-    max_failed_login_attempts: int
-    lockout_duration_minutes: int
-    log_level: str
 
 
 class AppConfig:
@@ -162,14 +152,20 @@ class AppConfig:
 
         conduit = data.get("conduit", {})
         self.conduit_service_name: str = conduit.get("service_name", "conduit")
-        self.conduit_action_timeout_seconds: int = conduit.get("action_timeout_seconds", 10)
+        self.conduit_action_timeout_seconds: int = conduit.get(
+            "action_timeout_seconds", 10
+        )
 
         metrics = data.get("metrics", {})
         self.metrics_cache_ttl_seconds: int = metrics.get("cache_ttl_seconds", 5)
 
         alerts = data.get("alerts", {})
-        self.cpu_temp_warning_celsius: float = alerts.get("cpu_temp_warning_celsius", 70.0)
-        self.cpu_temp_critical_celsius: float = alerts.get("cpu_temp_critical_celsius", 80.0)
+        self.cpu_temp_warning_celsius: float = alerts.get(
+            "cpu_temp_warning_celsius", 70.0
+        )
+        self.cpu_temp_critical_celsius: float = alerts.get(
+            "cpu_temp_critical_celsius", 80.0
+        )
         self.ram_warning_percent: float = alerts.get("ram_warning_percent", 80.0)
         self.ram_critical_percent: float = alerts.get("ram_critical_percent", 90.0)
         self.disk_warning_percent: float = alerts.get("disk_warning_percent", 75.0)
@@ -178,11 +174,15 @@ class AppConfig:
         logs = data.get("logs", {})
         self.logs_viewer_default_lines: int = logs.get("viewer_default_lines", 200)
         self.logs_viewer_max_lines: int = logs.get("viewer_max_lines", 1000)
-        self.ddns_log_path: str = logs.get("ddns_log_path", "/var/log/conduit-cc/ddns.log")
+        self.ddns_log_path: str = logs.get(
+            "ddns_log_path", "/var/log/conduit-cc/ddns.log"
+        )
         self.ddns_status_cache_seconds: int = logs.get("ddns_status_cache_seconds", 30)
 
         ddns = data.get("ddns", {})
-        self.ddns_ip_provider_url: str = ddns.get("ip_provider_url", "https://api.ipify.org")
+        self.ddns_ip_provider_url: str = ddns.get(
+            "ip_provider_url", "https://api.ipify.org"
+        )
 
 
 @lru_cache(maxsize=1)
@@ -190,7 +190,7 @@ def get_app_config() -> AppConfig:
     """
     Load and cache config.json.
 
-    Falls back to all defaults if the file doesn't exist — useful during
+    Falls back to all defaults if the file does not exist -- useful during
     local development before install.sh has run.
     """
     config_path = _resolve_path(_DEFAULT_CONFIG_FILE, _PROD_CONFIG_FILE)
@@ -201,10 +201,10 @@ def get_app_config() -> AppConfig:
             logger.debug("Loaded config.json from %s", config_path)
             return AppConfig(data)
         except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Could not load %s (%s) — using defaults", config_path, exc)
+            logger.warning("Could not load %s (%s) -- using defaults", config_path, exc)
     else:
         logger.info(
-            "config.json not found at %s or %s — using defaults. "
+            "config.json not found at %s or %s -- using defaults. "
             "Copy config.example.json to config.json to customise.",
             _DEFAULT_CONFIG_FILE,
             _PROD_CONFIG_FILE,

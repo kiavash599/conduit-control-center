@@ -4,7 +4,7 @@ backend/api/logs.py
 Log viewer endpoint.
 
 Implemented in:
-  Issue #23 — GET /api/logs  (last N lines from journalctl, with redaction)
+  Issue #23 -- GET /api/logs  (last N lines from journalctl, with redaction)
 
 Stub phase
 ----------

@@ -1,7 +1,7 @@
 """
 backend/api/health.py
 ---------------------
-GET /api/health — unauthenticated liveness check.
+GET /api/health -- unauthenticated liveness check.
 
 This endpoint is intentionally kept simple and dependency-free:
 - No session required
@@ -11,7 +11,6 @@ This endpoint is intentionally kept simple and dependency-free:
 Used by:
 - install.sh Phase 2l (waits for 200 before declaring install successful)
 - Nginx upstream health checks
-- External monitoring tools
 - CI smoke tests
 
 Response schema
@@ -30,9 +29,9 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-router = APIRouter(tags=["health"])
+from backend._version import APP_VERSION
 
-_APP_VERSION = "0.1.0"
+router = APIRouter(tags=["health"])
 
 
 @router.get(
@@ -60,7 +59,7 @@ async def health(request: Request) -> JSONResponse:
 
     Returns HTTP 200 as long as the application process is running and
     able to handle requests.  Does not check Conduit service status or
-    database connectivity — those are separate concerns.
+    database connectivity -- those are separate concerns.
     """
     started_at: float = getattr(request.app.state, "started_at", time.time())
     uptime = round(time.time() - started_at, 1)
@@ -69,7 +68,7 @@ async def health(request: Request) -> JSONResponse:
         status_code=200,
         content={
             "status": "ok",
-            "version": _APP_VERSION,
+            "version": APP_VERSION,
             "uptime_seconds": uptime,
         },
     )

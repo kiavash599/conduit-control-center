@@ -4,8 +4,8 @@ backend/api/auth.py
 Authentication endpoints.
 
 Implemented in:
-  Issue #14 — POST /api/auth/login, POST /api/auth/logout
-  Issue #15 — Account lockout, ccc-unlock CLI
+  Issue #14 -- POST /api/auth/login, POST /api/auth/logout
+  Issue #15 -- Account lockout, ccc-unlock CLI
 
 Stub phase
 ----------

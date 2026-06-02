@@ -10,7 +10,7 @@ Startup sequence
 3. Create database tables (database.py)
 4. Register all API routers
 5. Mount static files and Jinja2 templates
-6. Register global exception handler (JSON errors only — no stack traces)
+6. Register global exception handler (JSON errors only -- no stack traces)
 
 Run locally
 -----------
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -35,8 +36,7 @@ from fastapi.templating import Jinja2Templates
 
 from backend.config import get_app_config, get_settings
 from backend.database import create_tables
-
-# API routers
+from backend._version import APP_VERSION
 from backend.api import (
     auth_router,
     conduit_router,
@@ -62,12 +62,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Application metadata
-# ---------------------------------------------------------------------------
-
-APP_VERSION = "0.1.0"
-
-# ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
@@ -80,21 +74,14 @@ _TEMPLATES_DIR = _PROJECT_ROOT / "frontend" / "templates"
 # Lifespan (startup / shutdown)
 # ---------------------------------------------------------------------------
 
-from contextlib import asynccontextmanager
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs startup tasks before the server accepts requests."""
     logger.info("Conduit Control Center v%s starting up", APP_VERSION)
-
-    # Initialise the database (creates tables if they don't exist)
     await create_tables()
-
-    # Store startup time so /api/health can report uptime
     app.state.started_at = time.time()
-
-    logger.info("Startup complete — listening on port %d", get_app_config().port)
+    logger.info("Startup complete -- listening on port %d", get_app_config().port)
     yield
     logger.info("Conduit Control Center shutting down")
 
@@ -106,7 +93,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Conduit Control Center",
     version=APP_VERSION,
-    description="Dashboard for managing a Psiphon Conduit node on Linux / Raspberry Pi.",
+    description=(
+        "Dashboard for managing a Psiphon Conduit node on Linux / Raspberry Pi."
+    ),
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -116,8 +105,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Global exception handler
 # ---------------------------------------------------------------------------
-# Never expose Python stack traces to the client.  All unhandled exceptions
-# become a generic JSON 500 response.  The real error is logged server-side.
+# Never expose Python stack traces to the client.
 
 
 @app.exception_handler(Exception)
@@ -125,7 +113,9 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": "An internal error occurred. Check server logs for details."},
+        content={
+            "detail": "An internal error occurred. Check server logs for details."
+        },
     )
 
 
@@ -145,15 +135,13 @@ app.include_router(ddns_router, prefix="/api/ddns")
 # ---------------------------------------------------------------------------
 # Static files
 # ---------------------------------------------------------------------------
-# Guard: only mount if the directory exists so the app starts cleanly on a
-# fresh checkout before the frontend is built.
 
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
     logger.debug("Static files mounted from %s", _STATIC_DIR)
 else:
     logger.warning(
-        "Static directory not found at %s — /static will return 404. "
+        "Static directory not found at %s -- /static will return 404. "
         "Create frontend/static/ to enable static file serving.",
         _STATIC_DIR,
     )
@@ -161,7 +149,6 @@ else:
 # ---------------------------------------------------------------------------
 # Template engine
 # ---------------------------------------------------------------------------
-# Exposed as app.state.templates so route handlers can access it via request.app.state.
 
 if _TEMPLATES_DIR.exists():
     app.state.templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
@@ -169,7 +156,7 @@ if _TEMPLATES_DIR.exists():
 else:
     app.state.templates = None
     logger.warning(
-        "Templates directory not found at %s — HTML routes will not render pages. "
+        "Templates directory not found at %s -- HTML routes will not render pages. "
         "Create frontend/templates/ to enable template rendering.",
         _TEMPLATES_DIR,
     )

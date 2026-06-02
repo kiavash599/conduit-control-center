@@ -4,9 +4,9 @@ backend/api/conduit.py
 Conduit node control endpoints.
 
 Implemented in:
-  Issue #17 — Conduit adapter (systemctl wrapper)
-  Issue #19 — POST /api/conduit/start, stop, restart
-  Issue #20 — POST /api/conduit/pair (transient pairing, no storage)
+  Issue #17 -- Conduit adapter (systemctl wrapper)
+  Issue #19 -- POST /api/conduit/start, stop, restart
+  Issue #20 -- POST /api/conduit/pair (transient pairing, no storage)
 
 Stub phase
 ----------

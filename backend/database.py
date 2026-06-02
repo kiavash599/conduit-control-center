@@ -4,27 +4,21 @@ backend/database.py
 Async SQLite connection helper using aiosqlite.
 
 The database file lives at:
-  - Production:   /etc/conduit-cc/ccc.db   (created by install.sh with correct permissions)
+  - Production:   /etc/conduit-cc/ccc.db
+    (created by install.sh with correct permissions)
   - Development:  <project-root>/ccc.db
 
 Tables are created at application startup via create_tables().
-Each module that needs storage (auth, sessions, metrics) adds its CREATE TABLE
-statements to _TABLE_DDL below.
+Each module that needs storage adds its CREATE TABLE statements to _TABLE_DDL below.
 
 Usage
 -----
-    # In a FastAPI route via the get_db dependency:
     async with get_db() as db:
         await db.execute("SELECT ...")
 
-    # Or use the dependency directly (see dependencies.py):
-    @app.get("/example")
-    async def example(db: aiosqlite.Connection = Depends(get_db)):
-        ...
-
 Design notes
 ------------
-- One connection is opened per request via contextmanager. aiosqlite connections
+- One connection is opened per request via context manager. aiosqlite connections
   are lightweight; a connection pool is not needed for this workload.
 - WAL mode is enabled so reads and writes do not block each other.
 - Foreign key enforcement is turned on per connection.
@@ -60,8 +54,8 @@ def get_db_path() -> Path:
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
-# Each feature's table DDL goes here.  Tables are created with IF NOT EXISTS
-# so this function is safe to call on every startup (idempotent).
+# Tables are created with IF NOT EXISTS so this is safe to call on every
+# startup (idempotent). Each feature issue adds its DDL here.
 
 _TABLE_DDL: list[str] = [
     # Sessions (Issue #13)
@@ -97,7 +91,7 @@ _TABLE_DDL: list[str] = [
 
 async def create_tables() -> None:
     """
-    Create all application tables if they don't exist.
+    Create all application tables if they do not exist.
     Called once during FastAPI startup.
     """
     db_path = get_db_path()
@@ -127,7 +121,9 @@ async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     Example::
 
         async with get_db() as db:
-            cursor = await db.execute("SELECT id FROM sessions WHERE id = ?", (session_id,))
+            cursor = await db.execute(
+                "SELECT id FROM sessions WHERE id = ?", (session_id,)
+            )
             row = await cursor.fetchone()
     """
     db_path = get_db_path()

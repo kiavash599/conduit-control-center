@@ -4,8 +4,8 @@ backend/api/status.py
 Node status endpoint.
 
 Implemented in:
-  Issue #17 — Conduit adapter (systemctl wrapper)
-  Issue #18 — GET /api/status response schema
+  Issue #17 -- Conduit adapter (systemctl wrapper)
+  Issue #18 -- GET /api/status response schema
 
 Stub phase
 ----------

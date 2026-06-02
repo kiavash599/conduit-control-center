@@ -4,8 +4,8 @@ backend/api/metrics.py
 System and traffic metrics endpoints.
 
 Implemented in:
-  Issue #21 — GET /api/metrics/system  (CPU, RAM, temp, disk via psutil)
-  Issue #22 — GET /api/metrics/traffic (bytes transferred by Conduit)
+  Issue #21 -- GET /api/metrics/system  (CPU, RAM, temp, disk via psutil)
+  Issue #22 -- GET /api/metrics/traffic (bytes transferred by Conduit)
 
 Stub phase
 ----------

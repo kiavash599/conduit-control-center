@@ -5,14 +5,14 @@ Exports all API routers so main.py can import them from a single location.
 
 Router registration map (main.py prefixes)
 ------------------------------------------
-health_router    → /api/health
-auth_router      → /api/auth
-status_router    → /api/status
-conduit_router   → /api/conduit
-metrics_router   → /api/metrics
-logs_router      → /api/logs
-settings_router  → /api/settings
-ddns_router      → /api/ddns
+health_router    -> /api/health
+auth_router      -> /api/auth
+status_router    -> /api/status
+conduit_router   -> /api/conduit
+metrics_router   -> /api/metrics
+logs_router      -> /api/logs
+settings_router  -> /api/settings
+ddns_router      -> /api/ddns
 """
 
 from backend.api.health import router as health_router

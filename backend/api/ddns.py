@@ -4,7 +4,7 @@ backend/api/ddns.py
 Cloudflare DDNS status endpoint.
 
 Implemented in:
-  Issue #42 — GET /api/ddns/status (parse DDNS log, expose last known state)
+  Issue #42 -- GET /api/ddns/status (parse DDNS log, expose last known state)
 
 Stub phase
 ----------
