@@ -12,6 +12,9 @@ Security notes
 --------------
 - All failure paths return HTTP 401 with the same generic message
   "Invalid credentials". The client cannot determine which field was wrong.
+- A locked account returns HTTP 429 with a Retry-After header (seconds until
+  unlock). The response body is "Too many failed login attempts" -- no hint
+  about the lock duration is given beyond the standard Retry-After header.
 - A missing ADMIN_PASSWORD_HASH returns HTTP 503 "Service temporarily
   unavailable" -- no configuration details are exposed to the client.
 - Session cookie is set with HttpOnly, Secure (configurable), SameSite=strict.
@@ -22,8 +25,6 @@ Security notes
 
 TODOs
 -----
-- Issue #15: call check_lockout() inside authenticate_user() before bcrypt.
-  No change required in this file; the call site is in backend/auth/login.py.
 - Issue #16: implement session validation middleware / get_current_user.
   Protected routes currently return 501 (stub). This file is not affected.
 - Issue #33: add CSRF token generation on login and validation on all
@@ -34,12 +35,19 @@ TODOs
 from __future__ import annotations
 
 import logging
+import math
+from datetime import datetime, timezone
 
 import aiosqlite
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from backend.auth.login import AuthConfigError, InvalidCredentials, authenticate_user
+from backend.auth.login import (
+    AccountLocked,
+    AuthConfigError,
+    InvalidCredentials,
+    authenticate_user,
+)
 from backend.auth.sessions import create_session, delete_session
 from backend.config import get_app_config, get_settings
 from backend.dependencies import get_db
@@ -114,6 +122,26 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+def _retry_after_seconds(locked_until: datetime) -> int:
+    """
+    Compute the Retry-After value in whole seconds.
+
+    Returns the ceiling of (locked_until - now) in seconds, clamped to a
+    minimum of 1 so the header is never zero or negative (which would imply
+    the client can retry immediately, potentially bypassing the lockout).
+
+    Parameters
+    ----------
+    locked_until : timezone-aware UTC datetime from AccountLocked.locked_until
+
+    Returns
+    -------
+    int -- seconds to wait before retrying, always >= 1
+    """
+    delta = (locked_until - datetime.now(timezone.utc)).total_seconds()
+    return max(1, math.ceil(delta))
+
+
 # ---------------------------------------------------------------------------
 # POST /api/auth/login
 # ---------------------------------------------------------------------------
@@ -126,6 +154,7 @@ def _clear_session_cookie(response: Response) -> None:
         200: {"description": "Login successful; session cookie set"},
         401: {"description": "Invalid credentials"},
         422: {"description": "Request body validation failed"},
+        429: {"description": "Account locked; Retry-After header gives wait seconds"},
         503: {"description": "Server not configured for login"},
     },
 )
@@ -139,6 +168,7 @@ async def login(
 
     On success, sets a session cookie and returns {"status": "ok"}.
     On failure, returns 401 with a generic message (no field hint).
+    If the account is locked, returns 429 with a Retry-After header.
 
     The cookie is set on the injected Response object; FastAPI merges its
     headers into the final response alongside the returned dict body.
@@ -147,7 +177,7 @@ async def login(
     CSRF token cookie so the frontend can read and send it as X-CSRF-Token.
     """
     try:
-        await authenticate_user(body.username, body.password)
+        await authenticate_user(db, body.username, body.password)
     except AuthConfigError:
         # Server-side misconfiguration: hash not set.
         # Log detail server-side; return generic 503 to client.
@@ -159,16 +189,32 @@ async def login(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service temporarily unavailable",
         )
+    except AccountLocked as exc:
+        # Account locked after too many failed attempts.
+        # Retry-After tells the client how long to wait (RFC 9110 s10.2.4).
+        # The exact wait time is intentionally exposed here: it is already
+        # derivable from the lockout_duration_minutes in config.json, and
+        # concealing it would only reduce usability for legitimate operators.
+        retry_after = _retry_after_seconds(exc.locked_until)
+        logger.warning(
+            "Login rejected: account locked (retry_after=%ds)", retry_after
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts",
+            headers={"Retry-After": str(retry_after)},
+        )
     except InvalidCredentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
 
-    session_id = await create_session(db, "admin")
+    admin_username = get_settings().admin_username
+    session_id = await create_session(db, admin_username)
     _set_session_cookie(response, session_id)
 
-    logger.info("Session created for user 'admin'")
+    logger.info("Session created for user %r", admin_username)
     return {"status": "ok"}
 
 

@@ -6,51 +6,56 @@ Password verification and user authentication for the single admin account.
 Public API
 ----------
     verify_password(plain_password, stored_hash) -> bool
-    authenticate_user(username, password)        -> None  (raises on failure)
+    authenticate_user(db, username, password)    -> None  (raises on failure)
 
 Exceptions
 ----------
     AuthConfigError    -- ADMIN_PASSWORD_HASH not set in .env; caller returns 503
     InvalidCredentials -- username or password wrong;  caller returns 401
+    AccountLocked      -- account is locked (re-exported from lockout.py);
+                          caller returns 429 with Retry-After header
+
+Authentication flow (in authenticate_user)
+------------------------------------------
+1. Verify ADMIN_PASSWORD_HASH is configured          -> AuthConfigError if not
+2. Check username == settings.admin_username (exact) -> InvalidCredentials if not
+   (no DB write: wrong-username attempts do not touch the lockout table)
+3. check_lockout(db, username)                       -> AccountLocked if locked
+4. Verify password with bcrypt                       -> record_failed_attempt
+                                                        + InvalidCredentials
+5. record_successful_login(db, username)             -> returns None
 
 Security notes
 --------------
-- Passwords are verified with bcrypt.checkpw() (cost factor set at hash time,
-  minimum 12 recommended; enforced by install.sh).
-- verify_password() catches all bcrypt exceptions and treats them as a mismatch,
-  so a malformed stored hash never results in an open door.
-- authenticate_user() raises InvalidCredentials for BOTH wrong username AND
-  wrong password. The client always receives the same generic message.
-- Server-side log messages do distinguish the failure reason (username vs
-  password vs misconfiguration) to aid debugging on the Pi.
-- ADMIN_PASSWORD_HASH is read from Settings on every call. It is never cached
-  in module state, so a hash rotation takes effect without a server restart
-  (the lru_cache on get_settings() means a process restart is still needed to
-  pick up .env changes, but the hash is not double-cached here).
-- bcrypt.checkpw() is only called when the username matches "admin". Since
-  "admin" is the only valid username and is not secret, the timing difference
-  on a wrong username does not leak information useful to an attacker.
-  Issue #15 (account lockout) provides the primary brute-force defence.
-
-TODOs
------
-- Issue #15: add check_lockout(db, username) before verify_password().
-  The call site is marked below with a TODO comment.
-  Signature change required: add db: aiosqlite.Connection parameter.
+- Wrong-username and wrong-password both raise InvalidCredentials.
+  The client always receives the same generic message.
+- record_failed_attempt() is only reached after the username is confirmed
+  as exactly settings.admin_username. Wrong-casing attempts (e.g. "Admin")
+  fail at step 2 and write nothing to the database. This prevents the DoS
+  variant where an attacker locks out the admin by submitting incorrect casing.
+- ADMIN_PASSWORD_HASH and ADMIN_USERNAME are read from Settings on each call.
+  Settings is an lru_cache singleton so this is effectively free.
+- bcrypt.checkpw() is CPU-bound but acceptable on a single-user Pi. A future
+  improvement could run it in an executor; deferred until profiling shows need.
+- See lockout.py for the DoS risk acceptance note regarding Issue #34.
 """
 
 from __future__ import annotations
 
 import logging
 
+import aiosqlite
 import bcrypt
 
+from backend.auth.lockout import (
+    AccountLocked,  # re-exported for callers  # noqa: F401
+    check_lockout,
+    record_failed_attempt,
+    record_successful_login,
+)
 from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-# The only valid username. Single-user application; not a secret.
-_ADMIN_USERNAME = "admin"
 
 
 # ---------------------------------------------------------------------------
@@ -121,51 +126,48 @@ def verify_password(plain_password: str, stored_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def authenticate_user(username: str, password: str) -> None:
+async def authenticate_user(
+    db: aiosqlite.Connection,
+    username: str,
+    password: str,
+) -> None:
     """
     Authenticate username/password against the configured admin account.
 
-    This function is async so that Issue #15 can add an awaited lockout
-    check without changing the call signature in the route handler.
+    Performs all lockout checks and recording in a single call so that
+    every call site automatically gets the complete, correct behaviour.
 
     Parameters
     ----------
-    username : submitted username  (from LoginRequest body)
-    password : submitted password  (from LoginRequest body)
+    db       : open aiosqlite connection (from route get_db dependency)
+    username : submitted username (from LoginRequest body)
+    password : submitted password (from LoginRequest body)
 
     Returns
     -------
-    None on success (single-user app; no user object to return).
+    None on success.
 
     Raises
     ------
     AuthConfigError
-        ADMIN_PASSWORD_HASH is not set in .env / Settings.
-        Route handler should return HTTP 503.
+        ADMIN_PASSWORD_HASH is not configured.
+        Route handler returns HTTP 503.
+
+    AccountLocked
+        Account is currently locked (.locked_until carries the expiry).
+        Route handler returns HTTP 429 with Retry-After header.
 
     InvalidCredentials
         Username or password is wrong.
-        Route handler should return HTTP 401.
+        Route handler returns HTTP 401.
         Both wrong-username and wrong-password raise this exception so
         the client can never distinguish which field was incorrect.
-
-    TODO (Issue #15)
-    ----------------
-    Add account lockout check before the password verification step.
-    Requires adding db: aiosqlite.Connection to this signature.
-    Insert the following call at the marked location below:
-
-        from backend.auth.lockout import check_lockout
-        await check_lockout(db, username)
-        # check_lockout raises HTTPException(429) if the account is locked.
     """
     stored_hash = get_settings().admin_password_hash
 
     # ------------------------------------------------------------------
     # Guard: server misconfiguration -- hash not set.
     # Fail closed: an unconfigured server must not allow login.
-    # Log the real reason; raise AuthConfigError for the route handler
-    # to translate into a generic 503 response.
     # ------------------------------------------------------------------
     if not stored_hash:
         logger.error(
@@ -176,27 +178,31 @@ async def authenticate_user(username: str, password: str) -> None:
 
     # ------------------------------------------------------------------
     # Username check.
-    # Must come before the bcrypt call (bcrypt is CPU-bound).
-    # Wrong username raises the same InvalidCredentials as wrong password
-    # -- the client never learns which field was wrong.
+    # Wrong username: fast path, no DB write, no lockout involvement.
+    # The client sees the same generic error as a wrong password.
     # ------------------------------------------------------------------
-    if username != _ADMIN_USERNAME:
-        logger.info(
-            "Login rejected: unknown username %r", username
-        )
+    if username != get_settings().admin_username:
+        logger.info("Login rejected: unknown username %r", username)
         raise InvalidCredentials()
 
     # ------------------------------------------------------------------
-    # TODO (Issue #15): insert check_lockout(db, username) here.
+    # Lockout check.
+    # Only reached after username is confirmed as exactly admin_username.
+    # Raises AccountLocked if the account is currently locked.
     # ------------------------------------------------------------------
+    await check_lockout(db, username)
 
     # ------------------------------------------------------------------
     # Password verification.
+    # On failure: record attempt (may trigger lockout), raise generic error.
     # ------------------------------------------------------------------
     if not verify_password(password, stored_hash):
-        logger.info(
-            "Login rejected: wrong password for user %r", username
-        )
+        logger.info("Login rejected: wrong password for user %r", username)
+        await record_failed_attempt(db, username)
         raise InvalidCredentials()
 
+    # ------------------------------------------------------------------
+    # Success: reset failed-attempt counter, write audit entry.
+    # ------------------------------------------------------------------
+    await record_successful_login(db, username)
     logger.info("Login successful for user %r", username)

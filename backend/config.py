@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # -- Admin ----------------------------------------------------------------
     # bcrypt hash stored in .env; never the plaintext password.
     admin_password_hash: str = Field(default="")
+    # Username for the single admin account.
+    # Override via ADMIN_USERNAME in .env only if the default "admin" conflicts
+    # with an existing system user or organisational policy.
+    # Must match whatever username was used when the password hash was generated.
+    admin_username: str = Field(default="admin")
 
     @field_validator("session_secret")
     @classmethod

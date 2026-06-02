@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+scripts/ccc-unlock
+------------------
+Operator CLI tool to clear a locked-out admin account.
+
+Usage
+-----
+    sudo ccc-unlock <username>
+
+    # Most installs:
+    sudo ccc-unlock admin
+
+Arguments
+---------
+    username    The admin username to unlock. Must match ADMIN_USERNAME in .env
+                (default: "admin"). Any other value is rejected.
+
+Exit codes
+----------
+    0   Success (lockout cleared, or account was already clear)
+    1   Usage error (wrong number of arguments)
+    2   Username not recognised as the configured admin account
+    3   Database error
+
+Why sudo?
+---------
+    The database file at /etc/conduit-cc/ccc.db is owned by the conduit-cc
+    service user. This script needs read/write access to that file and must
+    also be able to read /etc/conduit-cc/.env to load ADMIN_USERNAME.
+    Running as root (via sudo) satisfies both requirements without granting
+    the operator any broader system privileges.
+
+Security notes
+--------------
+    - Python tracebacks are suppressed so internal paths and module names
+      are not exposed to operators. Errors produce a single clean message.
+    - The UNLOCK_CLI audit event is written to the database before exit so
+      the action is traceable regardless of log rotation.
+    - The script validates username against ADMIN_USERNAME before touching
+      the database. A wrong username exits with code 2 and writes nothing.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Suppress Python tracebacks from operator output.
+# Genuine errors still produce a single-line message via the except blocks.
+# ---------------------------------------------------------------------------
+sys.tracebacklimit = 0
+
+# ---------------------------------------------------------------------------
+# Bootstrap: add the project root to sys.path so backend imports work whether
+# the script is run from the project root or from /usr/local/bin after install.
+# ---------------------------------------------------------------------------
+_SCRIPT_DIR = Path(__file__).resolve().parent          # .../scripts/
+_PROJECT_ROOT = _SCRIPT_DIR.parent                     # .../conduit-control-center/
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+# ---------------------------------------------------------------------------
+# Load .env before importing backend modules so Settings picks up ADMIN_USERNAME.
+# Production path: /etc/conduit-cc/.env
+# Development path: <project-root>/.env
+# ---------------------------------------------------------------------------
+def _load_env() -> None:
+    """
+    Populate os.environ from the .env file if python-dotenv is available.
+
+    Falls back silently if dotenv is not installed; environment variables
+    set by the shell (e.g. from /etc/conduit-cc/.env sourced by systemd)
+    are used instead. This keeps the script functional even in minimal
+    environments where python-dotenv is not installed.
+    """
+    try:
+        from dotenv import load_dotenv  # type: ignore[import-untyped]
+    except ImportError:
+        return  # dotenv not installed; rely on inherited environment
+
+    prod_env = Path("/etc/conduit-cc/.env")
+    dev_env = _PROJECT_ROOT / ".env"
+
+    env_file = prod_env if prod_env.exists() else dev_env
+    if env_file.exists():
+        load_dotenv(env_file, override=False)  # don't override existing env vars
+
+
+_load_env()
+
+# ---------------------------------------------------------------------------
+# Imports from backend (after path bootstrap and env load)
+# ---------------------------------------------------------------------------
+try:
+    from backend.auth.lockout import clear_lockout
+    from backend.config import get_settings
+    from backend.database import get_db
+except Exception as exc:  # noqa: BLE001
+    print(f"ccc-unlock: failed to load backend modules: {exc}", file=sys.stderr)
+    sys.exit(3)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+_USAGE = "Usage: ccc-unlock <username>"
+
+
+async def _run(username: str) -> int:
+    """
+    Core unlock logic. Returns an exit code (0 = success, 3 = db error).
+
+    Parameters
+    ----------
+    username : the username to unlock (already validated as admin_username)
+    """
+    try:
+        async with get_db() as db:
+            found = await clear_lockout(db, username)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ccc-unlock: database error: {exc}", file=sys.stderr)
+        return 3
+
+    if found:
+        print(f"ccc-unlock: lockout cleared for '{username}'.")
+    else:
+        print(f"ccc-unlock: no lockout record found for '{username}' (already clear).")
+
+    return 0
+
+
+def main() -> None:
+    # ----------------------------------------------------------------
+    # Argument check
+    # ----------------------------------------------------------------
+    if len(sys.argv) != 2:
+        print(_USAGE, file=sys.stderr)
+        sys.exit(1)
+
+    username = sys.argv[1]
+
+    # ----------------------------------------------------------------
+    # Validate username against the configured admin account.
+    # Read from settings (ADMIN_USERNAME env var, default "admin").
+    # Wrong usernames exit here without touching the database.
+    # ----------------------------------------------------------------
+    try:
+        admin_username = get_settings().admin_username
+    except Exception as exc:  # noqa: BLE001
+        print(f"ccc-unlock: failed to read settings: {exc}", file=sys.stderr)
+        sys.exit(3)
+
+    if username != admin_username:
+        print(
+            f"ccc-unlock: '{username}' is not the configured admin username. "
+            f"Expected '{admin_username}'.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # ----------------------------------------------------------------
+    # Run async unlock
+    # ----------------------------------------------------------------
+    exit_code = asyncio.run(_run(username))
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
