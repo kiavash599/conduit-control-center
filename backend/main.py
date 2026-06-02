@@ -24,6 +24,7 @@ Production (managed by systemd)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -36,6 +37,10 @@ from fastapi.templating import Jinja2Templates
 
 from backend.config import get_app_config, get_settings
 from backend.database import create_tables
+from backend.auth.sessions import (
+    _purge_loop,
+    purge_expired_sessions,
+)
 from backend._version import APP_VERSION
 from backend.api import (
     auth_router,
@@ -79,11 +84,41 @@ _TEMPLATES_DIR = _PROJECT_ROOT / "frontend" / "templates"
 async def lifespan(app: FastAPI):
     """Runs startup tasks before the server accepts requests."""
     logger.info("Conduit Control Center v%s starting up", APP_VERSION)
+
+    # Initialise database tables
     await create_tables()
+
+    # Purge any sessions left over from the previous server run
+    startup_purged = await purge_expired_sessions()
+    logger.info(
+        "Startup session purge: %d expired session(s) removed",
+        startup_purged,
+    )
+
+    # Start the hourly background purge task
+    purge_task = asyncio.create_task(
+        _purge_loop(), name="session-purge"
+    )
+
     app.state.started_at = time.time()
-    logger.info("Startup complete -- listening on port %d", get_app_config().port)
-    yield
+    logger.info(
+        "Startup complete -- listening on port %d",
+        get_app_config().port,
+    )
+
+    yield  # application runs
+
+    # ---------------------------------------------------------------------------
+    # Shutdown: cancel the purge task and await it to prevent
+    # "Task was destroyed but it is pending" warnings.
+    # ---------------------------------------------------------------------------
     logger.info("Conduit Control Center shutting down")
+    purge_task.cancel()
+    try:
+        await purge_task
+    except asyncio.CancelledError:
+        pass  # expected -- task exited cleanly via cancellation
+    logger.info("Session purge task stopped")
 
 
 # ---------------------------------------------------------------------------

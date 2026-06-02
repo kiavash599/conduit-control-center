@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     )
     app_port: int = Field(default=8000)
     log_level: str = Field(default="INFO")
+    # Set False in local HTTP development; always True in production.
+    secure_cookies: bool = Field(default=True)
 
     # -- Cloudflare -----------------------------------------------------------
     cf_api_token: str = Field(default="")
