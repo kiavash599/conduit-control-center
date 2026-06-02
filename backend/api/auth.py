@@ -25,8 +25,6 @@ Security notes
 
 TODOs
 -----
-- Issue #16: implement session validation middleware / get_current_user.
-  Protected routes currently return 501 (stub). This file is not affected.
 - Issue #33: add CSRF token generation on login and validation on all
   state-changing endpoints. When implemented, login should set a second
   non-HttpOnly "csrf_token" cookie alongside the session cookie.
@@ -243,9 +241,6 @@ async def logout(
     This prevents a race-condition lockout when the session expires between
     the dashboard page loading and the user clicking "Log out".
 
-    TODO (Issue #16): once get_current_user is implemented, decide whether
-    logout should optionally require a valid session. Current consensus is
-    to keep it lenient (see design notes in the module docstring).
 
     TODO (Issue #33): when CSRF is added, also clear the csrf_token cookie
     here to keep the two cookies in sync.

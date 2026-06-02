@@ -31,7 +31,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -42,6 +42,7 @@ from backend.auth.sessions import (
     purge_expired_sessions,
 )
 from backend._version import APP_VERSION
+from backend.dependencies import AuthRedirect
 from backend.api import (
     auth_router,
     conduit_router,
@@ -142,6 +143,13 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # Never expose Python stack traces to the client.
 
+
+
+
+@app.exception_handler(AuthRedirect)
+async def _auth_redirect_handler(request: Request, exc: AuthRedirect) -> RedirectResponse:
+    """Convert AuthRedirect (raised by require_auth_html) to a 302 browser redirect."""
+    return RedirectResponse(url=exc.redirect_url, status_code=302)
 
 @app.exception_handler(Exception)
 async def _global_exception_handler(request: Request, exc: Exception) -> JSONResponse:

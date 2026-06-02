@@ -12,10 +12,14 @@ Stub phase
 ----------
 Routes are registered so the URL structure is established.
 All return HTTP 501 until Issues #19 and #20 are implemented.
+Authentication is enforced now (Issue #16) so the dependency is in place
+when the routes are fully implemented.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+
+from backend.dependencies import AuthenticatedUser, get_current_user
 
 router = APIRouter(tags=["conduit"])
 
@@ -31,20 +35,20 @@ _NOT_IMPLEMENTED_20 = JSONResponse(
 
 
 @router.post("/start", summary="Start the Conduit service")
-async def start():
+async def start(_user: AuthenticatedUser = Depends(get_current_user)):
     return _NOT_IMPLEMENTED_19
 
 
 @router.post("/stop", summary="Stop the Conduit service")
-async def stop():
+async def stop(_user: AuthenticatedUser = Depends(get_current_user)):
     return _NOT_IMPLEMENTED_19
 
 
 @router.post("/restart", summary="Restart the Conduit service")
-async def restart():
+async def restart(_user: AuthenticatedUser = Depends(get_current_user)):
     return _NOT_IMPLEMENTED_19
 
 
 @router.post("/pair", summary="Pair Conduit node (pairing link never stored)")
-async def pair():
+async def pair(_user: AuthenticatedUser = Depends(get_current_user)):
     return _NOT_IMPLEMENTED_20
