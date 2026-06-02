@@ -1,0 +1,42 @@
+# =============================================================================
+# Conduit Control Center — Production Dependencies
+# =============================================================================
+#
+# Version bounds are set here. Exact versions will be pinned (pip freeze)
+# during the first implementation sprint once all packages are tested together.
+#
+# Install: pip install -r requirements.txt
+# =============================================================================
+
+# Web framework — FastAPI + ASGI server
+# SRS: FR-API-01, FR-API-02, WBS task 3.1
+fastapi>=0.110.0,<1.0.0
+uvicorn[standard]>=0.29.0,<1.0.0
+
+# Data validation and settings management
+# SRS: SEC-INP-01, NFR-M-05
+pydantic>=2.6.0,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+
+# Password hashing
+# SRS: FR-AUTH-02, SEC-AA-02
+bcrypt>=4.1.0,<5.0.0
+
+# Environment variable loading
+# SRS: SEC-SEC-02
+python-dotenv>=1.0.0,<2.0.0
+
+# System metrics (CPU, RAM, temperature, disk)
+# SRS: FR-METRICS-01
+psutil>=5.9.0,<7.0.0
+
+# Async SQLite (sessions, metrics storage)
+# SRS: FR-AUTH-02, FR-METRICS-04
+aiosqlite>=0.20.0,<1.0.0
+
+# HTML template rendering
+# SRS: FR-API-01 (dashboard pages)
+jinja2>=3.1.0,<4.0.0
+
+# Static file serving
+python-multipart>=0.0.9,<1.0.0
