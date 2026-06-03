@@ -158,7 +158,7 @@ class ConduitPermissionError(ConduitAdapterError):
 
 # Poll interval and timeout for start/stop/restart wait loops.
 _POLL_INTERVAL_S: float = 0.5
-_ACTION_TIMEOUT_S: float = 5.0
+# _ACTION_TIMEOUT_S removed: timeout now read from get_app_config().conduit_action_timeout_seconds
 
 # Version detection: timeout and semver pattern.
 # The result is cached after the first attempt so we do not shell out on
@@ -398,7 +398,7 @@ async def get_last_changed() -> str | None:
 
 async def start() -> dict:
     """
-    Start the Conduit service and wait up to _ACTION_TIMEOUT_S for "running".
+    Start the Conduit service and wait up to conduit_action_timeout_seconds (config.json) for "running".
 
     Calls: sudo systemctl start <service>
 
@@ -422,7 +422,7 @@ async def start() -> dict:
 
 async def stop() -> dict:
     """
-    Stop the Conduit service and wait up to _ACTION_TIMEOUT_S for "stopped".
+    Stop the Conduit service and wait up to conduit_action_timeout_seconds (config.json) for "stopped".
 
     Calls: sudo systemctl stop <service>
 
@@ -442,7 +442,7 @@ async def stop() -> dict:
 
 async def restart() -> dict:
     """
-    Restart the Conduit service and wait up to _ACTION_TIMEOUT_S for "running".
+    Restart the Conduit service and wait up to conduit_action_timeout_seconds (config.json) for "running".
 
     Calls: sudo systemctl restart <service>
 
@@ -607,11 +607,14 @@ async def _control_action(action: str, desired_status: ConduitStatus) -> dict:
             "Check server logs for details."
         )
 
-    # Poll for desired_status up to _ACTION_TIMEOUT_S.
+    # Read timeout from config; operator-configurable via conduit_action_timeout_seconds in config.json.
+    timeout_s: float = get_app_config().conduit_action_timeout_seconds
+
+    # Poll for desired_status up to timeout_s.
     elapsed = 0.0
     final_status: ConduitStatus = "error"
 
-    while elapsed < _ACTION_TIMEOUT_S:
+    while elapsed < timeout_s:
         await asyncio.sleep(_POLL_INTERVAL_S)
         elapsed += _POLL_INTERVAL_S
         try:
@@ -641,7 +644,7 @@ async def _control_action(action: str, desired_status: ConduitStatus) -> dict:
         "status": final_status,
         "message": (
             f"Conduit {action} command was sent but the service did not "
-            f"reach '{desired_status}' within {_ACTION_TIMEOUT_S:.0f}s. "
+            f"reach '{desired_status}' within {timeout_s:.0f}s. "
             f"Current status: '{final_status}'."
         ),
     }
