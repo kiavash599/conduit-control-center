@@ -110,6 +110,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -158,6 +159,17 @@ class ConduitPermissionError(ConduitAdapterError):
 # Poll interval and timeout for start/stop/restart wait loops.
 _POLL_INTERVAL_S: float = 0.5
 _ACTION_TIMEOUT_S: float = 5.0
+
+# Version detection: timeout and semver pattern.
+# The result is cached after the first attempt so we do not shell out on
+# every status request. _version_checked=True means we have tried at least
+# once; _version_cache holds the result (None = not determinable).
+# Note: this is a module-level cache. CCC runs with --workers 1 so there
+# is only one process; per-worker caching is correct and sufficient.
+_VERSION_TIMEOUT_S: float = 2.0
+_VERSION_PATTERN: re.Pattern[str] = re.compile(r"\d+\.\d+\.\d+")
+_version_checked: bool = False
+_version_cache: str | None = None
 
 # Map systemctl is-active output strings to ConduitStatus values.
 _SYSTEMCTL_STATUS_MAP: dict[str, ConduitStatus] = {
@@ -456,18 +468,78 @@ async def get_version() -> str | None:
     """
     Return the installed Conduit version string, or None if not determinable.
 
-    TODO (Issue #18): implement when GET /api/status is wired up.
-    Signature and return type are established here so Issue #18 fills in
-    the body without touching the rest of the adapter.
+    Strategy: run 'conduit --version' and extract the first semver-like
+    string (X.Y.Z) from stdout. Falls back to None if:
+      - the conduit binary is not in PATH
+      - the command times out (> _VERSION_TIMEOUT_S seconds)
+      - the output does not contain a recognisable version string
+      - any other unexpected error occurs
+
+    The result is cached after the first attempt. Subsequent calls return
+    the cached value without shelling out. If detection failed, None is
+    returned on all subsequent calls until the service restarts.
+
+    IMPORTANT: this has not been validated against a real Conduit installation.
+    The binary name ('conduit'), the --version flag, and the output format
+    must be confirmed on a device with Conduit installed. If 'conduit --version'
+    is not the correct invocation, update this function accordingly.
 
     Returns
     -------
-    str | None  -- always None in this stub
+    str | None
+        Semver string (e.g. "1.2.3") or None if not determinable.
     """
-    return None
+    global _version_checked, _version_cache  # noqa: PLW0603
+
+    if _version_checked:
+        return _version_cache
+
+    try:
+        returncode, stdout, stderr = await asyncio.wait_for(
+            _run(["conduit", "--version"]),
+            timeout=_VERSION_TIMEOUT_S,
+        )
+        if returncode == 0 and stdout:
+            match = _VERSION_PATTERN.search(stdout)
+            if match:
+                _version_cache = match.group(0)
+                logger.debug("Conduit version detected: %r", _version_cache)
+            else:
+                logger.warning(
+                    "conduit --version output did not contain a semver string "
+                    "(stdout=%r) -- version unavailable. Validate on a device "
+                    "with Conduit installed.",
+                    stdout,
+                )
+        else:
+            logger.warning(
+                "conduit --version returned rc=%d (stderr=%r) -- "
+                "version unavailable.",
+                returncode, stderr,
+            )
+
+    except asyncio.TimeoutError:
+        logger.warning(
+            "conduit --version timed out after %.1fs -- version unavailable.",
+            _VERSION_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        logger.warning(
+            "'conduit' binary not found in PATH -- version unavailable. "
+            "Validate the binary name and PATH on a device with Conduit installed."
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "get_version() encountered an unexpected error: %s -- "
+            "version unavailable.",
+            exc,
+        )
+    finally:
+        _version_checked = True
+
+    return _version_cache
 
 
-# ---------------------------------------------------------------------------
 # Internal: shared action logic for start / stop / restart
 # ---------------------------------------------------------------------------
 
