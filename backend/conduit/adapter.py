@@ -540,6 +540,125 @@ async def get_version() -> str | None:
     return _version_cache
 
 
+# ---------------------------------------------------------------------------
+# Public API -- pairing (no sudo required; calls conduit binary directly)
+# ---------------------------------------------------------------------------
+
+
+async def pair(pairing_link: str) -> dict:
+    """
+    Submit a Psiphon Conduit pairing link via stdin to the Conduit CLI.
+
+    SECURITY CONTRACT -- this function must never violate the following:
+      - The pairing_link parameter is NEVER passed to any logger call.
+      - The pairing_link is NEVER included in exception messages.
+      - The pairing_link is NEVER passed as a command-line argument (argv).
+      - The pairing_link is NEVER written to any file, database, or cache.
+      - Raw CLI stdout/stderr are NOT logged (may echo back link content).
+        Only the return code is logged.
+      - All response strings are static; none are derived from the link.
+
+    The link is passed to the Conduit CLI via stdin only.  The process
+    list (ps aux) will show only "conduit pair" without any link data.
+
+    TODO: The Conduit CLI pairing interface (binary name, command name,
+    and whether it reads the pairing link from stdin) MUST be verified
+    on a real Conduit installation before this is used in production.
+    If the CLI does not read from stdin, this implementation will return
+    {"status": "failed"} -- it will NOT fall back to argv.
+
+    TODO: The Psiphon pairing link format must be validated against
+    Psiphon documentation.  The current caller validates only structural
+    constraints (non-empty, max 4096 chars, no control characters).
+    A format-specific regex should be added once the format is confirmed.
+
+    Parameters
+    ----------
+    pairing_link : str
+        The Psiphon Conduit pairing link.  Caller is responsible for
+        structural validation.  This value must never be logged.
+
+    Returns
+    -------
+    dict with keys:
+        status  : "paired" | "failed"
+        message : static operator-facing string (never link-derived)
+
+    Raises
+    ------
+    ConduitAdapterError
+        Conduit binary not found, or an unexpected error occurred.
+        Message is safe for API response.
+    """
+    timeout_s: float = get_app_config().conduit_action_timeout_seconds
+
+    # Log intent only -- the link value is intentionally absent.
+    logger.info("Conduit pair: submitting pairing link via stdin")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "conduit", "pair",
+            # Link is written to stdin -- NEVER passed as argv.
+            # This prevents the link from appearing in "ps aux" output.
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            _stdout_b, _stderr_b = await asyncio.wait_for(
+                proc.communicate(input=pairing_link.encode("utf-8")),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            # Kill the process so it does not linger as a zombie.
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning(
+                "Conduit pair: timed out after %.1fs", timeout_s
+            )
+            return {"status": "failed", "message": "Pairing timed out."}
+
+        returncode = proc.returncode if proc.returncode is not None else -1
+
+        if returncode == 0:
+            logger.info("Conduit pair: completed successfully (rc=0)")
+            return {"status": "paired", "message": "Conduit paired successfully."}
+
+        # Non-zero exit -- do NOT log stdout/stderr: the CLI may echo back
+        # all or part of the pairing link in its output.
+        logger.warning(
+            "Conduit pair: CLI returned non-zero exit code (rc=%d). "
+            "Check Conduit service logs for details.",
+            returncode,
+        )
+        return {"status": "failed", "message": "Pairing failed. Check server logs."}
+
+    except FileNotFoundError:
+        logger.warning(
+            "'conduit' binary not found in PATH -- pairing unavailable. "
+            "Verify the Conduit CLI is installed and on PATH."
+        )
+        raise ConduitAdapterError(
+            "Conduit binary not found. Is Conduit installed?"
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        # Log exception type only -- do NOT log str(exc) in case it
+        # contains request-context data from the calling frame.
+        logger.error(
+            "Conduit pair: unexpected error (type=%s)",
+            type(exc).__name__,
+        )
+        raise ConduitAdapterError(
+            "Pairing failed due to an unexpected error. Check server logs."
+        )
+
+
+
 # Internal: shared action logic for start / stop / restart
 # ---------------------------------------------------------------------------
 

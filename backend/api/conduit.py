@@ -59,7 +59,7 @@ from datetime import datetime, timezone
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from backend.conduit.adapter import (
     ConduitAdapterError,
@@ -69,6 +69,7 @@ from backend.conduit.adapter import (
     restart,
     start,
     stop,
+    pair as adapter_pair,
 )
 from backend.dependencies import AuthenticatedUser, get_current_user, get_db
 
@@ -352,15 +353,119 @@ async def conduit_restart(
 
 
 # ---------------------------------------------------------------------------
-# Route: pair (Issue #20 stub)
+# Route: pair (Issue #20)
 # ---------------------------------------------------------------------------
 
-_NOT_IMPLEMENTED_20 = JSONResponse(
-    status_code=501,
-    content={"detail": "Not implemented. Tracked in Issue #20."},
+# SECURITY NOTE: the pairing link is the most sensitive credential in the system.
+# The design constraints for this endpoint are:
+#   - The link is NEVER logged at any layer.
+#   - The link is NEVER stored in the database, .env, or any file.
+#   - The link is NEVER included in exception messages or response bodies.
+#   - The link is NEVER passed as a command-line argument (process list exposure).
+#   - The link reaches the Conduit CLI via stdin ONLY.
+#   - All response strings are static; none are derived from the link value.
+
+
+class PairRequest(BaseModel):
+    """
+    Body for POST /api/conduit/pair.
+
+    repr=False prevents the pairing_link value from appearing in repr(body),
+    which protects it from accidental exposure in exception tracebacks that
+    are caught and logged by logger.exception().
+
+    TODO: Add a format-specific validator once the Psiphon pairing link
+    format is confirmed against Psiphon documentation.  The current
+    validator enforces only structural safety constraints.
+    """
+
+    pairing_link: str = Field(
+        min_length=1,
+        max_length=4096,
+        repr=False,
+        description=(
+            "Psiphon Conduit pairing link. "
+            "Never stored, never logged, never passed as argv."
+        ),
+    )
+
+    @field_validator("pairing_link")
+    @classmethod
+    def _no_control_chars(cls, v: str) -> str:
+        """
+        Reject strings containing C0 control characters (ord < 32).
+
+        Rationale: control characters (null bytes, newlines, carriage
+        returns, tabs, etc.) could corrupt a stdin-based protocol or
+        interfere with CLI argument parsing.  The pairing link is expected
+        to consist of printable characters only.
+
+        TODO: Replace with a format-specific regex once the Psiphon
+        pairing link format is confirmed.
+        """
+        if any(ord(c) < 32 for c in v):
+            raise ValueError(
+                "Pairing link must not contain control characters "
+                "(null bytes, newlines, tabs, etc.)."
+            )
+        return v
+
+
+class PairResponse(BaseModel):
+    """Response body for POST /api/conduit/pair."""
+
+    status: str   # "paired" | "failed"
+    message: str  # static operator-facing string; never link-derived
+
+
+@router.post(
+    "/pair",
+    summary="Pair Conduit node (pairing link never stored)",
+    response_model=PairResponse,
+    responses={
+        200: {"description": "Pairing attempt completed; check 'status' field"},
+        401: {"description": "Not authenticated"},
+        422: {"description": "Invalid pairing link (empty, too long, control chars)"},
+        503: {"description": "Conduit binary not found or unexpected adapter error"},
+    },
 )
+async def conduit_pair(
+    body: PairRequest,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    # NOTE: no db dependency -- this endpoint makes no database writes by design.
+    # See Issue #20 design decision: pairing is a transient in-memory operation.
+    # TODO (future): add CONDUIT_PAIR audit entry once CLI interface is confirmed.
+    #   Event: CONDUIT_PAIR, detail: user={username}, result={paired|failed}
+    #   Before adding: confirm link is fully out of scope at the write site.
+) -> PairResponse:
+    """
+    Submit a Psiphon Conduit pairing link.
 
+    The link is extracted from the request body, passed to the Conduit
+    CLI via stdin, and then goes out of scope.  It is never written to
+    any persistent storage, log, or response field.
 
-@router.post("/pair", summary="Pair Conduit node (pairing link never stored)")
-async def pair(_user: AuthenticatedUser = Depends(get_current_user)):
-    return _NOT_IMPLEMENTED_20
+    Returns 200 with status="paired" on success, or status="failed" on
+    CLI failure.  Returns 503 if the Conduit binary is not found.
+
+    Authentication is enforced via get_current_user (returns 401 if no
+    valid session cookie is present).
+    """
+    # Extract the link to a local variable; let the Pydantic body go out
+    # of scope as soon as possible.
+    pairing_link: str = body.pairing_link
+
+    try:
+        result = await adapter_pair(pairing_link)
+    except ConduitAdapterError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    finally:
+        # Explicit deletion signals intent.  The local variable is the only
+        # reference at this point; body.pairing_link also holds one, but
+        # body goes out of scope immediately after this function returns.
+        del pairing_link
+
+    return PairResponse(status=result["status"], message=result["message"])
