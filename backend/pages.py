@@ -12,9 +12,9 @@ Routes (Issue #25)
   GET  /login  -- render the login page
   POST /login  -- handle plain HTML form submission (progressive enhancement)
 
-Routes (Issue #26, not yet implemented)
-----------------------------------------
-  GET  /dashboard  -- dashboard shell (to be added here in Issue #26)
+Routes (Issue #26)
+------------------
+  GET  /dashboard  -- dashboard shell; requires authentication via require_auth_html
 
 POST /login authentication path
 ---------------------------------
@@ -53,6 +53,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from backend._version import APP_VERSION
 from backend.auth.login import (
     AccountLocked,
     AuthConfigError,
@@ -61,7 +62,7 @@ from backend.auth.login import (
 )
 from backend.auth.sessions import create_session
 from backend.config import get_app_config, get_settings
-from backend.dependencies import get_db
+from backend.dependencies import AuthenticatedUser, get_db, require_auth_html
 
 logger = logging.getLogger(__name__)
 
@@ -267,3 +268,32 @@ async def login_form(
     _set_session_cookie(response, session_id)
     logger.info("Session created for user %r via HTML form login", admin_username)
     return response
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboard  (Issue #26)
+# ---------------------------------------------------------------------------
+
+@router.get("/dashboard", response_class=HTMLResponse, summary="Dashboard shell")
+async def dashboard(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_auth_html),
+) -> HTMLResponse:
+    """
+    Render the dashboard shell.
+
+    Requires authentication.  require_auth_html raises AuthRedirect (converted
+    to HTTP 302 by main.py) when the session is missing or expired, sending
+    the browser to /login?next=/dashboard.
+
+    Passes APP_VERSION and the authenticated username to the template so the
+    sidebar can display them without an additional API call.
+    """
+    return _templates(request).TemplateResponse(
+        "dashboard.html",
+        {
+            "request":  request,
+            "version":  APP_VERSION,
+            "username": user.user_id,
+        },
+    )

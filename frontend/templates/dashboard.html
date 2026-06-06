@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+<!--
+  frontend/templates/dashboard.html
+  -----------------------------------
+  Dashboard shell for Conduit Control Center.
+  Implemented in Issue #26.
+
+  Template variables (set by backend/pages.py GET /dashboard)
+  -----------------------------------------------------------
+    version  : str  -- APP_VERSION from backend/_version.py (e.g. "0.1.0")
+    username : str  -- authenticated admin username
+
+  Navigation (hash-based, Issue #26)
+  ------------------------------------
+  Three sections controlled by window.location.hash:
+    #overview  -- node status + system health + traffic (Issues #27-#29)
+    #logs      -- log viewer (Issue #30)
+    #settings  -- change password (Issue #31)
+  Default: #overview (empty or unrecognised hash).
+  The hashchange event listener updates the active nav item, visible section,
+  and document.title without a page reload.
+
+  Logout (Issue #26)
+  -------------------
+  Order: stop all active pollers → disable button → POST /api/auth/logout
+  via apiFetch → redirect to /login regardless of response.
+  Polling is stopped first to prevent a 401 response from a mid-logout poll
+  from triggering apiFetch's redirect-to-login logic before the explicit
+  logout redirect, which could cause a flash or double-redirect.
+
+  Content placeholders
+  ---------------------
+  Each section <div> is empty. Panel content is injected by:
+    #overview  -- Issues #27 (node status), #28 (metrics), #29 (traffic)
+    #logs      -- Issue #30 (log viewer)
+    #settings  -- Issue #31 (settings / change password)
+-->
+
+{% block title %}Dashboard — Conduit Control Center{% endblock %}
+
+{% block body %}
+<div class="layout">
+
+    <!-- ================================================================
+         Sidebar
+    ================================================================ -->
+    <aside class="sidebar" role="navigation" aria-label="Main navigation">
+
+        <!-- Project name + version -->
+        <div class="sidebar__header">
+            <div class="sidebar__logo">Conduit Control Center</div>
+            <div class="sidebar__version">v{{ version | e }}</div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="nav" aria-label="Dashboard sections">
+            <a href="#overview"
+               class="nav__item"
+               id="nav-overview"
+               data-section="overview"
+               aria-current="false">
+                <!-- Icon: monitor / node -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                     aria-hidden="true" focusable="false">
+                    <rect x="1" y="2" width="14" height="9" rx="1.5"
+                          stroke="currentColor" stroke-width="1.5" fill="none"/>
+                    <path d="M5 13h6M8 11v2" stroke="currentColor"
+                          stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                Overview
+            </a>
+
+            <a href="#logs"
+               class="nav__item"
+               id="nav-logs"
+               data-section="logs"
+               aria-current="false">
+                <!-- Icon: list / log lines -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                     aria-hidden="true" focusable="false">
+                    <path d="M2 4h12M2 8h8M2 12h10"
+                          stroke="currentColor" stroke-width="1.5"
+                          stroke-linecap="round"/>
+                </svg>
+                Logs
+            </a>
+
+            <a href="#settings"
+               class="nav__item"
+               id="nav-settings"
+               data-section="settings"
+               aria-current="false">
+                <!-- Icon: gear / settings -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                     aria-hidden="true" focusable="false">
+                    <circle cx="8" cy="8" r="2.5"
+                            stroke="currentColor" stroke-width="1.5" fill="none"/>
+                    <path d="M8 1v2M8 13v2M1 8h2M13 8h2
+                             M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41
+                             M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41"
+                          stroke="currentColor" stroke-width="1.5"
+                          stroke-linecap="round"/>
+                </svg>
+                Settings
+            </a>
+        </nav>
+
+        <!-- Sidebar footer: logout -->
+        <div class="sidebar__footer">
+            <button
+                id="logout-btn"
+                class="btn btn--ghost w-full"
+                type="button"
+                aria-label="Log out"
+            >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                     aria-hidden="true" focusable="false">
+                    <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"
+                          stroke="currentColor" stroke-width="1.5"
+                          stroke-linecap="round"/>
+                    <path d="M10 11l3-3-3-3M13 8H6"
+                          stroke="currentColor" stroke-width="1.5"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Log out
+            </button>
+        </div>
+
+    </aside><!-- /.sidebar -->
+
+    <!-- ================================================================
+         Main content
+    ================================================================ -->
+    <main class="main-content" id="main-content">
+
+        <!-- Page header (section title updated by JS) -->
+        <div class="page-header">
+            <h1 class="page-title" id="page-title">Overview</h1>
+            <p class="page-subtitle text-dim" id="page-subtitle">
+                Node status and system health
+            </p>
+        </div>
+
+        <!-- ── Section: Overview ──────────────────────────────────────── -->
+        <div id="section-overview" class="section" aria-labelledby="page-title">
+            <!--
+              Content injected by Issues #27 (node status + control),
+              #28 (system health panel), #29 (traffic counter).
+              Left empty intentionally in Issue #26.
+            -->
+            <p class="text-muted text-sm">
+                Overview panels are implemented in Issues #27–#29.
+            </p>
+        </div>
+
+        <!-- ── Section: Logs ─────────────────────────────────────────── -->
+        <div id="section-logs" class="section" aria-labelledby="page-title" hidden>
+            <!--
+              Content injected by Issue #30 (log viewer panel).
+              Left empty intentionally in Issue #26.
+            -->
+            <p class="text-muted text-sm">
+                Log viewer is implemented in Issue #30.
+            </p>
+        </div>
+
+        <!-- ── Section: Settings ─────────────────────────────────────── -->
+        <div id="section-settings" class="section" aria-labelledby="page-title" hidden>
+            <!--
+              Content injected by Issue #31 (change password form).
+              Left empty intentionally in Issue #26.
+            -->
+            <p class="text-muted text-sm">
+                Settings are implemented in Issue #31.
+            </p>
+        </div>
+
+    </main><!-- /.main-content -->
+
+</div><!-- /.layout -->
+{% endblock %}
+
+{% block scripts %}
+<script>
+/**
+ * Dashboard shell — navigation and logout (Issue #26)
+ *
+ * Sections
+ * --------
+ * Hash-based navigation: #overview, #logs, #settings.
+ * Default: #overview for empty or unrecognised hash.
+ * The hashchange event updates active nav state, visible section,
+ * and document.title without a page reload or API call.
+ *
+ * Polling registry
+ * ----------------
+ * window.CCC is a shared namespace for all dashboard JS.
+ * window.CCC.pollers is an array where panel scripts (Issues #27–#30)
+ * push their startPolling() handles.  Logout stops all registered pollers
+ * before making the API call, preventing a 401 from a mid-logout poll from
+ * triggering apiFetch's redirect before the explicit logout redirect fires.
+ *
+ * Logout
+ * ------
+ * Order: stop all pollers → disable button → apiFetch logout →
+ *        redirect to /login (always, even on API error).
+ */
+(function () {
+    'use strict';
+
+    /* ------------------------------------------------------------------
+       Shared namespace for dashboard JS.
+       Panel scripts (Issues #27-#30) push polling handles here.
+    ------------------------------------------------------------------ */
+    window.CCC = window.CCC || {};
+    window.CCC.pollers = window.CCC.pollers || [];
+
+    /* ------------------------------------------------------------------
+       Section metadata
+    ------------------------------------------------------------------ */
+    var SECTIONS = {
+        overview: {
+            id:       'section-overview',
+            navId:    'nav-overview',
+            title:    'Overview',
+            subtitle: 'Node status and system health',
+        },
+        logs: {
+            id:       'section-logs',
+            navId:    'nav-logs',
+            title:    'Logs',
+            subtitle: 'Conduit service log (last 200 lines)',
+        },
+        settings: {
+            id:       'section-settings',
+            navId:    'nav-settings',
+            title:    'Settings',
+            subtitle: 'Account and application settings',
+        },
+    };
+
+    var DEFAULT_SECTION = 'overview';
+
+    /* ------------------------------------------------------------------
+       Navigation: show section, update title, mark active nav item
+    ------------------------------------------------------------------ */
+
+    function getCurrentSection() {
+        var hash = (window.location.hash || '').replace('#', '').toLowerCase();
+        return SECTIONS[hash] ? hash : DEFAULT_SECTION;
+    }
+
+    function showSection(name) {
+        var meta = SECTIONS[name] || SECTIONS[DEFAULT_SECTION];
+
+        // Hide all sections, show the target.
+        Object.keys(SECTIONS).forEach(function (key) {
+            var el = document.getElementById(SECTIONS[key].id);
+            if (el) { el.hidden = (key !== name); }
+        });
+
+        // Update nav active state.
+        Object.keys(SECTIONS).forEach(function (key) {
+            var navEl = document.getElementById(SECTIONS[key].navId);
+            if (!navEl) { return; }
+            var isActive = (key === name);
+            navEl.classList.toggle('nav__item--active', isActive);
+            navEl.setAttribute('aria-current', isActive ? 'page' : 'false');
+        });
+
+        // Update page header and document title.
+        var titleEl    = document.getElementById('page-title');
+        var subtitleEl = document.getElementById('page-subtitle');
+        if (titleEl)    { titleEl.textContent    = meta.title; }
+        if (subtitleEl) { subtitleEl.textContent = meta.subtitle; }
+        document.title = meta.title + ' — Conduit Control Center';
+    }
+
+    // Initial render: apply section from hash (or default).
+    showSection(getCurrentSection());
+
+    // Update on hash change (back/forward, nav clicks).
+    window.addEventListener('hashchange', function () {
+        showSection(getCurrentSection());
+    });
+
+    /* ------------------------------------------------------------------
+       Logout
+    ------------------------------------------------------------------ */
+
+    document.getElementById('logout-btn').addEventListener('click', function () {
+        var btn = document.getElementById('logout-btn');
+
+        // 1. Stop all active pollers first to prevent mid-logout 401 races.
+        (window.CCC.pollers || []).forEach(function (handle) {
+            stopPolling(handle);
+        });
+        window.CCC.pollers = [];
+
+        // 2. Disable the button to prevent double-clicks.
+        btn.disabled = true;
+        btn.classList.add('btn--loading');
+
+        // 3. Call the logout API.  Redirect to /login regardless of outcome.
+        apiFetch('/api/auth/logout', { method: 'POST' })
+            .catch(function () { /* ignore -- we always redirect */ })
+            .finally(function () {
+                window.location.href = '/login';
+            });
+    });
+
+})();
+</script>
+{% endblock %}
