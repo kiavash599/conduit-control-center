@@ -16,7 +16,7 @@ The change is performed in a specific order chosen for fail-safe behaviour:
   3. Generate a new bcrypt hash for new_password.
   4. Write the new hash to the active .env file.
   5. Call get_settings.cache_clear() so the lru_cache picks up the new hash.
-  6. Clear the session cookie on the response.
+  6. Clear both the session cookie and the CSRF cookie on the response.
   7. Return 200 {"status": "ok", "message": "..."}.
 
 Why delete sessions before writing the hash
@@ -36,6 +36,7 @@ Delete-first ordering is therefore the safer choice for both outcomes.
 Failure responses
 -----------------
   HTTP 400  -- current_password incorrect
+  HTTP 403  -- CSRF token missing or invalid
   HTTP 422  -- Pydantic model validation failed (new_password too short,
                new/confirm mismatch)
   HTTP 500  -- session deletion failed (safe: nothing changed; retry)
@@ -52,11 +53,16 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, model_validator
 
-from backend.auth.cookies import clear_session_cookie
+from backend.auth.cookies import clear_session_cookie, clear_csrf_cookie
 from backend.auth.login import hash_password, verify_password
 from backend.auth.sessions import delete_all_sessions
 from backend.config import get_env_file_path, get_settings
-from backend.dependencies import AuthenticatedUser, get_current_user, get_db
+from backend.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_db,
+    require_csrf_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +137,7 @@ def _write_password_hash(new_hash: str) -> None:
             break
 
     if not replaced:
-        # Key missing — append it.
+        # Key missing -- append it.
         if lines and not lines[-1].endswith("\n"):
             lines.append("\n")
         lines.append(new_line)
@@ -151,6 +157,7 @@ def _write_password_hash(new_hash: str) -> None:
     responses={
         200: {"description": "Password changed; all sessions invalidated"},
         400: {"description": "Current password is incorrect"},
+        403: {"description": "CSRF token missing or invalid"},
         422: {"description": "Request body validation failed"},
         500: {"description": "Server error during password change"},
     },
@@ -160,20 +167,21 @@ async def change_password(
     response: Response,
     db:       aiosqlite.Connection    = Depends(get_db),
     _user:    AuthenticatedUser       = Depends(get_current_user),
+    _csrf:    None                    = Depends(require_csrf_token),
 ) -> dict:
     """
     Change the admin password.
 
     Verifies the current password, invalidates all sessions, writes the new
-    bcrypt hash to .env, and clears the session cookie.  The client must
-    redirect to /login after receiving 200.
+    bcrypt hash to .env, and clears both the session and CSRF cookies.
+    The client must redirect to /login after receiving 200.
 
     Sessions are deleted BEFORE the .env write (delete-first ordering) so
     that a failed write leaves the system in a safe, recoverable state.
     See module docstring for full rationale.
     """
     # ------------------------------------------------------------------
-    # Step 1 — verify current password
+    # Step 1 -- verify current password
     # ------------------------------------------------------------------
     stored_hash = get_settings().admin_password_hash
     if not stored_hash or not verify_password(body.current_password, stored_hash):
@@ -186,7 +194,7 @@ async def change_password(
         )
 
     # ------------------------------------------------------------------
-    # Step 2 — delete all sessions (delete-first ordering)
+    # Step 2 -- delete all sessions (delete-first ordering)
     # ------------------------------------------------------------------
     try:
         deleted = await delete_all_sessions(db)
@@ -205,7 +213,7 @@ async def change_password(
         )
 
     # ------------------------------------------------------------------
-    # Step 3 — hash new password and write to .env
+    # Step 3 -- hash new password and write to .env
     # If this fails, all sessions are gone but the old password remains
     # valid.  The error message tells the operator to log in and retry.
     # ------------------------------------------------------------------
@@ -226,9 +234,10 @@ async def change_password(
         )
 
     # ------------------------------------------------------------------
-    # Step 4 — clear session cookie on the response
+    # Step 4 -- clear session and CSRF cookies on the response
     # ------------------------------------------------------------------
     clear_session_cookie(response)
+    clear_csrf_cookie(response)
 
     return {
         "status":  "ok",

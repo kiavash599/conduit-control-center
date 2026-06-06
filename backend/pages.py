@@ -40,12 +40,14 @@ Cookie settings
 ---------------
 Cookie helpers are imported from backend/auth/cookies.py
 (Issue #31 closed this long-standing TODO).
+Both session and CSRF cookies are set on successful login (Issue #33).
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import secrets
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -59,7 +61,7 @@ from backend.auth.login import (
     InvalidCredentials,
     authenticate_user,
 )
-from backend.auth.cookies import set_session_cookie
+from backend.auth.cookies import set_session_cookie, set_csrf_cookie
 from backend.auth.sessions import create_session
 from backend.config import get_app_config, get_settings
 from backend.dependencies import AuthenticatedUser, get_db, require_auth_html
@@ -72,8 +74,9 @@ router = APIRouter(tags=["pages"], include_in_schema=False)
 # ---------------------------------------------------------------------------
 # Cookie helpers
 # ---------------------------------------------------------------------------
-# set_session_cookie() is imported from backend.auth.cookies.
-# (Closes the TODO that previously appeared here and in api/auth.py.)
+# set_session_cookie() and set_csrf_cookie() are imported from
+# backend.auth.cookies.  (Closes the TODO that previously appeared here
+# and in api/auth.py for session cookie; CSRF cookie added by Issue #33.)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +196,8 @@ async def login_form(
     API path.  Nothing is duplicated.
 
     On success : HTTP 303 redirect to the validated next param or /dashboard.
+                 Both session and CSRF cookies are set so subsequent
+                 apiFetch calls can include the X-CSRF-Token header.
     On failure : re-render login.html with an error message.
                  Username is preserved; password is never included.
     """
@@ -241,12 +246,17 @@ async def login_form(
     except InvalidCredentials:
         return render_error("Invalid credentials. Please try again.")
 
-    # Authenticated -- create session, set cookie, redirect.
+    # Authenticated -- create session, set cookies, redirect.
+    # Both the session cookie and the CSRF token cookie must be set here
+    # so that subsequent API calls (apiFetch) can read the csrf_token cookie
+    # and include it as the X-CSRF-Token header (Issue #33).
     admin_username = get_settings().admin_username
     session_id     = await create_session(db, admin_username)
+    csrf_token     = secrets.token_hex(32)
 
     response = RedirectResponse(url=redirect_to, status_code=303)
     set_session_cookie(response, session_id)
+    set_csrf_cookie(response, csrf_token)
     logger.info("Session created for user %r via HTML form login", admin_username)
     return response
 
@@ -276,7 +286,7 @@ async def dashboard(
             "request":         request,
             "version":         APP_VERSION,
             "username":        user.user_id,
-            # session_timeout_minutes from config.json — displayed read-only
+            # session_timeout_minutes from config.json -- displayed read-only
             # on the Settings page (Issue #31). Edit deferred to v1.1.
             "session_timeout": get_app_config().session_timeout_minutes,
         },

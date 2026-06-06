@@ -10,6 +10,8 @@ get_current_user    -- validates session cookie; returns AuthenticatedUser or ra
                        also calls touch_session to extend the sliding session window
 require_auth_html   -- like get_current_user but raises AuthRedirect instead of 401;
                        main.py converts AuthRedirect to a 302 redirect to /login?next=<path>
+require_csrf_token  -- validates X-CSRF-Token header against csrf_token cookie;
+                       raises 403 on mismatch; used on all state-changing API endpoints
 
 Exceptions
 ----------
@@ -24,7 +26,9 @@ AuthenticatedUser   -- frozen dataclass returned by both auth dependencies;
 
 Usage
 -----
-    from backend.dependencies import get_current_user, require_auth_html, AuthenticatedUser
+    from backend.dependencies import (
+        get_current_user, require_auth_html, require_csrf_token, AuthenticatedUser
+    )
     from fastapi import Depends
 
     # API route (returns JSON 401 if unauthenticated)
@@ -43,6 +47,14 @@ Usage
     ):
         ...
 
+    # State-changing API route (requires both valid session and CSRF token)
+    @router.post("/api/something")
+    async def mutate(
+        user: AuthenticatedUser = Depends(get_current_user),
+        _csrf: None = Depends(require_csrf_token),
+    ):
+        ...
+
 Security notes
 --------------
 - get_current_user calls touch_session on every valid request so the sliding
@@ -55,17 +67,17 @@ Security notes
   "//" or backslash (which some browsers normalise to "//"), or contains "://"
   or "@" (common open-redirect indicators). If the path fails the check, the
   redirect falls back to "/".
-
-TODOs
------
-- Issue #33: when CSRF is implemented, require_auth_html should also validate
-  the CSRF token for state-changing HTML form submissions. Read-only GET routes
-  are not affected.
+- require_csrf_token implements the double-submit cookie pattern (Issue #33):
+  the X-CSRF-Token request header must match the csrf_token cookie value.
+  Comparison uses hmac.compare_digest() to prevent timing-based token oracle
+  attacks. Failures return HTTP 403 (not 401, which apiFetch treats as session
+  expiry and would cause an unintended redirect to /login).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hmac
 import logging
 from typing import AsyncGenerator
 from urllib.parse import quote
@@ -73,16 +85,11 @@ from urllib.parse import quote
 import aiosqlite
 from fastapi import Cookie, Depends, HTTPException, Request, status
 
+from backend.auth.cookies import COOKIE_NAME, CSRF_COOKIE_NAME
 from backend.auth.sessions import get_session, touch_session
 from backend.database import get_db as _get_db_ctx
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-_COOKIE_NAME = "session_id"
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +191,7 @@ def _is_safe_next(value: str) -> bool:
 
 
 async def get_current_user(
-    session_id: str | None = Cookie(default=None, alias=_COOKIE_NAME),
+    session_id: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> AuthenticatedUser:
     """
@@ -239,7 +246,7 @@ async def get_current_user(
 
 async def require_auth_html(
     request: Request,
-    session_id: str | None = Cookie(default=None, alias=_COOKIE_NAME),
+    session_id: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> AuthenticatedUser:
     """
@@ -280,10 +287,6 @@ async def require_auth_html(
     query parameter from its own URL and performs window.location.href after
     a successful POST /api/auth/login response.
     This function only sets the ?next= parameter on the way TO /login.
-
-    The /dashboard route does not yet exist (Issue #19/20). This dependency is
-    ready for it; the redirect behaviour can be verified once that route is
-    implemented.
     """
     if session_id is not None:
         session = await get_session(db, session_id)
@@ -310,3 +313,82 @@ async def require_auth_html(
         redirect_url,
     )
     raise AuthRedirect(redirect_url)
+
+
+# ---------------------------------------------------------------------------
+# CSRF dependency  (Issue #33)
+# ---------------------------------------------------------------------------
+
+
+async def require_csrf_token(
+    request: Request,
+    csrf_cookie: str | None = Cookie(default=None, alias=CSRF_COOKIE_NAME),
+) -> None:
+    """
+    FastAPI dependency that enforces the double-submit CSRF cookie pattern.
+
+    Must be used alongside get_current_user on every state-changing API
+    endpoint (POST, PUT, DELETE).  Read-only GET endpoints are exempt.
+
+    How it works
+    ------------
+    1. The backend sets a non-HttpOnly ``csrf_token`` cookie at login
+       (see backend/api/auth.py and backend/pages.py).
+    2. The frontend (api.js getCsrfToken()) reads the cookie value and
+       sends it as the ``X-CSRF-Token`` request header on every apiFetch
+       call.
+    3. This dependency reads both values and checks they match.
+    4. An attacker on a different origin cannot read the csrf_token cookie
+       (blocked by the browser same-origin policy) and therefore cannot
+       produce a valid X-CSRF-Token header, defeating the CSRF attack.
+
+    Parameters
+    ----------
+    request : Request
+        Current FastAPI request; used to read the X-CSRF-Token header.
+    csrf_cookie : str | None
+        Value of the ``csrf_token`` cookie. None if absent.
+
+    Returns
+    -------
+    None
+        This dependency is used for its side-effect (raising on failure)
+        only.  Capture it as ``_csrf: None = Depends(require_csrf_token)``.
+
+    Raises
+    ------
+    HTTPException(403)
+        The X-CSRF-Token header is absent, the csrf_token cookie is absent,
+        or the two values do not match.
+        403 is used rather than 401 so that apiFetch does not misinterpret
+        this as a session-expiry event and redirect to /login.
+
+    Security notes
+    --------------
+    - hmac.compare_digest() performs a constant-time comparison to prevent
+      timing-based oracle attacks that could leak partial token values.
+    - The token value itself is never logged.
+    """
+    header_token = request.headers.get("X-CSRF-Token")
+
+    _FORBIDDEN = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="CSRF token invalid or missing",
+    )
+
+    if not header_token or not csrf_cookie:
+        logger.warning(
+            "CSRF check failed on %s %s: %s",
+            request.method,
+            request.url.path,
+            "header missing" if not header_token else "cookie missing",
+        )
+        raise _FORBIDDEN
+
+    if not hmac.compare_digest(header_token, csrf_cookie):
+        logger.warning(
+            "CSRF check failed on %s %s: token mismatch",
+            request.method,
+            request.url.path,
+        )
+        raise _FORBIDDEN

@@ -5,8 +5,8 @@ Authentication route handlers.
 
 Routes
 ------
-    POST /api/auth/login   -- verify credentials, create session, set cookie
-    POST /api/auth/logout  -- delete session, clear cookie (lenient)
+    POST /api/auth/login   -- verify credentials, create session, set cookies
+    POST /api/auth/logout  -- delete session, clear cookies (lenient)
 
 Security notes
 --------------
@@ -18,22 +18,25 @@ Security notes
 - A missing ADMIN_PASSWORD_HASH returns HTTP 503 "Service temporarily
   unavailable" -- no configuration details are exposed to the client.
 - Session cookie is set with HttpOnly, Secure (configurable), SameSite=strict.
-- Logout is lenient: the session cookie is always cleared and HTTP 200 is
-  always returned, even if the session was already expired or not found.
+- CSRF token cookie is set alongside the session cookie on login (Issue #33).
+  It is non-HttpOnly so the frontend JavaScript can read it and send it as
+  the X-CSRF-Token header on state-changing requests.
+- Logout is lenient: both cookies are always cleared and HTTP 200 is always
+  returned, even if the session was already expired or not found.
   This prevents a race-condition lockout when the session expires between
   page load and the user clicking "Log out".
-
-TODOs
------
-- Issue #33: add CSRF token generation on login and validation on all
-  state-changing endpoints. When implemented, login should set a second
-  non-HttpOnly "csrf_token" cookie alongside the session cookie.
+  CSRF validation is intentionally omitted from logout: the worst outcome of
+  a CSRF logout is a forced logout (DoS), not a data breach. SameSite=strict
+  already mitigates this for modern browsers, and omitting CSRF on logout
+  avoids the upgrade edge-case where existing sessions have no csrf_token
+  cookie yet.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import secrets
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -47,7 +50,13 @@ from backend.auth.login import (
     authenticate_user,
 )
 from backend.auth.sessions import create_session, delete_session
-from backend.auth.cookies import COOKIE_NAME, set_session_cookie, clear_session_cookie
+from backend.auth.cookies import (
+    COOKIE_NAME,
+    set_session_cookie,
+    clear_session_cookie,
+    set_csrf_cookie,
+    clear_csrf_cookie,
+)
 from backend.config import get_settings
 from backend.dependencies import get_db
 
@@ -76,10 +85,8 @@ class LoginRequest(BaseModel):
 # Cookie helpers
 # ---------------------------------------------------------------------------
 
-
-
-# Cookie helpers (set_session_cookie, clear_session_cookie) are in
-# backend/auth/cookies.py — imported above. Private copies removed (Issue #31).
+# Cookie helpers are in backend/auth/cookies.py -- imported above.
+# Private copies removed (Issue #31). CSRF helpers added (Issue #33).
 
 
 def _retry_after_seconds(locked_until: datetime) -> int:
@@ -111,7 +118,7 @@ def _retry_after_seconds(locked_until: datetime) -> int:
     "/login",
     summary="Log in with username and password",
     responses={
-        200: {"description": "Login successful; session cookie set"},
+        200: {"description": "Login successful; session and CSRF cookies set"},
         401: {"description": "Invalid credentials"},
         422: {"description": "Request body validation failed"},
         429: {"description": "Account locked; Retry-After header gives wait seconds"},
@@ -126,15 +133,21 @@ async def login(
     """
     Authenticate the user and create a session.
 
-    On success, sets a session cookie and returns {"status": "ok"}.
+    On success, sets a session cookie (HttpOnly) and a CSRF token cookie
+    (non-HttpOnly, readable by JavaScript) and returns {"status": "ok"}.
     On failure, returns 401 with a generic message (no field hint).
     If the account is locked, returns 429 with a Retry-After header.
 
-    The cookie is set on the injected Response object; FastAPI merges its
-    headers into the final response alongside the returned dict body.
+    The cookies are set on the injected Response object; FastAPI merges
+    their headers into the final response alongside the returned dict body.
 
-    TODO (Issue #33): after creating the session, also set a non-HttpOnly
-    CSRF token cookie so the frontend can read and send it as X-CSRF-Token.
+    CSRF token (Issue #33)
+    ----------------------
+    A 256-bit random token is generated per session and set as the
+    non-HttpOnly ``csrf_token`` cookie.  The frontend (api.js getCsrfToken)
+    reads this value and sends it as the ``X-CSRF-Token`` header on every
+    state-changing API call.  The backend validates this with the
+    require_csrf_token dependency (see backend/dependencies.py).
     """
     try:
         await authenticate_user(db, body.username, body.password)
@@ -172,7 +185,10 @@ async def login(
 
     admin_username = get_settings().admin_username
     session_id = await create_session(db, admin_username)
+    csrf_token = secrets.token_hex(32)
+
     set_session_cookie(response, session_id)
+    set_csrf_cookie(response, csrf_token)
 
     logger.info("Session created for user %r", admin_username)
     return {"status": "ok"}
@@ -185,9 +201,9 @@ async def login(
 
 @router.post(
     "/logout",
-    summary="Invalidate current session and clear cookie",
+    summary="Invalidate current session and clear cookies",
     responses={
-        200: {"description": "Logged out; session cookie cleared"},
+        200: {"description": "Logged out; session and CSRF cookies cleared"},
     },
 )
 async def logout(
@@ -196,16 +212,18 @@ async def logout(
     db: aiosqlite.Connection = Depends(get_db),
 ) -> dict:
     """
-    Delete the server-side session and clear the cookie.
+    Delete the server-side session and clear both cookies.
 
-    Lenient behaviour: always returns 200 and always clears the cookie,
+    Lenient behaviour: always returns 200 and always clears both cookies,
     even if the session was already expired or the cookie was absent.
     This prevents a race-condition lockout when the session expires between
     the dashboard page loading and the user clicking "Log out".
 
-
-    TODO (Issue #33): when CSRF is added, also clear the csrf_token cookie
-    here to keep the two cookies in sync.
+    CSRF validation is intentionally omitted here (Issue #33 design decision):
+    the worst outcome of a CSRF logout attack is a forced logout (DoS), not
+    a data breach. SameSite=strict already mitigates this for modern browsers.
+    Omitting it also avoids the post-upgrade edge case where a pre-#33 session
+    exists without a csrf_token cookie.
     """
     if session_id is not None:
         await delete_session(db, session_id)
@@ -214,4 +232,5 @@ async def logout(
         logger.debug("Logout called with no session cookie present")
 
     clear_session_cookie(response)
+    clear_csrf_cookie(response)
     return {"status": "ok"}

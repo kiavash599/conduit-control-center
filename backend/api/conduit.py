@@ -45,6 +45,7 @@ must never abort or misreport a service control action that already ran.
 Error responses
 ---------------
 HTTP 401  -- no valid session (get_current_user dependency)
+HTTP 403  -- CSRF token missing or invalid (require_csrf_token dependency)
 HTTP 409  -- pre-condition not satisfied (see rules above)
 HTTP 503  -- ConduitPermissionError (sudoers rule missing / misconfigured)
              or ConduitAdapterError (service not found, systemctl failure)
@@ -71,7 +72,12 @@ from backend.conduit.adapter import (
     stop,
     pair as adapter_pair,
 )
-from backend.dependencies import AuthenticatedUser, get_current_user, get_db
+from backend.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_db,
+    require_csrf_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -283,12 +289,14 @@ async def _handle_action(
     responses={
         200: {"description": "Action completed; check 'success' field for result"},
         401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
         409: {"description": "Service already running or transitioning"},
         503: {"description": "Conduit service unavailable or sudoers not configured"},
     },
 )
 async def conduit_start(
     user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> ActionResponse:
     """
@@ -308,12 +316,14 @@ async def conduit_start(
     responses={
         200: {"description": "Action completed; check 'success' field for result"},
         401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
         409: {"description": "Service already stopped or transitioning"},
         503: {"description": "Conduit service unavailable or sudoers not configured"},
     },
 )
 async def conduit_stop(
     user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> ActionResponse:
     """
@@ -333,12 +343,14 @@ async def conduit_stop(
     responses={
         200: {"description": "Action completed; check 'success' field for result"},
         401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
         409: {"description": "Service is currently starting or stopping"},
         503: {"description": "Conduit service unavailable or sudoers not configured"},
     },
 )
 async def conduit_restart(
     user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> ActionResponse:
     """
@@ -425,6 +437,7 @@ class PairResponse(BaseModel):
     responses={
         200: {"description": "Pairing attempt completed; check 'status' field"},
         401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
         422: {"description": "Invalid pairing link (empty, too long, control chars)"},
         503: {"description": "Conduit binary not found or unexpected adapter error"},
     },
@@ -432,6 +445,7 @@ class PairResponse(BaseModel):
 async def conduit_pair(
     body: PairRequest,
     _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
     # NOTE: no db dependency -- this endpoint makes no database writes by design.
     # See Issue #20 design decision: pairing is a transient in-memory operation.
     # TODO (future): add CONDUIT_PAIR audit entry once CLI interface is confirmed.
