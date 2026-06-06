@@ -369,8 +369,66 @@
             </div><!-- /#system-health-panel -->
 
             <!--
-              Traffic counter widget (Issue #29) will be appended here.
+              Traffic Counter Widget — Issue #29
+              ------------------------------------
+              JS: frontend/static/js/traffic.js (loaded in {% block scripts %})
+              API: GET /api/metrics/traffic (polled every 30 s via startPolling)
+                   Returns HTTP 501 until Issue #22 is implemented; treated as
+                   "no data" silently — no toast shown.
+
+              DOM IDs consumed by traffic.js:
+                traffic-sent          — bytes sent in human-readable format
+                traffic-received      — bytes received in human-readable format
+                traffic-session-start — session start as relative time
+                traffic-note          — "No data" note (empty when data present)
             -->
+            <div class="card mt-4" id="traffic-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Traffic</h2>
+                        <p class="card__subtitle">Bytes transferred this session</p>
+                    </div>
+                </div>
+
+                <!--
+                  Uses .status-meta key-value rows (base.css, Issue #27).
+                  All fields start as "—". traffic.js populates them after
+                  the first successful poll or shows "No data" for 501/null.
+                -->
+                <dl class="status-meta" aria-label="Traffic counters">
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Sent</dt>
+                        <dd class="status-meta__val"
+                            id="traffic-sent"
+                            aria-live="polite"
+                            aria-atomic="true">—</dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Received</dt>
+                        <dd class="status-meta__val"
+                            id="traffic-received"
+                            aria-live="polite"
+                            aria-atomic="true">—</dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Session started</dt>
+                        <dd class="status-meta__val"
+                            id="traffic-session-start"
+                            aria-live="polite"
+                            aria-atomic="true">—</dd>
+                    </div>
+                </dl>
+
+                <!--
+                  Note shown when no data is available (501, null counters,
+                  or network failure). Empty string when data is present.
+                -->
+                <p class="text-xs text-dim mt-2"
+                   id="traffic-note"
+                   aria-live="polite"></p>
+
+            </div><!-- /#traffic-card -->
 
         </div>
 
@@ -545,4 +603,7 @@
 
 <!-- Issue #28: system health panel -->
 <script src="/static/js/metrics.js"></script>
+
+<!-- Issue #29: traffic counter widget -->
+<script src="/static/js/traffic.js"></script>
 {% endblock %}
