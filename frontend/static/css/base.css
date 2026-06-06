@@ -860,3 +860,60 @@ a:hover {
     white-space: nowrap;
     max-width: 60%;
 }
+
+
+/* ----------------------------------------------------------------------------
+   Log viewer
+   Scrollable monospace container used by the log viewer panel (Issue #30).
+
+   SECURITY: log lines must always be set via textContent, never innerHTML.
+   Log content comes from journalctl and is untrusted from a web perspective.
+
+   Structure:
+     <div class="log-viewer">          scrollable container
+       <div class="log-line">          one log entry (INFO — default colour)
+       <div class="log-line--warning"> WARNING level
+       <div class="log-line--error">   ERROR / CRITICAL level
+       <div class="log-line--debug">   DEBUG level
+       <div class="log-line--redacted"> [REDACTED] entries (muted + italic)
+       <div class="log-viewer__empty"> empty state / inline error message
+   ---------------------------------------------------------------------------- */
+
+.log-viewer {
+    background-color: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: var(--leading-relaxed);
+    max-height: 480px;
+    overflow-y: auto;
+}
+
+.log-line {
+    display: block;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding: 1px 0;
+    color: var(--color-text-primary);
+}
+
+.log-line--debug    { color: var(--color-text-dim); }
+.log-line--warning  { color: var(--color-warning);  }
+.log-line--error    { color: var(--color-danger);   }
+
+/* [REDACTED] entries — muted and italic, distinct from real log content */
+.log-line--redacted {
+    color: var(--color-text-dim);
+    font-style: italic;
+}
+
+/* Empty state and inline 503 / network error message */
+.log-viewer__empty {
+    color: var(--color-text-dim);
+    font-family: var(--font-family);
+    font-size: var(--text-sm);
+    padding: var(--space-4) 0;
+    text-align: center;
+}

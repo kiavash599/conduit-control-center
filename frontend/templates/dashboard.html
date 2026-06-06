@@ -434,13 +434,83 @@
 
         <!-- ── Section: Logs ─────────────────────────────────────────── -->
         <div id="section-logs" class="section" aria-labelledby="page-title" hidden>
+
             <!--
-              Content injected by Issue #30 (log viewer panel).
-              Left empty intentionally in Issue #26.
+              Log Viewer Panel — Issue #30
+              -----------------------------
+              JS: frontend/static/js/logs.js (loaded in {% block scripts %})
+              API: GET /api/logs?limit=200 (polled every 30 s via startPolling)
+
+              Polling is section-aware: the tick skips fetching when this
+              section is hidden, avoiding unnecessary journalctl subprocess
+              calls while the user is on Overview or Settings.
+
+              DOM IDs consumed by logs.js:
+                log-viewer-card   — outer card container
+                log-viewer        — scrollable log output area
+                log-refresh-btn   — manual Refresh button
+                log-scroll-btn    — scroll-to-bottom button (hidden when at bottom)
+                log-line-count    — "N lines" count badge
+
+              XSS safety: logs.js uses textContent exclusively — no innerHTML.
             -->
-            <p class="text-muted text-sm">
-                Log viewer is implemented in Issue #30.
-            </p>
+            <div class="card" id="log-viewer-card">
+
+                <!-- Card header: title + manual refresh button -->
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Logs</h2>
+                        <p class="card__subtitle">Conduit service log (last 200 lines)</p>
+                    </div>
+                    <button id="log-refresh-btn"
+                            class="btn btn--secondary btn--sm"
+                            type="button"
+                            aria-label="Refresh log view">
+                        Refresh
+                    </button>
+                </div>
+
+                <!--
+                  Scrollable monospace log output.
+                  role="log" semantics: announces region to screen readers.
+                  aria-live="off": individual log lines are NOT announced
+                  (would be extremely disruptive for 200 lines).
+                  Log lines are populated by logs.js via textContent — never innerHTML.
+                -->
+                <div class="log-viewer"
+                     id="log-viewer"
+                     role="log"
+                     aria-label="Conduit service log output"
+                     aria-live="off">
+                    <!-- Populated by logs.js after first fetch -->
+                </div>
+
+                <!-- Footer: line count + scroll-to-bottom button -->
+                <div class="mt-2 flex justify-between items-center">
+                    <!--
+                      Line count: "200 lines" or empty.
+                      textContent set by logs.js — no innerHTML.
+                    -->
+                    <span class="text-xs text-dim"
+                          id="log-line-count"
+                          aria-live="polite"></span>
+
+                    <!--
+                      Scroll-to-bottom button: hidden when viewer is at the bottom,
+                      visible when user has scrolled up.  logs.js toggles btn.hidden.
+                      Clicking scrolls to bottom and hides the button.
+                    -->
+                    <button id="log-scroll-btn"
+                            class="btn btn--ghost btn--sm"
+                            type="button"
+                            hidden
+                            aria-label="Scroll to latest log entry">
+                        ↓ Latest
+                    </button>
+                </div>
+
+            </div><!-- /#log-viewer-card -->
+
         </div>
 
         <!-- ── Section: Settings ─────────────────────────────────────── -->
@@ -606,4 +676,7 @@
 
 <!-- Issue #29: traffic counter widget -->
 <script src="/static/js/traffic.js"></script>
+
+<!-- Issue #30: log viewer panel -->
+<script src="/static/js/logs.js"></script>
 {% endblock %}
