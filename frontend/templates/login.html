@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<!--
+  frontend/templates/login.html
+  ------------------------------
+  Login page for Conduit Control Center.
+  Implemented in Issue #25.
+
+  Template variables (set by backend/pages.py)
+  --------------------------------------------
+    next     : str  -- safe pre-validated redirect path, or "" for /dashboard
+    username : str  -- preserved username on error re-render, or ""
+    error    : str  -- server-rendered error message (no-JS path), or ""
+
+  Two submission paths
+  --------------------
+  JS path (primary)      : JS intercepts the form submit, calls
+                           fetch('/api/auth/login') directly, and handles
+                           all responses inline.  apiFetch is NOT used
+                           here because this page is pre-session and needs
+                           raw Response access for the Retry-After header.
+  No-JS path (fallback)  : form POSTs to POST /login (backend/pages.py),
+                           which re-renders this template with {{ error }}
+                           on failure or issues a 303 redirect on success.
+-->
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in — Conduit Control Center</title>
+    <link rel="stylesheet" href="/static/css/base.css">
+</head>
+<body class="login-page">
+
+    <main>
+        <div class="login-card">
+
+            <h1 class="login-card__title">Conduit Control Center</h1>
+            <p class="login-card__subtitle">Sign in to manage your Psiphon node.</p>
+
+            <!--
+              Server-rendered error (no-JS / POST /login path).
+              Shown only when the template is re-rendered after a failed
+              HTML form submission.  The JS path never reaches the server,
+              so this block is invisible in the JS-enhanced path.
+            -->
+            {% if error %}
+            <div class="form-error" role="alert" id="login-error-server"
+                 style="margin-bottom: var(--space-4);">
+                {{ error | e }}
+            </div>
+            {% endif %}
+
+            <!--
+              JS-rendered error (enhanced path).
+              Hidden on load; shown by JS when fetch returns a non-2xx status.
+              aria-live="polite" announces changes to screen readers without
+              interrupting the user mid-keystroke.
+            -->
+            <div class="form-error" role="alert" id="login-error-js"
+                 aria-live="polite" hidden></div>
+
+            <!--
+              Form action targets POST /login (no-JS fallback).
+              next is embedded in the query string so it survives both the
+              form POST and JS's window.location.search read.
+              JS intercepts submit via addEventListener and calls the JSON
+              API instead; the action attribute is only used without JS.
+            -->
+            <form
+                id="login-form"
+                method="post"
+                action="/login{% if next %}?next={{ next | e }}{% endif %}"
+                novalidate
+            >
+                <div class="form-group">
+                    <label class="label" for="username">Username</label>
+                    <input
+                        class="input"
+                        type="text"
+                        id="username"
+                        name="username"
+                        value="{{ username | e }}"
+                        autocomplete="username"
+                        required
+                        autofocus
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label class="label" for="password">Password</label>
+                    <input
+                        class="input"
+                        type="password"
+                        id="password"
+                        name="password"
+                        autocomplete="current-password"
+                        required
+                    >
+                </div>
+
+                <button type="submit" class="btn btn--primary w-full" id="login-btn">
+                    Sign in
+                </button>
+            </form>
+
+            <noscript>
+                <p class="form-hint mt-4">
+                    JavaScript is disabled. Basic login still works — the form
+                    submits directly to the server. Some dashboard features
+                    require JavaScript to be enabled.
+                </p>
+            </noscript>
+
+        </div><!-- /.login-card -->
+    </main>
+
+    <!--
+      api.js is loaded for its Toast system.
+      The login form does NOT call apiFetch — see the comment above.
+    -->
+    <script src="/static/js/api.js"></script>
+    <script>
+    /**
+     * Login form — JS enhancement layer (Issue #25)
+     *
+     * Uses fetch() directly rather than apiFetch() because:
+     *   1. This page is pre-session: apiFetch's 401->redirect logic would
+     *      loop immediately (we ARE on /login).
+     *   2. HTTP 429 requires reading the Retry-After header from the raw
+     *      Response object; apiFetch discards the response when throwing
+     *      on non-2xx status codes.
+     * This is a documented, intentional exception to the apiFetch convention.
+     */
+    (function () {
+        'use strict';
+
+        /* ------------------------------------------------------------------
+           next redirect helper
+           Five-rule validation mirroring _is_safe_next() in backend/pages.py
+           and the backend validation from Issue #16.  Both sides MUST apply
+           the same rules.
+        ------------------------------------------------------------------ */
+
+        function isSafeNext(url) {
+            if (!url || typeof url !== 'string') return false;
+            if (!url.startsWith('/'))  return false;  // must be relative
+            if (url.startsWith('//')) return false;  // no protocol-relative
+            if (url.includes('://')) return false;  // no URI scheme
+            if (url.includes('@'))   return false;  // no user@host
+            if (url.includes('\\')) return false;  // no backslash (Windows)
+            return true;
+        }
+
+        function getRedirectTarget() {
+            var params = new URLSearchParams(window.location.search);
+            var next   = params.get('next') || '';
+            return isSafeNext(next) ? next : '/dashboard';
+        }
+
+        /* ------------------------------------------------------------------
+           429 lockout message
+           Handles three cases: missing/malformed Retry-After, <120 seconds,
+           and >=120 seconds.
+        ------------------------------------------------------------------ */
+
+        function formatLockoutMessage(retryAfterHeader) {
+            var seconds = parseInt(retryAfterHeader, 10);
+            if (!Number.isFinite(seconds) || isNaN(seconds) || seconds <= 0) {
+                return 'Account locked. Please wait before trying again.';
+            }
+            if (seconds < 120) {
+                return 'Account locked. Try again in ' + seconds + ' seconds.';
+            }
+            var minutes = Math.ceil(seconds / 60);
+            return 'Account locked. Try again in ' + minutes + ' minutes.';
+        }
+
+        /* ------------------------------------------------------------------
+           Error display
+        ------------------------------------------------------------------ */
+
+        function showError(msg) {
+            var el = document.getElementById('login-error-js');
+            el.textContent = msg;
+            el.removeAttribute('hidden');
+        }
+
+        function clearError() {
+            var el = document.getElementById('login-error-js');
+            el.textContent = '';
+            el.setAttribute('hidden', '');
+        }
+
+        /* ------------------------------------------------------------------
+           Button loading state
+        ------------------------------------------------------------------ */
+
+        function setLoading(loading) {
+            var btn = document.getElementById('login-btn');
+            btn.disabled = loading;
+            if (loading) {
+                btn.classList.add('btn--loading');
+            } else {
+                btn.classList.remove('btn--loading');
+            }
+        }
+
+        /* ------------------------------------------------------------------
+           If the page was re-rendered by POST /login with a pre-filled
+           username (error path), move focus to the password field so the
+           user can immediately retype their password.
+           This runs before the main event listener and is safe without JS
+           modules because it is wrapped in an IIFE.
+        ------------------------------------------------------------------ */
+
+        (function focusIfUsernameFilled() {
+            var u = document.getElementById('username');
+            if (u && u.value) {
+                var p = document.getElementById('password');
+                if (p) { p.focus(); }
+            }
+        })();
+
+        /* ------------------------------------------------------------------
+           Form submit handler
+        ------------------------------------------------------------------ */
+
+        document.getElementById('login-form').addEventListener('submit', function (e) {
+            e.preventDefault();
+            clearError();
+
+            var username = document.getElementById('username').value.trim();
+            var password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                showError('Username and password are required.');
+                return;
+            }
+
+            setLoading(true);
+
+            fetch('/api/auth/login', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ username: username, password: password }),
+            })
+            .then(function (response) {
+                if (response.ok) {
+                    // Success: navigate to next or /dashboard.
+                    // Do not re-enable the button; page is navigating away.
+                    window.location.href = getRedirectTarget();
+                    return;
+                }
+
+                // All error paths: clear password, keep username, re-enable button.
+                document.getElementById('password').value = '';
+                setLoading(false);
+
+                if (response.status === 429) {
+                    var retryAfter = response.headers.get('Retry-After');
+                    showError(formatLockoutMessage(retryAfter));
+                    return;
+                }
+
+                if (response.status === 401) {
+                    showError('Invalid credentials. Please try again.');
+                    return;
+                }
+
+                if (response.status === 503) {
+                    showError('Server configuration error. Contact your administrator.');
+                    return;
+                }
+
+                showError('Login failed (' + response.status + '). Please try again.');
+            })
+            .catch(function (err) {
+                document.getElementById('password').value = '';
+                setLoading(false);
+                showError('Network error. Check your connection and try again.');
+            });
+        });
+
+    })();
+    </script>
+
+</body>
+</html>

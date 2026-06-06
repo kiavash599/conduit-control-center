@@ -43,6 +43,7 @@ from backend.auth.sessions import (
 )
 from backend._version import APP_VERSION
 from backend.dependencies import AuthRedirect
+from backend.pages import router as pages_router
 from backend.api import (
     auth_router,
     conduit_router,
@@ -166,6 +167,7 @@ async def _global_exception_handler(request: Request, exc: Exception) -> JSONRes
 # API routers
 # ---------------------------------------------------------------------------
 
+app.include_router(pages_router)                          # HTML pages — no /api prefix
 app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(status_router, prefix="/api")
