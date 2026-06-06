@@ -143,14 +143,104 @@
 
         <!-- ── Section: Overview ──────────────────────────────────────── -->
         <div id="section-overview" class="section" aria-labelledby="page-title">
+
             <!--
-              Content injected by Issues #27 (node status + control),
-              #28 (system health panel), #29 (traffic counter).
-              Left empty intentionally in Issue #26.
+              Node Status and Control Panel — Issue #27
+              ------------------------------------------
+              JS: frontend/static/js/status.js (loaded at bottom of {% block scripts %})
+              API: GET /api/status (polled every 5 s via startPolling)
+                   POST /api/conduit/start|stop|restart (on button click)
+
+              DOM IDs consumed by status.js:
+                status-badge        — badge element (class swapped by JS)
+                status-last-changed — "X minutes ago" text
+                status-version      — Conduit version string
+                status-uptime       — formatted uptime string
+                btn-start           — Start button
+                btn-stop            — Stop button
+                btn-restart         — Restart button
+
+              Initial state: badge neutral "—", all buttons disabled.
+              JS enables/disables buttons based on button matrix after first poll.
             -->
-            <p class="text-muted text-sm">
-                Overview panels are implemented in Issues #27–#29.
-            </p>
+            <div class="card" id="node-status-card">
+
+                <!-- Card header: title + live status badge -->
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Node Status</h2>
+                        <p class="card__subtitle">Psiphon Conduit service</p>
+                    </div>
+                    <!--
+                      aria-live="polite": screen readers announce status changes
+                      without interrupting the current speech stream.
+                      aria-atomic="true": announce the full badge text, not just
+                      the changed portion.
+                    -->
+                    <span class="badge badge--neutral"
+                          id="status-badge"
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true">—</span>
+                </div>
+
+                <!-- Status metadata: last changed / uptime / version -->
+                <dl class="status-meta" aria-label="Conduit service details">
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Last changed</dt>
+                        <dd class="status-meta__val" id="status-last-changed">—</dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Uptime</dt>
+                        <dd class="status-meta__val" id="status-uptime">—</dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Conduit version</dt>
+                        <dd class="status-meta__val" id="status-version">—</dd>
+                    </div>
+                </dl>
+
+                <!-- Control buttons -->
+                <!--
+                  All buttons start disabled. status.js enables them based on
+                  the button matrix after the first successful poll.
+                  Stop and Restart show window.confirm() dialogs (status.js).
+                  All buttons disabled while an action is in flight (actionInFlight).
+                  Spinner applied via btn--loading class by status.js.
+                -->
+                <div class="btn-group"
+                     role="group"
+                     aria-label="Conduit service controls">
+                    <button id="btn-start"
+                            class="btn btn--primary"
+                            type="button"
+                            disabled
+                            aria-label="Start Conduit service">
+                        Start
+                    </button>
+                    <button id="btn-stop"
+                            class="btn btn--danger"
+                            type="button"
+                            disabled
+                            aria-label="Stop Conduit service">
+                        Stop
+                    </button>
+                    <button id="btn-restart"
+                            class="btn btn--secondary"
+                            type="button"
+                            disabled
+                            aria-label="Restart Conduit service">
+                        Restart
+                    </button>
+                </div>
+
+            </div><!-- /#node-status-card -->
+
+            <!--
+              Panels for Issues #28 (system health) and #29 (traffic counter)
+              will be appended here — below the node status card.
+            -->
+
         </div>
 
         <!-- ── Section: Logs ─────────────────────────────────────────── -->
@@ -181,6 +271,13 @@
 {% endblock %}
 
 {% block scripts %}
+<!--
+  Script load order for the dashboard (base.html loads api.js then app.js first):
+    1. api.js   — apiFetch, toast system                     (base.html)
+    2. app.js   — startPolling, stopPolling, onReady         (base.html)
+    3. [inline] — dashboard shell: navigation + logout       (Issue #26)
+    4. status.js — node status panel + control buttons       (Issue #27)
+-->
 <script>
 /**
  * Dashboard shell — navigation and logout (Issue #26)
@@ -311,4 +408,7 @@
 
 })();
 </script>
+
+<!-- Issue #27: node status and control panel -->
+<script src="/static/js/status.js"></script>
 {% endblock %}
