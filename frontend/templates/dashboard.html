@@ -237,8 +237,139 @@
             </div><!-- /#node-status-card -->
 
             <!--
-              Panels for Issues #28 (system health) and #29 (traffic counter)
-              will be appended here — below the node status card.
+              System Health Panel — Issue #28
+              ------------------------------------------
+              JS: frontend/static/js/metrics.js (loaded in {% block scripts %})
+              API: GET /api/metrics/system (polled every 10 s via startPolling)
+
+              DOM IDs consumed by metrics.js:
+                metric-cpu-value    — CPU usage percentage text
+                metric-cpu-bar      — CPU progress bar fill
+                metric-ram-value    — RAM usage percentage text
+                metric-ram-detail   — RAM "used / total" secondary label
+                metric-ram-bar      — RAM progress bar fill
+                metric-disk-value   — Disk usage percentage text
+                metric-disk-detail  — Disk "used / total" secondary label
+                metric-disk-bar     — Disk progress bar fill
+                metric-temp-value   — CPU temperature text (or "N/A")
+                metric-temp-bar     — Temp progress bar fill (0% when null)
+            -->
+            <div id="system-health-panel" class="mt-8">
+
+                <h2 class="font-semi text-muted mb-4">System Health</h2>
+
+                <div class="panel-grid">
+
+                    <!-- ── CPU ──────────────────────────────── -->
+                    <div class="card">
+                        <p class="text-xs text-muted font-medium">CPU</p>
+                        <p class="text-2xl font-semi mt-2"
+                           id="metric-cpu-value"
+                           aria-live="polite"
+                           aria-atomic="true">—</p>
+                        <!--
+                          No secondary detail row for CPU:
+                          a percentage is self-contained and the absolute
+                          core-count adds no actionable information here.
+                        -->
+                        <div class="progress-bar mt-2"
+                             role="progressbar"
+                             aria-label="CPU usage"
+                             aria-valuenow="0"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                            <div class="progress-bar__fill"
+                                 id="metric-cpu-bar"
+                                 style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- ── RAM ──────────────────────────────── -->
+                    <div class="card">
+                        <p class="text-xs text-muted font-medium">RAM</p>
+                        <p class="text-2xl font-semi mt-2"
+                           id="metric-ram-value"
+                           aria-live="polite"
+                           aria-atomic="true">—</p>
+                        <!--
+                          Secondary row shows absolute "used / total" values.
+                          85 % means different things on 1 GB vs 4 GB;
+                          the absolute figure makes it actionable.
+                        -->
+                        <p class="text-xs text-dim mt-1"
+                           id="metric-ram-detail"
+                           aria-label="RAM used and total"></p>
+                        <div class="progress-bar mt-2"
+                             role="progressbar"
+                             aria-label="RAM usage"
+                             aria-valuenow="0"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                            <div class="progress-bar__fill"
+                                 id="metric-ram-bar"
+                                 style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- ── Disk ─────────────────────────────── -->
+                    <div class="card">
+                        <p class="text-xs text-muted font-medium">Disk</p>
+                        <p class="text-2xl font-semi mt-2"
+                           id="metric-disk-value"
+                           aria-live="polite"
+                           aria-atomic="true">—</p>
+                        <!-- Secondary row: same rationale as RAM above -->
+                        <p class="text-xs text-dim mt-1"
+                           id="metric-disk-detail"
+                           aria-label="Disk used and total"></p>
+                        <div class="progress-bar mt-2"
+                             role="progressbar"
+                             aria-label="Disk usage"
+                             aria-valuenow="0"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                            <div class="progress-bar__fill"
+                                 id="metric-disk-bar"
+                                 style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- ── CPU Temperature ───────────────────── -->
+                    <div class="card">
+                        <p class="text-xs text-muted font-medium">CPU Temp</p>
+                        <!--
+                          Shows "N/A" (not "—") when temperature_celsius
+                          is null on a successful API response.  This is
+                          expected on non-Pi hardware and is distinct from
+                          a connection error ("—").  metrics.js handles both.
+                        -->
+                        <p class="text-2xl font-semi mt-2"
+                           id="metric-temp-value"
+                           aria-live="polite"
+                           aria-atomic="true">—</p>
+                        <!--
+                          Bar width mirrors °C value directly (e.g. 52 °C → 52 %).
+                          Threshold colours: amber ≥ 70 °C, red ≥ 80 °C.
+                          Bar is 0 % (invisible) when temperature is null.
+                        -->
+                        <div class="progress-bar mt-2"
+                             role="progressbar"
+                             aria-label="CPU temperature"
+                             aria-valuenow="0"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                            <div class="progress-bar__fill"
+                                 id="metric-temp-bar"
+                                 style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                </div><!-- /.panel-grid -->
+
+            </div><!-- /#system-health-panel -->
+
+            <!--
+              Traffic counter widget (Issue #29) will be appended here.
             -->
 
         </div>
@@ -411,4 +542,7 @@
 
 <!-- Issue #27: node status and control panel -->
 <script src="/static/js/status.js"></script>
+
+<!-- Issue #28: system health panel -->
+<script src="/static/js/metrics.js"></script>
 {% endblock %}
