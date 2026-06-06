@@ -179,8 +179,8 @@ async def login_page(
 @router.post("/login", response_class=HTMLResponse, summary="Login form handler")
 async def login_form(
     request: Request,
-    username: str = Form(default=""),
-    password: str = Form(default=""),
+    username: str = Form(default="", max_length=64),
+    password: str = Form(default="", max_length=1024),
     next: str | None = Query(default=None),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
@@ -194,6 +194,13 @@ async def login_form(
     Authentication calls authenticate_user() from backend/auth/login.py --
     the same function and the same lockout/bcrypt/audit logic as the JSON
     API path.  Nothing is duplicated.
+
+    Input constraints (Issue #35)
+    ------------------------------
+    username and password carry max_length to match the limits on LoginRequest
+    used by POST /api/auth/login (username: 64, password: 1024).  This prevents
+    bcrypt from receiving an oversized input via the form path and guards against
+    large request-body allocations.
 
     On success : HTTP 303 redirect to the validated next param or /dashboard.
                  Both session and CSRF cookies are set so subsequent
