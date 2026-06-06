@@ -182,6 +182,7 @@ class AppConfig:
         self.conduit_action_timeout_seconds: int = conduit.get(
             "action_timeout_seconds", 10
         )
+        self.conduit_metrics_port: int = conduit.get("metrics_port", 9090)
 
         metrics = data.get("metrics", {})
         self.metrics_cache_ttl_seconds: int = metrics.get("cache_ttl_seconds", 5)

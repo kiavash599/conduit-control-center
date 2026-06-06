@@ -9,13 +9,14 @@ this adapter.
 
 Public API
 ----------
-    get_status()        -> ConduitStatus  ("running"|"stopped"|"starting"|
-                                           "stopping"|"error")
-    start()             -> ActionResult   (waited up to timeout for "running")
-    stop()              -> ActionResult   (waited up to timeout for "stopped")
-    restart()           -> ActionResult   (waited up to timeout for "running")
-    get_last_changed()  -> str | None     (ISO 8601 UTC, or None)
-    get_version()       -> str | None     (stub; implemented in Issue #18)
+    get_status()           -> ConduitStatus  ("running"|"stopped"|"starting"|
+                                              "stopping"|"error")
+    start()                -> ActionResult   (waited up to timeout for "running")
+    stop()                 -> ActionResult   (waited up to timeout for "stopped")
+    restart()              -> ActionResult   (waited up to timeout for "running")
+    get_last_changed()     -> str | None     (ISO 8601 UTC, or None)
+    get_version()          -> str | None     (stub; implemented in Issue #18)
+    get_traffic_metrics()  -> dict | None    (bytes_uploaded/bytes_downloaded, or None)
 
 Exceptions
 ----------
@@ -111,6 +112,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -658,112 +661,165 @@ async def pair(pairing_link: str) -> dict:
         )
 
 
-
-# Internal: shared action logic for start / stop / restart
+# ---------------------------------------------------------------------------
+# Public API -- Prometheus traffic metrics  (Issue #22)
 # ---------------------------------------------------------------------------
 
+# Timeout for the localhost HTTP call to the Conduit metrics server.
+# The endpoint is on the same host -- 2 seconds is already generous.
+# Not configurable: an operator cannot meaningfully tune this value.
+_METRICS_TIMEOUT_S: float = 2.0
 
-async def _control_action(action: str, desired_status: ConduitStatus) -> dict:
+# Prometheus metric names as defined by the Conduit CLI.
+# Source: https://github.com/Psiphon-Inc/conduit/blob/main/cli/README.md
+# Verified 2026-06-06.  If Psiphon renames these, update here and in
+# docs/conduit-metrics-source.md.
+_METRIC_BYTES_UPLOADED   = "conduit_bytes_uploaded"
+_METRIC_BYTES_DOWNLOADED = "conduit_bytes_downloaded"
+
+
+def _parse_prometheus_gauge(text: str, metric_name: str) -> int | None:
     """
-    Run 'sudo systemctl <action> <service>' then poll for desired_status.
+    Extract a single unlabelled gauge value from a Prometheus text payload.
 
-    sudo is prepended here -- and ONLY here. Read-only functions (get_status,
-    get_last_changed) call systemctl directly without sudo.
+    Prometheus text format (simplified):
+        # HELP conduit_bytes_uploaded ...
+        # TYPE conduit_bytes_uploaded gauge
+        conduit_bytes_uploaded 1073741824
+        conduit_bytes_uploaded{scope="common",region="US"} 524288000
+
+    We want only the unlabelled line.  The trailing-space check
+    ``line.startswith(metric_name + " ")`` is the distinguishing rule:
+    unlabelled lines have ``<name> <value>``, labelled lines have
+    ``<name>{...} <value>``.  Lines starting with ``#`` are skipped
+    because they begin with ``#``, not the metric name.
 
     Parameters
     ----------
-    action         : "start" | "stop" | "restart"
-    desired_status : ConduitStatus to wait for after the command
+    text        : full Prometheus text response body
+    metric_name : exact metric name to look for (e.g. "conduit_bytes_uploaded")
 
     Returns
     -------
-    dict with keys:
-        success : bool
-        status  : ConduitStatus  (final observed status)
-        message : str
+    int | None
+        Gauge value rounded to the nearest integer, or None if not found or
+        the value cannot be parsed as a number.
+    """
+    prefix = metric_name + " "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            # Line format: "<name> <value>" or "<name> <value> <timestamp>"
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return int(float(parts[1]))
+                except (ValueError, IndexError):
+                    logger.warning(
+                        "_parse_prometheus_gauge: could not parse value %r "
+                        "for metric %r",
+                        parts[1] if len(parts) > 1 else "<missing>",
+                        metric_name,
+                    )
+                    return None
+    return None
+
+
+async def get_traffic_metrics() -> dict | None:
+    """
+    Fetch Conduit traffic counters from its local Prometheus metrics endpoint.
+
+    Scrapes ``http://localhost:{conduit_metrics_port}/metrics`` and extracts:
+      - ``conduit_bytes_uploaded``   -> bytes_uploaded
+      - ``conduit_bytes_downloaded`` -> bytes_downloaded
+
+    The metrics endpoint only exists if Conduit was started with the
+    ``--metrics-addr :<port>`` flag.  See ``docs/conduit-metrics-source.md``
+    and ``deployment/conduit.service`` for the required configuration.
+
+    This function uses ``urllib.request.urlopen`` (stdlib) wrapped in
+    ``asyncio.to_thread`` so the blocking HTTP call does not stall the
+    FastAPI event loop.  No external HTTP library is required.
+
+    Parameters
+    ----------
+    None.  The metrics port is read from ``get_app_config().conduit_metrics_port``.
+
+    Returns
+    -------
+    dict | None
+        On success: ``{"bytes_uploaded": int, "bytes_downloaded": int}``
+        where either value may be ``None`` if the specific gauge was absent
+        from the response.
+
+        On any connection failure, timeout, or HTTP error: ``None``.
+        Callers treat ``None`` as "metrics server not reachable" and
+        respond with null byte fields at HTTP 200 -- not HTTP 503.
 
     Raises
     ------
-    ConduitPermissionError
-        sudo denied the command. Most likely cause: the sudoers rule in
-        /etc/sudoers.d/conduit-cc is missing or has the wrong service name.
-        Remember: the service name in config.json must exactly match the
-        name in the sudoers rule. If you change one, change the other and
-        re-run install.sh.
-    ConduitAdapterError
-        systemctl returned a non-permission failure (e.g. service not found,
-        dependency failure).
+    Never.  All exceptions are caught and logged; the function always returns.
+
+    Parameters
+    ----------
+    None.  The metrics port is read from ``get_app_config().conduit_metrics_port``.
+
+    Returns
+    -------
+    dict | None
+        On success: ``{"bytes_uploaded": int, "bytes_downloaded": int}``
+        where either value may be ``None`` if the specific gauge was absent
+        from the response.
+
+        On any connection failure, timeout, or HTTP error: ``None``.
+        Callers treat ``None`` as "metrics server not reachable" and
+        respond with null byte fields at HTTP 200 -- not HTTP 503.
+
+    Raises
+    ------
+    Never.  All exceptions are caught and logged; the function always returns.
     """
-    service = _service_name()
-    logger.info("Conduit adapter: sudo systemctl %r %r", action, service)
+    port = get_app_config().conduit_metrics_port
+    url  = f"http://localhost:{port}/metrics"
 
-    # sudo is prepended here intentionally. See module docstring for the
-    # required sudoers rule and the service-name coupling requirement.
-    returncode, _stdout, stderr = await _run(
-        ["sudo", "systemctl", action, service]
-    )
+    def _fetch() -> str:
+        """Blocking urllib call -- runs in a thread via asyncio.to_thread."""
+        with urllib.request.urlopen(url, timeout=_METRICS_TIMEOUT_S) as resp:
+            return resp.read().decode("utf-8", errors="replace")
 
-    if returncode != 0:
-        if _check_permission_denied(returncode, stderr):
-            logger.error(
-                "sudo systemctl %r %r: permission denied (rc=%d, stderr=%r). "
-                "Check /etc/sudoers.d/conduit-cc -- service name in the rule "
-                "must match conduit_service_name in config.json (%r).",
-                action, service, returncode, stderr, service,
-            )
-            raise ConduitPermissionError(
-                f"Insufficient privilege to {action} the Conduit service. "
-                "Run install.sh to configure the required sudoers rule, "
-                "or verify that the service name in config.json matches "
-                "the name in /etc/sudoers.d/conduit-cc."
-            )
-        logger.error(
-            "sudo systemctl %r %r failed (rc=%d, stderr=%r)",
-            action, service, returncode, stderr,
+    try:
+        text = await asyncio.to_thread(_fetch)
+    except urllib.error.URLError as exc:
+        # ConnectionRefusedError (metrics server not started) is wrapped here.
+        logger.debug(
+            "get_traffic_metrics: metrics endpoint %r not reachable (%s) -- "
+            "returning None (Conduit may not be running or --metrics-addr "
+            "was not passed at startup)",
+            url,
+            type(exc.reason).__name__ if hasattr(exc, "reason") else type(exc).__name__,
         )
-        raise ConduitAdapterError(
-            f"Failed to {action} the Conduit service. "
-            "Check server logs for details."
+        return None
+    except OSError as exc:
+        logger.debug(
+            "get_traffic_metrics: OS error reaching %r (%s) -- returning None",
+            url,
+            exc,
         )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "get_traffic_metrics: unexpected error fetching %r (type=%s) -- "
+            "returning None",
+            url,
+            type(exc).__name__,
+        )
+        return None
 
-    # Read timeout from config; operator-configurable via conduit_action_timeout_seconds in config.json.
-    timeout_s: float = get_app_config().conduit_action_timeout_seconds
+    uploaded   = _parse_prometheus_gauge(text, _METRIC_BYTES_UPLOADED)
+    downloaded = _parse_prometheus_gauge(text, _METRIC_BYTES_DOWNLOADED)
 
-    # Poll for desired_status up to timeout_s.
-    elapsed = 0.0
-    final_status: ConduitStatus = "error"
-
-    while elapsed < timeout_s:
-        await asyncio.sleep(_POLL_INTERVAL_S)
-        elapsed += _POLL_INTERVAL_S
-        try:
-            final_status = await get_status()
-        except ConduitAdapterError:
-            # Transient error during poll -- keep waiting
-            continue
-
-        if final_status == desired_status:
-            logger.info(
-                "Conduit %r succeeded: status=%r after %.1fs",
-                action, final_status, elapsed,
-            )
-            return {
-                "success": True,
-                "status": final_status,
-                "message": f"Conduit {action} successful.",
-            }
-
-    # Timeout: command was sent but desired state not reached.
-    logger.warning(
-        "Conduit %r timed out after %.1fs: final_status=%r (wanted %r)",
-        action, elapsed, final_status, desired_status,
+    logger.debug(
+        "get_traffic_metrics: bytes_uploaded=%s bytes_downloaded=%s",
+        uploaded,
+        downloaded,
     )
-    return {
-        "success": False,
-        "status": final_status,
-        "message": (
-            f"Conduit {action} command was sent but the service did not "
-            f"reach '{desired_status}' within {timeout_s:.0f}s. "
-            f"Current status: '{final_status}'."
-        ),
-    }
+    return {"bytes_uploaded": uploaded, "bytes_downloaded": downloaded}

@@ -13,7 +13,8 @@
   "conduit": {
     "service_name": "conduit",
     "status_poll_interval_seconds": 5,
-    "action_timeout_seconds": 10
+    "action_timeout_seconds": 10,
+    "metrics_port": 9090
   },
 
   "metrics": {
