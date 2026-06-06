@@ -47,7 +47,8 @@ from backend.auth.login import (
     authenticate_user,
 )
 from backend.auth.sessions import create_session, delete_session
-from backend.config import get_app_config, get_settings
+from backend.auth.cookies import COOKIE_NAME, set_session_cookie, clear_session_cookie
+from backend.config import get_settings
 from backend.dependencies import get_db
 
 logger = logging.getLogger(__name__)
@@ -75,49 +76,10 @@ class LoginRequest(BaseModel):
 # Cookie helpers
 # ---------------------------------------------------------------------------
 
-_COOKIE_NAME = "session_id"
-_COOKIE_PATH = "/"
-_COOKIE_SAMESITE = "strict"
 
 
-def _set_session_cookie(response: Response, session_id: str) -> None:
-    """
-    Attach the session cookie to an outgoing response.
-
-    Attributes
-    ----------
-    HttpOnly  -- not readable by JavaScript (mitigates XSS cookie theft)
-    Secure    -- HTTPS only in production; overridable via SECURE_COOKIES=false
-    SameSite  -- strict (blocks cross-site request forgery at the browser level)
-    Max-Age   -- matches the server-side session_timeout_minutes
-    Path      -- / (cookie sent on all paths)
-    """
-    max_age = get_app_config().session_timeout_minutes * 60
-    response.set_cookie(
-        key=_COOKIE_NAME,
-        value=session_id,
-        max_age=max_age,
-        path=_COOKIE_PATH,
-        httponly=True,
-        secure=get_settings().secure_cookies,
-        samesite=_COOKIE_SAMESITE,
-    )
-
-
-def _clear_session_cookie(response: Response) -> None:
-    """
-    Expire the session cookie on the client by setting Max-Age=0.
-
-    Must use the same path, httponly, secure, and samesite attributes as
-    _set_session_cookie() so browsers recognise it as the same cookie.
-    """
-    response.delete_cookie(
-        key=_COOKIE_NAME,
-        path=_COOKIE_PATH,
-        httponly=True,
-        secure=get_settings().secure_cookies,
-        samesite=_COOKIE_SAMESITE,
-    )
+# Cookie helpers (set_session_cookie, clear_session_cookie) are in
+# backend/auth/cookies.py — imported above. Private copies removed (Issue #31).
 
 
 def _retry_after_seconds(locked_until: datetime) -> int:
@@ -210,7 +172,7 @@ async def login(
 
     admin_username = get_settings().admin_username
     session_id = await create_session(db, admin_username)
-    _set_session_cookie(response, session_id)
+    set_session_cookie(response, session_id)
 
     logger.info("Session created for user %r", admin_username)
     return {"status": "ok"}
@@ -230,7 +192,7 @@ async def login(
 )
 async def logout(
     response: Response,
-    session_id: str | None = Cookie(default=None, alias=_COOKIE_NAME),
+    session_id: str | None = Cookie(default=None, alias=COOKIE_NAME),
     db: aiosqlite.Connection = Depends(get_db),
 ) -> dict:
     """
@@ -251,5 +213,5 @@ async def logout(
     else:
         logger.debug("Logout called with no session cookie present")
 
-    _clear_session_cookie(response)
+    clear_session_cookie(response)
     return {"status": "ok"}

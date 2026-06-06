@@ -187,6 +187,34 @@ async def delete_session(db: aiosqlite.Connection, session_id: str) -> None:
     logger.debug("Session deleted: id=%s", _mask(session_id))
 
 
+async def delete_all_sessions(db: aiosqlite.Connection) -> int:
+    """
+    Delete every session row from the store.
+
+    Called by PUT /api/settings/password after a successful password change
+    to invalidate all active sessions — including the one currently making
+    the request — before writing the new password hash.  This ensures that
+    any session obtained with the old password becomes invalid regardless
+    of whether the subsequent hash write succeeds.
+
+    Parameters
+    ----------
+    db : aiosqlite.Connection -- open database connection from get_db
+
+    Returns
+    -------
+    int -- number of sessions deleted (0 if no active sessions existed)
+    """
+    cursor = await db.execute("DELETE FROM sessions")
+    count  = cursor.rowcount
+    await db.commit()
+    logger.info(
+        "All %d session(s) deleted (password change -- pre-hash-write step)",
+        count,
+    )
+    return count
+
+
 async def purge_expired_sessions() -> int:
     """
     Delete all expired sessions and return the number of rows removed.

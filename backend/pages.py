@@ -15,6 +15,7 @@ Routes (Issue #25)
 Routes (Issue #26)
 ------------------
   GET  /dashboard  -- dashboard shell; requires authentication via require_auth_html
+              Template variables: version, username, session_timeout (minutes)
 
 POST /login authentication path
 ---------------------------------
@@ -37,10 +38,8 @@ use the same rules to prevent inconsistent open-redirect behaviour.
 
 Cookie settings
 ---------------
-_set_session_cookie() duplicates the cookie attributes from
-backend/api/auth.py.  The duplication is documented with a TODO for a
-future refactor that extracts shared cookie constants to
-backend/auth/cookies.py.
+Cookie helpers are imported from backend/auth/cookies.py
+(Issue #31 closed this long-standing TODO).
 """
 
 from __future__ import annotations
@@ -60,6 +59,7 @@ from backend.auth.login import (
     InvalidCredentials,
     authenticate_user,
 )
+from backend.auth.cookies import set_session_cookie
 from backend.auth.sessions import create_session
 from backend.config import get_app_config, get_settings
 from backend.dependencies import AuthenticatedUser, get_db, require_auth_html
@@ -70,29 +70,10 @@ router = APIRouter(tags=["pages"], include_in_schema=False)
 
 
 # ---------------------------------------------------------------------------
-# Cookie helper
+# Cookie helpers
 # ---------------------------------------------------------------------------
-# Attributes must match _set_session_cookie() in backend/api/auth.py.
-# TODO: extract shared cookie constants to backend/auth/cookies.py in a
-#       future refactor to remove this duplication.
-
-_COOKIE_NAME    = "session_id"
-_COOKIE_PATH    = "/"
-_COOKIE_SAMESITE = "strict"
-
-
-def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
-    """Attach the session cookie to a redirect response."""
-    max_age = get_app_config().session_timeout_minutes * 60
-    response.set_cookie(
-        key=_COOKIE_NAME,
-        value=session_id,
-        max_age=max_age,
-        path=_COOKIE_PATH,
-        httponly=True,
-        secure=get_settings().secure_cookies,
-        samesite=_COOKIE_SAMESITE,
-    )
+# set_session_cookie() is imported from backend.auth.cookies.
+# (Closes the TODO that previously appeared here and in api/auth.py.)
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +246,7 @@ async def login_form(
     session_id     = await create_session(db, admin_username)
 
     response = RedirectResponse(url=redirect_to, status_code=303)
-    _set_session_cookie(response, session_id)
+    set_session_cookie(response, session_id)
     logger.info("Session created for user %r via HTML form login", admin_username)
     return response
 
@@ -292,8 +273,11 @@ async def dashboard(
     return _templates(request).TemplateResponse(
         "dashboard.html",
         {
-            "request":  request,
-            "version":  APP_VERSION,
-            "username": user.user_id,
+            "request":         request,
+            "version":         APP_VERSION,
+            "username":        user.user_id,
+            # session_timeout_minutes from config.json — displayed read-only
+            # on the Settings page (Issue #31). Edit deferred to v1.1.
+            "session_timeout": get_app_config().session_timeout_minutes,
         },
     )

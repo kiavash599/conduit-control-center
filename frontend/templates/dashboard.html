@@ -7,8 +7,9 @@
 
   Template variables (set by backend/pages.py GET /dashboard)
   -----------------------------------------------------------
-    version  : str  -- APP_VERSION from backend/_version.py (e.g. "0.1.0")
-    username : str  -- authenticated admin username
+    version          : str  -- APP_VERSION from backend/_version.py (e.g. "0.1.0")
+    username         : str  -- authenticated admin username
+    session_timeout  : int  -- session_timeout_minutes from config.json (read-only display)
 
   Navigation (hash-based, Issue #26)
   ------------------------------------
@@ -515,13 +516,125 @@
 
         <!-- ── Section: Settings ─────────────────────────────────────── -->
         <div id="section-settings" class="section" aria-labelledby="page-title" hidden>
+
             <!--
-              Content injected by Issue #31 (change password form).
-              Left empty intentionally in Issue #26.
+              Settings Page — Issue #31
+              --------------------------
+              JS: frontend/static/js/settings.js (loaded in {% block scripts %})
+              API: PUT /api/settings/password
+
+              Template variable:
+                session_timeout  -- session_timeout_minutes from config.json
+                                    Passed by backend/pages.py GET /dashboard.
+                                    Displayed read-only; edit deferred to v1.1.
+
+              DOM IDs consumed by settings.js:
+                settings-password-form     — the <form> element
+                settings-current-password  — current password input
+                settings-new-password      — new password input
+                settings-confirm-password  — confirm password input
+                settings-submit-btn        — submit button
+                settings-error             — inline validation error paragraph
+                settings-success           — inline success message paragraph
             -->
-            <p class="text-muted text-sm">
-                Settings are implemented in Issue #31.
-            </p>
+            <div class="card" id="settings-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Change Password</h2>
+                        <p class="card__subtitle">Update your admin account password</p>
+                    </div>
+                </div>
+
+                <form id="settings-password-form" novalidate style="max-width: 420px;">
+
+                    <div class="form-group">
+                        <label class="label" for="settings-current-password">
+                            Current password
+                        </label>
+                        <input class="input"
+                               type="password"
+                               id="settings-current-password"
+                               name="current_password"
+                               autocomplete="current-password"
+                               required>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="label" for="settings-new-password">
+                            New password
+                        </label>
+                        <input class="input"
+                               type="password"
+                               id="settings-new-password"
+                               name="new_password"
+                               autocomplete="new-password"
+                               minlength="10"
+                               required>
+                        <p class="form-hint">Minimum 10 characters</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="label" for="settings-confirm-password">
+                            Confirm new password
+                        </label>
+                        <input class="input"
+                               type="password"
+                               id="settings-confirm-password"
+                               name="confirm_password"
+                               autocomplete="new-password"
+                               required>
+                    </div>
+
+                    <!--
+                      Inline validation error (client-side; shown by settings.js).
+                      textContent set by JS — no innerHTML.
+                      Hidden by default; settings.js sets hidden=false on error.
+                    -->
+                    <p class="form-error"
+                       id="settings-error"
+                       role="alert"
+                       hidden></p>
+
+                    <!--
+                      Inline success message (shown by settings.js on HTTP 200).
+                      textContent set by JS — no innerHTML.
+                      Hidden by default; settings.js shows it after success.
+                    -->
+                    <p class="text-success text-sm mt-2"
+                       id="settings-success"
+                       role="status"
+                       hidden></p>
+
+                    <div class="mt-4">
+                        <button id="settings-submit-btn"
+                                class="btn btn--primary"
+                                type="submit">
+                            Change Password
+                        </button>
+                    </div>
+
+                </form>
+
+                <!--
+                  Session timeout display (read-only).
+                  Value comes from the Jinja2 template variable session_timeout
+                  passed by backend/pages.py. No JS fetch required.
+                  Editing the timeout is deferred to v1.1.
+                -->
+                <dl class="status-meta mt-6"
+                    style="border-top: 1px solid var(--color-border);
+                           padding-top: var(--space-4);">
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Session timeout</dt>
+                        <dd class="status-meta__val">
+                            {{ session_timeout | e }} minutes
+                        </dd>
+                    </div>
+                </dl>
+
+            </div><!-- /#settings-card -->
+
         </div>
 
     </main><!-- /.main-content -->
@@ -679,4 +792,7 @@
 
 <!-- Issue #30: log viewer panel -->
 <script src="/static/js/logs.js"></script>
+
+<!-- Issue #31: settings / change password -->
+<script src="/static/js/settings.js"></script>
 {% endblock %}

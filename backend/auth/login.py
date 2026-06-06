@@ -122,6 +122,33 @@ def verify_password(plain_password: str, stored_hash: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Password hashing
+# ---------------------------------------------------------------------------
+
+
+def hash_password(plain_password: str) -> str:
+    """
+    Hash a plaintext password using bcrypt (cost factor 12).
+
+    Returns the hash as a UTF-8 string suitable for storage in the
+    ADMIN_PASSWORD_HASH field of .env.  Mirrors the hashing performed
+    by install.sh so the dashboard and installer produce identical hashes.
+
+    Parameters
+    ----------
+    plain_password : str -- the new plaintext password to hash
+
+    Returns
+    -------
+    str -- bcrypt hash string (e.g. "$2b$12$...")
+    """
+    return bcrypt.hashpw(
+        plain_password.encode("utf-8"),
+        bcrypt.gensalt(rounds=12),
+    ).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
 # User authentication
 # ---------------------------------------------------------------------------
 

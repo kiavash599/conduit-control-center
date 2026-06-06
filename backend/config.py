@@ -57,6 +57,26 @@ def _resolve_path(dev: Path, prod: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Public path helper
+# ---------------------------------------------------------------------------
+
+
+def get_env_file_path():
+    """
+    Return the path of the active .env file.
+
+    Wraps the private _resolve_path() call so that other modules
+    (e.g. backend/api/settings.py) can locate the .env file without
+    coupling to the private path constants.
+
+    Returns
+    -------
+    pathlib.Path -- path to the .env file (may not exist yet in a bare dev clone)
+    """
+    return _resolve_path(_DEFAULT_ENV_FILE, _PROD_ENV_FILE)
+
+
+# ---------------------------------------------------------------------------
 # Environment-based settings
 # ---------------------------------------------------------------------------
 
