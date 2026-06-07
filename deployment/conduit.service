@@ -1,0 +1,42 @@
+# deployment/conduit.service
+# ---------------------------
+# EXAMPLE ONLY — this file does NOT close Issue #6.
+#
+# Issue #6 (Create systemd service unit) remains open and will deliver a
+# hardened, production-ready unit with sandboxing, logging, and install.sh
+# integration.  This file is provided solely to document the --metrics-addr
+# flag required for GET /api/metrics/traffic to return non-null byte values.
+#
+# Do not deploy this file directly to a production server without completing
+# Issue #6.
+#
+# Reference: docs/conduit-metrics-source.md
+
+[Unit]
+Description=Psiphon Conduit inproxy node
+Documentation=https://github.com/Psiphon-Inc/conduit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conduit
+Group=conduit
+WorkingDirectory=/var/lib/conduit
+
+# --metrics-addr :9090 is REQUIRED for GET /api/metrics/traffic to return
+# non-null bytes_sent / bytes_received values.  Without this flag, the
+# Conduit process does not start an HTTP server and the metrics endpoint
+# in backend/conduit/adapter.py will receive a ConnectionRefusedError,
+# which it handles gracefully by returning null byte fields at HTTP 200.
+#
+# The port (9090) must match conduit.metrics_port in config.json.
+ExecStart=/usr/local/bin/conduit start \
+    --data-dir /var/lib/conduit/data \
+    --metrics-addr :9090
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
