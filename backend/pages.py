@@ -176,7 +176,7 @@ async def login_page(
 # POST /login  (progressive enhancement -- plain HTML form submission)
 # ---------------------------------------------------------------------------
 
-@router.post("/login", response_class=HTMLResponse, summary="Login form handler")
+@router.post("/login", response_class=HTMLResponse, response_model=None, summary="Login form handler")
 async def login_form(
     request: Request,
     username: str = Form(default="", max_length=64),
