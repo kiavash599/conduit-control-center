@@ -1,6 +1,6 @@
 # =============================================================================
 # Conduit Control Center — Nginx Virtual Host Configuration
-# Issues: #34 (rate limiting), #7 (TLS virtual host, HTTP→HTTPS redirect)
+# Issues: #34 (rate limiting), #7 (TLS virtual host, HTTP→HTTPS redirect), #32 (security headers)
 # =============================================================================
 #
 # DEPLOYMENT NOTES
@@ -134,9 +134,47 @@ server {
 
     # ------------------------------------------------------------------
     # Security headers — Issue #32
-    # add_header directives for HSTS, CSP, X-Frame-Options, and others
-    # will be added here in Issue #32.
+    #
+    # These six directives apply to all responses that do NOT have their
+    # own add_header in a child location block (nginx inheritance rule:
+    # a location with any add_header does not inherit these).
+    #
+    # Locations that inherit these headers automatically:
+    #   /api/auth/login  — no add_header in that block
+    #   /api/            — no add_header in that block
+    #   /                — no add_header in that block
+    #
+    # Locations that do NOT inherit (must repeat headers explicitly):
+    #   /static/             — has add_header Cache-Control
+    #   @login_rate_limited  — has add_header Retry-After
+    #
+    # HSTS (Strict-Transport-Security)
+    #   max-age=31536000: browsers will enforce HTTPS for 1 year.
+    #   includeSubDomains: covers all subdomains of CF_RECORD_NAME.
+    #   No 'preload' directive: preload is permanent and requires
+    #   submission to hstspreload.org; inappropriate for a project
+    #   where the operator controls the domain.
+    #
+    # CSP (Content-Security-Policy)
+    #   default-src 'self': all resource types fall back to same-origin.
+    #   script-src 'self':  only /static/js/*.js served from this origin.
+    #   style-src 'self':   only /static/css/*.css served from this origin.
+    #   img-src 'self' data:: same-origin images + data: URIs (future use).
+    #   frame-ancestors 'none': this page may not be embedded in any frame.
+    #   No unsafe-inline, no unsafe-eval, no nonces, no hashes.
+    #   Pre-condition: Issue #44 extracted all inline scripts and styles.
+    #
+    # X-Frame-Options
+    #   Belt-and-suspenders alongside frame-ancestors 'none' in the CSP.
+    #   Older browsers that do not support CSP frame-ancestors use this.
+    #
     # ------------------------------------------------------------------
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'" always;
+    add_header X-Frame-Options           "DENY" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header Referrer-Policy           "no-referrer" always;
+    add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
 
     # ------------------------------------------------------------------
     # Static frontend assets served directly by Nginx
@@ -146,7 +184,16 @@ server {
     location /static/ {
         alias   /opt/conduit-cc/frontend/static/;
         expires 1d;
-        add_header Cache-Control "public, no-transform";
+        # Cache-Control is specific to static assets.
+        # Security headers are repeated here because this location has its
+        # own add_header, which suppresses server-block header inheritance.
+        add_header Cache-Control             "public, no-transform";
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'" always;
+        add_header X-Frame-Options           "DENY" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header Referrer-Policy           "no-referrer" always;
+        add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
     }
 
     # ------------------------------------------------------------------
@@ -182,10 +229,17 @@ server {
     # Named location: 429 response for login rate limiting.
     # Kept separate so add_header here does not affect the security
     # header inheritance for the /api/auth/login location above.
-    # Issue #32 will add the six security headers here as well.
+    # Security headers are repeated here because this location has its
+    # own add_header (Retry-After), which suppresses server-block
+    # header inheritance (Issue #32).
     location @login_rate_limited {
-        # Issue #32 — security headers will be added here.
-        add_header Retry-After 1 always;
+        add_header Retry-After               1 always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Content-Security-Policy   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'" always;
+        add_header X-Frame-Options           "DENY" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header Referrer-Policy           "no-referrer" always;
+        add_header Permissions-Policy        "geolocation=(), camera=(), microphone=()" always;
         return 429 '{"detail":"Rate limit exceeded. Try again in 1 second."}';
     }
 
