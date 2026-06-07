@@ -506,7 +506,8 @@
                         <dd class="status-meta__val"
                             id="ddns-ip"
                             aria-live="polite"
-                            aria-atomic="true">—</dd>
+                            aria-atomic="true"
+                            title="This is the public IP Cloudflare is currently pointing to. If your ISP changes your IP and DDNS fails, this value will be stale.">—</dd>
                     </div>
                     <div class="status-meta__row">
                         <dt class="status-meta__key">Last updated</dt>
@@ -889,9 +890,4 @@
 <!-- Issue #30: log viewer panel -->
 <script src="/static/js/logs.js"></script>
 
-<!-- Issue #31: settings / change password -->
-<script src="/static/js/settings.js"></script>
-
-<!-- Issue #43: DDNS status panel -->
-<script src="/static/js/ddns.js"></script>
-{% endblock %}
+<!-- Issue #31: settings / chan

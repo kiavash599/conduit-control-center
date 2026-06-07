@@ -20,7 +20,14 @@ See the [v0.1 milestone](https://github.com/kiavash599/conduit-control-center/mi
 
 ---
 
-## [0.1.0] - TBD
+## [0.1.0-dev] — Target release (not yet shipped)
+
+> **Note:** This section describes the intended scope of v0.1.0.
+> Items not yet committed to the repository:
+> `install.sh` (#9), `uninstall.sh` (#10), `update.sh` (#11),
+> `docs/pre-install.md`, `docs/tls-setup.md` (#8),
+> `docs/dev-setup.md` (#5), `docs/architecture.md`, `docs/api-reference.md`,
+> full TLS Nginx config (#7), security headers (#32).
 
 ### Added
 
@@ -94,13 +101,4 @@ See the [v0.1 milestone](https://github.com/kiavash599/conduit-control-center/mi
 | Version | Theme | Target |
 |---------|-------|--------|
 | **0.1.0** | MVP | 🔧 In development |
-| 1.0.0 | Stable foundation | 📋 Planned |
-| 1.1.0 | Developer experience | 📋 Planned |
-| 1.2.0 | API & automation | 📋 Planned |
-| 1.3.0 | Security hardening | 📋 Planned |
-| 2.0.0 | Multi-node | 📋 Planned |
-
----
-
-[Unreleased]: https://github.com/kiavash599/conduit-control-center/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/kiavash599/conduit-control-center/releases/tag/v0.1.0
+| 1.0.0 | S

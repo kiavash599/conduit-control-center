@@ -71,8 +71,8 @@
 #
 # NOTE: TLS (SSL) configuration is intentionally omitted from this file.
 #       See Issue #7 for TLS implementation.
-#       See Issue #9 for security headers implementation.
-#       See Issue #32 for install automation.
+#       See Issue #32 for security headers implementation.
+#       See Issue #9 for install automation.
 
 server {
     listen 80;
