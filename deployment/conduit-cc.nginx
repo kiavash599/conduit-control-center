@@ -1,107 +1,176 @@
 # =============================================================================
-# Conduit Control Center — Nginx Reference Configuration
-# Issue #34: Rate limiting for login endpoint
+# Conduit Control Center — Nginx Virtual Host Configuration
+# Issues: #34 (rate limiting), #7 (TLS virtual host, HTTP→HTTPS redirect)
 # =============================================================================
 #
-# IMPORTANT — limit_req_zone MUST be placed in the nginx http { } block,
-# NOT inside a server { } or location { } block.  Copy the limit_req_zone
-# directive into your /etc/nginx/nginx.conf (or an included conf file that
-# is loaded in the http context) before using this server block.
+# DEPLOYMENT NOTES
+# ----------------
+# 1. Copy this file to /etc/nginx/sites-available/conduit-cc
+# 2. Symlink to sites-enabled:
+#       sudo ln -s /etc/nginx/sites-available/conduit-cc \
+#                  /etc/nginx/sites-enabled/conduit-cc
+# 3. Copy the limit_req_zone directive from STEP 1 below into your
+#    /etc/nginx/nginx.conf inside the http { } block.
+# 4. Verify syntax:   sudo nginx -t
+# 5. Reload:          sudo systemctl reload nginx
 #
-# -----------------------------------------------------------------------------
-# STEP 1 — Add to your nginx http { } block (e.g. /etc/nginx/nginx.conf):
-# -----------------------------------------------------------------------------
+# File path note: Issue #7 originally specified scripts/conduit-cc.conf.
+# This project uses deployment/ for deployment artefacts and scripts/ for
+# executable scripts — the path was established in Issue #34 and is kept here.
+#
+# Verification note: nginx -t and live 301/HTTPS verification are
+# deploy-time checks requiring a running Nginx instance.  They cannot be
+# run in the development sandbox and will be verified during Issue #38
+# (Pi hardware test) and as part of install.sh Phase 2h (Issue #9).
+#
+# =============================================================================
+# STEP 1 — Add to your nginx http { } block (e.g. /etc/nginx/nginx.conf)
+# =============================================================================
+#
+# This directive must live in the http context, not inside a server block.
 #
 #   http {
 #       ##
-#       ## Rate limiting — Conduit Control Center login endpoint
-#       ## 10 r/m = ~1 request every 6 seconds per unique IP address.
-#       ## 10 MB zone holds ~160,000 IP entries.
+#       ## Rate limiting — Conduit Control Center login endpoint (Issue #34)
+#       ## 10 r/m ≈ 1 request every 6 seconds per unique IP address.
+#       ## 10 MB zone holds ~160,000 IP state entries.
 #       ##
 #       limit_req_zone $binary_remote_addr zone=login_limit:10m rate=10r/m;
 #
 #       include /etc/nginx/sites-enabled/*;
 #   }
 #
-# -----------------------------------------------------------------------------
-# STEP 2 — Cloudflare real-IP restoration (http block or separate include)
-# -----------------------------------------------------------------------------
-#
-# When Nginx sits behind Cloudflare, the connecting IP is a Cloudflare edge
-# node, not the visitor.  The directives below restore $remote_addr so that
-# rate limiting (and access logs) reflect the real visitor IP.
-#
-# Cloudflare IPv4 ranges
-# Source : https://www.cloudflare.com/ips-v4
-# Verified: 2025-05-01
-#
-#   set_real_ip_from 173.245.48.0/20;
-#   set_real_ip_from 103.21.244.0/22;
-#   set_real_ip_from 103.22.200.0/22;
-#   set_real_ip_from 103.31.4.0/22;
-#   set_real_ip_from 141.101.64.0/18;
-#   set_real_ip_from 108.162.192.0/18;
-#   set_real_ip_from 190.93.240.0/20;
-#   set_real_ip_from 188.114.96.0/20;
-#   set_real_ip_from 197.234.240.0/22;
-#   set_real_ip_from 198.41.128.0/17;
-#   set_real_ip_from 162.158.0.0/15;
-#   set_real_ip_from 104.16.0.0/13;
-#   set_real_ip_from 104.24.0.0/14;
-#   set_real_ip_from 172.64.0.0/13;
-#   set_real_ip_from 131.0.72.0/22;
-#
-# Cloudflare IPv6 ranges
-# Source : https://www.cloudflare.com/ips-v6
-# Verified: 2025-05-01
-#
-#   set_real_ip_from 2400:cb00::/32;
-#   set_real_ip_from 2606:4700::/32;
-#   set_real_ip_from 2803:f800::/32;
-#   set_real_ip_from 2405:b500::/32;
-#   set_real_ip_from 2405:8100::/32;
-#   set_real_ip_from 2a06:98c0::/29;
-#   set_real_ip_from 2c0f:f248::/32;
-#
-#   real_ip_header CF-Connecting-IP;
-#
+
 # =============================================================================
-# STEP 3 — Server block (e.g. /etc/nginx/sites-available/conduit-cc)
+# Block 1 — HTTP: redirect all traffic to HTTPS (Issue #7)
 # =============================================================================
 #
-# NOTE: TLS (SSL) configuration is intentionally omitted from this file.
-#       See Issue #7 for TLS implementation.
-#       See Issue #32 for security headers implementation.
-#       See Issue #9 for install automation.
+# Cloudflare handles the public-facing HTTP→HTTPS redirect for proxied
+# requests.  This block catches any direct HTTP access to the origin server
+# (e.g. during install verification, or if the Cloudflare proxy is briefly
+# disabled) and returns a permanent redirect.
 
 server {
-    listen 80;
-    server_name _;
+    listen      80;
+    listen      [::]:80;
+    server_name <CF_RECORD_NAME>;   # replaced by install.sh (Issue #9)
+
+    return 301 https://$host$request_uri;
+}
+
+# =============================================================================
+# Block 2 — HTTPS: TLS termination, proxy passthrough (Issue #7)
+# =============================================================================
+
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    server_name <CF_RECORD_NAME>;   # replaced by install.sh (Issue #9)
+
+    # ------------------------------------------------------------------
+    # TLS — Cloudflare Origin Certificate
+    #
+    # Certificates are installed by install.sh (Issue #9, Phase 2e).
+    # Primary TLS model: Cloudflare Proxy + Origin Certificate +
+    # SSL/TLS mode set to Full (strict) in the Cloudflare dashboard.
+    # See docs/tls-setup.md (Issue #8) for setup instructions.
+    # ------------------------------------------------------------------
+    ssl_certificate     /etc/conduit-cc/tls/origin.pem;
+    ssl_certificate_key /etc/conduit-cc/tls/origin.key;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+
+    server_tokens off;
+
+    # ------------------------------------------------------------------
+    # Cloudflare real-IP restoration (Issue #7)
+    #
+    # When Nginx sits behind Cloudflare, $remote_addr is a Cloudflare
+    # edge node IP, not the real visitor IP.  The directives below restore
+    # $remote_addr from the CF-Connecting-IP header so that rate limiting
+    # zones and access logs reflect the real visitor address.
+    #
+    # Only connections from Cloudflare's published IP ranges are trusted
+    # to supply this header.  Direct connections from other IPs are NOT
+    # trusted, so a non-Cloudflare client cannot spoof their address by
+    # setting CF-Connecting-IP manually.
+    #
+    # Cloudflare IPv4 ranges
+    # Source : https://www.cloudflare.com/ips-v4
+    # Verified: 2025-05-01 — re-verify before deploying.
+    # install.sh (Issue #9) may refresh these ranges at install time.
+    # ------------------------------------------------------------------
+    set_real_ip_from 173.245.48.0/20;
+    set_real_ip_from 103.21.244.0/22;
+    set_real_ip_from 103.22.200.0/22;
+    set_real_ip_from 103.31.4.0/22;
+    set_real_ip_from 141.101.64.0/18;
+    set_real_ip_from 108.162.192.0/18;
+    set_real_ip_from 190.93.240.0/20;
+    set_real_ip_from 188.114.96.0/20;
+    set_real_ip_from 197.234.240.0/22;
+    set_real_ip_from 198.41.128.0/17;
+    set_real_ip_from 162.158.0.0/15;
+    set_real_ip_from 104.16.0.0/13;
+    set_real_ip_from 104.24.0.0/14;
+    set_real_ip_from 172.64.0.0/13;
+    set_real_ip_from 131.0.72.0/22;
+
+    # Cloudflare IPv6 ranges
+    # Source : https://www.cloudflare.com/ips-v6
+    # Verified: 2025-05-01 — re-verify before deploying.
+    set_real_ip_from 2400:cb00::/32;
+    set_real_ip_from 2606:4700::/32;
+    set_real_ip_from 2803:f800::/32;
+    set_real_ip_from 2405:b500::/32;
+    set_real_ip_from 2405:8100::/32;
+    set_real_ip_from 2a06:98c0::/29;
+    set_real_ip_from 2c0f:f248::/32;
+
+    real_ip_header CF-Connecting-IP;
+
+    # ------------------------------------------------------------------
+    # Security headers — Issue #32
+    # add_header directives for HSTS, CSP, X-Frame-Options, and others
+    # will be added here in Issue #32.
+    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # Static frontend assets served directly by Nginx
+    # Nginx serves /static/ files without hitting the FastAPI process,
+    # reducing application load for CSS/JS/image requests.
     # ------------------------------------------------------------------
-    root /opt/conduit-cc/frontend;
-    index index.html;
-
     location /static/ {
-        alias /opt/conduit-cc/frontend/static/;
+        alias   /opt/conduit-cc/frontend/static/;
         expires 1d;
         add_header Cache-Control "public, no-transform";
     }
 
     # ------------------------------------------------------------------
-    # Login endpoint — rate limited
+    # Login endpoint — rate limited (Issue #34)
     #
     # limit_req_zone must be declared in the http block (see STEP 1).
-    # burst=9 allows a short burst before requests are rejected.
-    # nodelay serves burst requests immediately rather than queuing.
-    # Retry-After informs the client when it may retry.
+    # burst=9: up to 9 requests served immediately before rate kicks in.
+    # nodelay: burst requests are served at once, not queued.
+    #
+    # When the rate limit is exceeded Nginx generates a 429.  The
+    # error_page directive routes that 429 to the @login_rate_limited
+    # named location, which adds the Retry-After header and returns a
+    # JSON body.
+    #
+    # This pattern (named location for error responses) avoids placing
+    # add_header in this location block directly.  If add_header were
+    # used here, Nginx's inheritance rules would suppress any security
+    # headers set at the server block level on all responses from this
+    # location — including normal 200 proxy responses (Issue #32).
     # ------------------------------------------------------------------
     location /api/auth/login {
-        limit_req zone=login_limit burst=9 nodelay;
+        limit_req        zone=login_limit burst=9 nodelay;
         limit_req_status 429;
-        add_header Retry-After 1 always;
+        error_page       429 = @login_rate_limited;
 
         proxy_pass         http://127.0.0.1:8000;
         proxy_set_header   Host              $host;
@@ -110,9 +179,18 @@ server {
         proxy_set_header   X-Forwarded-Proto $scheme;
     }
 
+    # Named location: 429 response for login rate limiting.
+    # Kept separate so add_header here does not affect the security
+    # header inheritance for the /api/auth/login location above.
+    # Issue #32 will add the six security headers here as well.
+    location @login_rate_limited {
+        # Issue #32 — security headers will be added here.
+        add_header Retry-After 1 always;
+        return 429 '{"detail":"Rate limit exceeded. Try again in 1 second."}';
+    }
+
     # ------------------------------------------------------------------
-    # All other API and dashboard traffic — no rate limit
-    # Dashboard polling endpoints must not be throttled.
+    # All other API routes
     # ------------------------------------------------------------------
     location /api/ {
         proxy_pass         http://127.0.0.1:8000;
@@ -122,11 +200,10 @@ server {
         proxy_set_header   X-Forwarded-Proto $scheme;
     }
 
+    # ------------------------------------------------------------------
+    # Dashboard and all remaining routes
+    # ------------------------------------------------------------------
     location / {
-        try_files $uri $uri/ @backend;
-    }
-
-    location @backend {
         proxy_pass         http://127.0.0.1:8000;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;
