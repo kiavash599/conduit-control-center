@@ -1,0 +1,136 @@
+# =============================================================================
+# Conduit Control Center — Nginx Reference Configuration
+# Issue #34: Rate limiting for login endpoint
+# =============================================================================
+#
+# IMPORTANT — limit_req_zone MUST be placed in the nginx http { } block,
+# NOT inside a server { } or location { } block.  Copy the limit_req_zone
+# directive into your /etc/nginx/nginx.conf (or an included conf file that
+# is loaded in the http context) before using this server block.
+#
+# -----------------------------------------------------------------------------
+# STEP 1 — Add to your nginx http { } block (e.g. /etc/nginx/nginx.conf):
+# -----------------------------------------------------------------------------
+#
+#   http {
+#       ##
+#       ## Rate limiting — Conduit Control Center login endpoint
+#       ## 10 r/m = ~1 request every 6 seconds per unique IP address.
+#       ## 10 MB zone holds ~160,000 IP entries.
+#       ##
+#       limit_req_zone $binary_remote_addr zone=login_limit:10m rate=10r/m;
+#
+#       include /etc/nginx/sites-enabled/*;
+#   }
+#
+# -----------------------------------------------------------------------------
+# STEP 2 — Cloudflare real-IP restoration (http block or separate include)
+# -----------------------------------------------------------------------------
+#
+# When Nginx sits behind Cloudflare, the connecting IP is a Cloudflare edge
+# node, not the visitor.  The directives below restore $remote_addr so that
+# rate limiting (and access logs) reflect the real visitor IP.
+#
+# Cloudflare IPv4 ranges
+# Source : https://www.cloudflare.com/ips-v4
+# Verified: 2025-05-01
+#
+#   set_real_ip_from 173.245.48.0/20;
+#   set_real_ip_from 103.21.244.0/22;
+#   set_real_ip_from 103.22.200.0/22;
+#   set_real_ip_from 103.31.4.0/22;
+#   set_real_ip_from 141.101.64.0/18;
+#   set_real_ip_from 108.162.192.0/18;
+#   set_real_ip_from 190.93.240.0/20;
+#   set_real_ip_from 188.114.96.0/20;
+#   set_real_ip_from 197.234.240.0/22;
+#   set_real_ip_from 198.41.128.0/17;
+#   set_real_ip_from 162.158.0.0/15;
+#   set_real_ip_from 104.16.0.0/13;
+#   set_real_ip_from 104.24.0.0/14;
+#   set_real_ip_from 172.64.0.0/13;
+#   set_real_ip_from 131.0.72.0/22;
+#
+# Cloudflare IPv6 ranges
+# Source : https://www.cloudflare.com/ips-v6
+# Verified: 2025-05-01
+#
+#   set_real_ip_from 2400:cb00::/32;
+#   set_real_ip_from 2606:4700::/32;
+#   set_real_ip_from 2803:f800::/32;
+#   set_real_ip_from 2405:b500::/32;
+#   set_real_ip_from 2405:8100::/32;
+#   set_real_ip_from 2a06:98c0::/29;
+#   set_real_ip_from 2c0f:f248::/32;
+#
+#   real_ip_header CF-Connecting-IP;
+#
+# =============================================================================
+# STEP 3 — Server block (e.g. /etc/nginx/sites-available/conduit-cc)
+# =============================================================================
+#
+# NOTE: TLS (SSL) configuration is intentionally omitted from this file.
+#       See Issue #7 for TLS implementation.
+#       See Issue #9 for security headers implementation.
+#       See Issue #32 for install automation.
+
+server {
+    listen 80;
+    server_name _;
+
+    # ------------------------------------------------------------------
+    # Static frontend assets served directly by Nginx
+    # ------------------------------------------------------------------
+    root /opt/conduit-cc/frontend;
+    index index.html;
+
+    location /static/ {
+        alias /opt/conduit-cc/frontend/static/;
+        expires 1d;
+        add_header Cache-Control "public, no-transform";
+    }
+
+    # ------------------------------------------------------------------
+    # Login endpoint — rate limited
+    #
+    # limit_req_zone must be declared in the http block (see STEP 1).
+    # burst=9 allows a short burst before requests are rejected.
+    # nodelay serves burst requests immediately rather than queuing.
+    # Retry-After informs the client when it may retry.
+    # ------------------------------------------------------------------
+    location /api/auth/login {
+        limit_req zone=login_limit burst=9 nodelay;
+        limit_req_status 429;
+        add_header Retry-After 1 always;
+
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
+    # ------------------------------------------------------------------
+    # All other API and dashboard traffic — no rate limit
+    # Dashboard polling endpoints must not be throttled.
+    # ------------------------------------------------------------------
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri $uri/ @backend;
+    }
+
+    location @backend {
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
