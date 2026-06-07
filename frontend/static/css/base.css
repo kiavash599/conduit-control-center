@@ -539,6 +539,24 @@ a:hover {
     margin-top: var(--space-1);
 }
 
+/* Issue #44: replaces inline style="margin-bottom:…" on #login-error-server.
+   Used when the server re-renders login.html with an error (no-JS path). */
+.form-error--banner {
+    margin-bottom: var(--space-4);
+}
+
+/* Issue #44: replaces inline style="max-width:420px" on #settings-password-form. */
+#settings-password-form {
+    max-width: 420px;
+}
+
+/* Issue #44: replaces inline style="border-top:…;padding-top:…" on the
+   session-timeout <dl> in the Settings section of dashboard.html. */
+.status-meta--divided {
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-4);
+}
+
 
 /* ----------------------------------------------------------------------------
    Status badges
@@ -625,6 +643,7 @@ a:hover {
 }
 
 .progress-bar__fill {
+    width: 0;                               /* Issue #44: replaces inline style="width:0%" */
     height: 100%;
     border-radius: var(--radius-full);
     background-color: var(--color-success);
@@ -634,6 +653,23 @@ a:hover {
 
 .progress-bar__fill--warning { background-color: var(--color-warning); }
 .progress-bar__fill--danger  { background-color: var(--color-danger);  }
+
+
+/* ----------------------------------------------------------------------------
+   DDNS warning banner (Issue #44: replaces inline style= on #ddns-warning-banner)
+   ---------------------------------------------------------------------------- */
+
+.ddns-warning-banner {
+    margin-bottom: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning);
+    background-color: var(--color-warning-muted);
+    color: var(--color-warning);
+    font-size: var(--text-sm);
+    /* Initial visibility is controlled by the HTML `hidden` attribute. */
+    /* JS (ddns.js) toggles banner.hidden = true/false at runtime.      */
+}
 
 
 /* ----------------------------------------------------------------------------

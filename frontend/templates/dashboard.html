@@ -280,8 +280,7 @@
                              aria-valuemin="0"
                              aria-valuemax="100">
                             <div class="progress-bar__fill"
-                                 id="metric-cpu-bar"
-                                 style="width: 0%"></div>
+                                 id="metric-cpu-bar"></div>
                         </div>
                     </div>
 
@@ -307,8 +306,7 @@
                              aria-valuemin="0"
                              aria-valuemax="100">
                             <div class="progress-bar__fill"
-                                 id="metric-ram-bar"
-                                 style="width: 0%"></div>
+                                 id="metric-ram-bar"></div>
                         </div>
                     </div>
 
@@ -330,8 +328,7 @@
                              aria-valuemin="0"
                              aria-valuemax="100">
                             <div class="progress-bar__fill"
-                                 id="metric-disk-bar"
-                                 style="width: 0%"></div>
+                                 id="metric-disk-bar"></div>
                         </div>
                     </div>
 
@@ -360,8 +357,7 @@
                              aria-valuemin="0"
                              aria-valuemax="100">
                             <div class="progress-bar__fill"
-                                 id="metric-temp-bar"
-                                 style="width: 0%"></div>
+                                 id="metric-temp-bar"></div>
                         </div>
                     </div>
 
@@ -480,15 +476,9 @@
                   becomes visible (the content change triggers the live region).
                 -->
                 <div id="ddns-warning-banner"
+                     class="ddns-warning-banner"
                      role="alert"
-                     style="display:none;
-                            margin-bottom: var(--space-4);
-                            padding: var(--space-3) var(--space-4);
-                            border-radius: var(--radius-md);
-                            border: 1px solid var(--color-warning);
-                            background-color: var(--color-warning-muted);
-                            color: var(--color-warning);
-                            font-size: var(--text-sm);">
+                     hidden>
                     &#9888; DDNS has failed 3+ consecutive times. Your dashboard may become
                     unreachable. Check <code>/var/log/conduit-cc/ddns.log</code>.
                 </div>
@@ -643,7 +633,7 @@
                     </div>
                 </div>
 
-                <form id="settings-password-form" novalidate style="max-width: 420px;">
+                <form id="settings-password-form" novalidate>
 
                     <div class="form-group">
                         <label class="label" for="settings-current-password">
@@ -719,9 +709,7 @@
                   passed by backend/pages.py. No JS fetch required.
                   Editing the timeout is deferred to v1.1.
                 -->
-                <dl class="status-meta mt-6"
-                    style="border-top: 1px solid var(--color-border);
-                           padding-top: var(--space-4);">
+                <dl class="status-meta mt-6 status-meta--divided">
                     <div class="status-meta__row">
                         <dt class="status-meta__key">Session timeout</dt>
                         <dd class="status-meta__val">
@@ -742,141 +730,18 @@
 {% block scripts %}
 <!--
   Script load order for the dashboard (base.html loads api.js then app.js first):
-    1. api.js   — apiFetch, toast system                     (base.html)
-    2. app.js   — startPolling, stopPolling, onReady         (base.html)
-    3. [inline] — dashboard shell: navigation + logout       (Issue #26)
-    4. status.js — node status panel + control buttons       (Issue #27)
+    1. api.js       — apiFetch, toast system                      (base.html)
+    2. app.js       — startPolling, stopPolling, onReady          (base.html)
+    3. dashboard.js — dashboard shell: navigation + logout        (Issue #26, #44)
+    4. status.js    — node status panel + control buttons         (Issue #27)
+    5. metrics.js   — system health panel                         (Issue #28)
+    6. traffic.js   — traffic counter widget                      (Issue #29)
+    7. logs.js      — log viewer panel                            (Issue #30)
+    8. settings.js  — settings / change password                  (Issue #31)
+    9. ddns.js      — DDNS status panel                          (Issue #43)
 -->
-<script>
-/**
- * Dashboard shell — navigation and logout (Issue #26)
- *
- * Sections
- * --------
- * Hash-based navigation: #overview, #logs, #settings.
- * Default: #overview for empty or unrecognised hash.
- * The hashchange event updates active nav state, visible section,
- * and document.title without a page reload or API call.
- *
- * Polling registry
- * ----------------
- * window.CCC is a shared namespace for all dashboard JS.
- * window.CCC.pollers is an array where panel scripts (Issues #27–#30)
- * push their startPolling() handles.  Logout stops all registered pollers
- * before making the API call, preventing a 401 from a mid-logout poll from
- * triggering apiFetch's redirect before the explicit logout redirect fires.
- *
- * Logout
- * ------
- * Order: stop all pollers → disable button → apiFetch logout →
- *        redirect to /login (always, even on API error).
- */
-(function () {
-    'use strict';
-
-    /* ------------------------------------------------------------------
-       Shared namespace for dashboard JS.
-       Panel scripts (Issues #27-#30) push polling handles here.
-    ------------------------------------------------------------------ */
-    window.CCC = window.CCC || {};
-    window.CCC.pollers = window.CCC.pollers || [];
-
-    /* ------------------------------------------------------------------
-       Section metadata
-    ------------------------------------------------------------------ */
-    var SECTIONS = {
-        overview: {
-            id:       'section-overview',
-            navId:    'nav-overview',
-            title:    'Overview',
-            subtitle: 'Node status and system health',
-        },
-        logs: {
-            id:       'section-logs',
-            navId:    'nav-logs',
-            title:    'Logs',
-            subtitle: 'Conduit service log (last 200 lines)',
-        },
-        settings: {
-            id:       'section-settings',
-            navId:    'nav-settings',
-            title:    'Settings',
-            subtitle: 'Account and application settings',
-        },
-    };
-
-    var DEFAULT_SECTION = 'overview';
-
-    /* ------------------------------------------------------------------
-       Navigation: show section, update title, mark active nav item
-    ------------------------------------------------------------------ */
-
-    function getCurrentSection() {
-        var hash = (window.location.hash || '').replace('#', '').toLowerCase();
-        return SECTIONS[hash] ? hash : DEFAULT_SECTION;
-    }
-
-    function showSection(name) {
-        var meta = SECTIONS[name] || SECTIONS[DEFAULT_SECTION];
-
-        // Hide all sections, show the target.
-        Object.keys(SECTIONS).forEach(function (key) {
-            var el = document.getElementById(SECTIONS[key].id);
-            if (el) { el.hidden = (key !== name); }
-        });
-
-        // Update nav active state.
-        Object.keys(SECTIONS).forEach(function (key) {
-            var navEl = document.getElementById(SECTIONS[key].navId);
-            if (!navEl) { return; }
-            var isActive = (key === name);
-            navEl.classList.toggle('nav__item--active', isActive);
-            navEl.setAttribute('aria-current', isActive ? 'page' : 'false');
-        });
-
-        // Update page header and document title.
-        var titleEl    = document.getElementById('page-title');
-        var subtitleEl = document.getElementById('page-subtitle');
-        if (titleEl)    { titleEl.textContent    = meta.title; }
-        if (subtitleEl) { subtitleEl.textContent = meta.subtitle; }
-        document.title = meta.title + ' — Conduit Control Center';
-    }
-
-    // Initial render: apply section from hash (or default).
-    showSection(getCurrentSection());
-
-    // Update on hash change (back/forward, nav clicks).
-    window.addEventListener('hashchange', function () {
-        showSection(getCurrentSection());
-    });
-
-    /* ------------------------------------------------------------------
-       Logout
-    ------------------------------------------------------------------ */
-
-    document.getElementById('logout-btn').addEventListener('click', function () {
-        var btn = document.getElementById('logout-btn');
-
-        // 1. Stop all active pollers first to prevent mid-logout 401 races.
-        (window.CCC.pollers || []).forEach(function (handle) {
-            stopPolling(handle);
-        });
-        window.CCC.pollers = [];
-
-        // 2. Disable the button to prevent double-clicks.
-        btn.disabled = true;
-        btn.classList.add('btn--loading');
-
-        // 3. Call the logout API.  Redirect to /login regardless of outcome.
-        apiFetch('/api/auth/logout', { method: 'POST' })
-            .catch(function () { /* ignore -- we always redirect */ })
-            .finally(function () {
-                window.location.href = '/login';
-            });
-    });
-
-})();
-</script>
+<!-- Issue #26 / Issue #44: dashboard shell — navigation and logout -->
+<script src="/static/js/dashboard.js"></script>
 
 <!-- Issue #27: node status and control panel -->
 <script src="/static/js/status.js"></script>
@@ -890,4 +755,9 @@
 <!-- Issue #30: log viewer panel -->
 <script src="/static/js/logs.js"></script>
 
-<!-- Issue #31: settings / chan
+<!-- Issue #31: settings / change password -->
+<script src="/static/js/settings.js"></script>
+
+<!-- Issue #43: DDNS status panel -->
+<script src="/static/js/ddns.js"></script>
+{% endblock %}

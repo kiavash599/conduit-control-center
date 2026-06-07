@@ -162,7 +162,7 @@
         /* Warning banner: visible when consecutive_errors >= 3. */
         var banner = el(ID.warningBanner);
         if (banner) {
-            banner.style.display = (data.consecutive_errors >= 3) ? '' : 'none';
+            banner.hidden = (data.consecutive_errors < 3);
         }
     }
 
@@ -183,7 +183,7 @@
         applyBadge('unknown');
 
         var banner = el(ID.warningBanner);
-        if (banner) banner.style.display = 'none';
+        if (banner) banner.hidden = true;
     }
 
     /* ------------------------------------------------------------------
