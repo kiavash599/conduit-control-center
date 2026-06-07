@@ -289,15 +289,37 @@ class TestConduitControl:
 
 
 class TestDdnsEndpoint:
-    def test_returns_501_stub(self, logged_in):
+    """Integration tests for GET /api/ddns/status (Issue #42).
+
+    The test server has no config.json, so AppConfig uses its default
+    ddns_log_path (/var/log/conduit-cc/ddns.log), which does not exist in
+    CI.  This is the correct fresh-install scenario: the endpoint returns
+    HTTP 200 with last_result="unknown" rather than an error.
+    """
+
+    def test_returns_200(self, logged_in):
         client, _ = logged_in
         response = client.get("/api/ddns/status")
-        assert response.status_code == 501
+        assert response.status_code == 200
 
-    def test_body_has_detail(self, logged_in):
+    def test_response_schema_fields_present(self, logged_in):
         client, _ = logged_in
         data = client.get("/api/ddns/status").json()
-        assert "detail" in data
+        for field in ("hostname", "current_ip", "last_updated", "last_result",
+                      "last_message", "consecutive_errors"):
+            assert field in data, f"Missing field: {field}"
+
+    def test_fresh_install_returns_unknown(self, logged_in):
+        """No log file on the test server -> last_result must be 'unknown'."""
+        client, _ = logged_in
+        data = client.get("/api/ddns/status").json()
+        assert data["last_result"] == "unknown"
+        assert data["current_ip"] is None
+        assert data["consecutive_errors"] == 0
+
+    def test_requires_authentication(self, integration_client):
+        response = integration_client.get("/api/ddns/status")
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
