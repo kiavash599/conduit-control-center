@@ -504,6 +504,32 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
     ln -sf "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
     info "nginx symlink: ${NGINX_ENABLED}"
 
+    # Write the rate-limiting zone into the http context.
+    #
+    # deployment/conduit-cc.nginx uses:
+    #   limit_req zone=login_limit burst=9 nodelay;
+    # nginx requires a matching limit_req_zone declaration in the http {} block.
+    # A fresh Ubuntu 22.04 nginx install has no such zone; nginx -t would fail
+    # without this file.
+    #
+    # /etc/nginx/conf.d/*.conf is included inside http {} by Ubuntu's stock
+    # nginx.conf, making this the idiomatic injection point.  Prefer this over
+    # sed-patching nginx.conf: it is idempotent and survives nginx package upgrades.
+    cat > /etc/nginx/conf.d/conduit-cc-ratelimit.conf << 'RATELIMIT_EOF'
+# Conduit Control Center — login endpoint rate limiting zone (Issue #34)
+# Referenced by: /etc/nginx/sites-available/conduit-cc
+#   limit_req zone=login_limit burst=9 nodelay;
+#
+# 10 r/m  ≈ 1 request every 6 seconds per unique IP address.
+# 10m     ≈ 160,000 IP state entries before LRU eviction.
+#
+# Managed by install.sh. Do not edit directly; changes will be overwritten
+# on reinstall/update.
+limit_req_zone $binary_remote_addr zone=login_limit:10m rate=10r/m;
+RATELIMIT_EOF
+    chmod 644 /etc/nginx/conf.d/conduit-cc-ratelimit.conf
+    info "Rate limiting zone written to /etc/nginx/conf.d/conduit-cc-ratelimit.conf"
+
     nginx -t 2>/dev/null || {
         nginx -t   # re-run without redirect so user sees the error
         die "nginx configuration test failed." \
@@ -625,7 +651,7 @@ EOF
 phase3_summary() {
     section "Phase 3 — Installation complete"
     printf "\n"
-    printf "  ${GREEN}✓${RESET} Conduit Control Center is installed and running.\n"
+    printf "  ${GREEN}OK${RESET} Conduit Control Center is installed and running.\n"
     printf "\n"
     printf "  ${BOLD}Dashboard URL:${RESET}  https://${CF_RECORD_NAME}/\n"
     printf "  ${BOLD}Admin user:${RESET}     ${ADMIN_USERNAME}\n"
@@ -644,7 +670,7 @@ phase3_summary() {
     printf "    1. Open https://${CF_RECORD_NAME}/ and log in.\n"
     printf "    2. Pair your Conduit node from the dashboard.\n"
     printf "    3. Verify Cloudflare SSL/TLS is set to Full (strict):\n"
-    printf "       https://dash.cloudflare.com → SSL/TLS → Overview\n"
+    printf "       https://dash.cloudflare.com -> SSL/TLS -> Overview\n"
     printf "\n"
     printf "  ${CYAN}Docs:${RESET} docs/pre-install.md · docs/tls-setup.md\n"
     printf "\n"
