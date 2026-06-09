@@ -467,7 +467,7 @@ phase2b_conduit_update() {
         fi
 
         warn "Conduit binary not found in ${SOURCE_DIR}/ — downloading v${CONDUIT_VERSION}"
-        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/v${CONDUIT_VERSION}"
+        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-${CONDUIT_VERSION}"
         local _asset="conduit-linux-arm64"
 
         local _checksums

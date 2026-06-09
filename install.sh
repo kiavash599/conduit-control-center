@@ -709,7 +709,7 @@ EOF
     _conduit_tmp="$(mktemp /tmp/conduit.XXXXXX)"
 
     if [[ "${CONDUIT_BIN_SRC}" == "download" ]]; then
-        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/v${CONDUIT_VERSION}"
+        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-${CONDUIT_VERSION}"
         local _asset="conduit-linux-arm64"
 
         step "  2x-c.1 — Downloading checksums.txt"
