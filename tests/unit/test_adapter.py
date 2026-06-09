@@ -328,6 +328,15 @@ class TestGetVersion:
             result = await get_version()
         assert result is None
 
+    async def test_version_from_file(self):
+        """Version file is read first; no subprocess is spawned."""
+        with patch("backend.conduit.adapter.pathlib.Path") as mock_path_cls:
+            mock_path_cls.return_value.read_text.return_value = "2.0.0\n"
+            with patch("backend.conduit.adapter._run") as mock_run:
+                result = await get_version()
+        assert result == "2.0.0"
+        mock_run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # get_traffic_metrics() — mocked asyncio.to_thread

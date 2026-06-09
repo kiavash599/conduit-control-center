@@ -111,6 +111,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 import re
 import urllib.error
 import urllib.request
@@ -163,12 +164,19 @@ class ConduitPermissionError(ConduitAdapterError):
 _POLL_INTERVAL_S: float = 0.5
 # _ACTION_TIMEOUT_S removed: timeout now read from get_app_config().conduit_action_timeout_seconds
 
-# Version detection: timeout and semver pattern.
-# The result is cached after the first attempt so we do not shell out on
-# every status request. _version_checked=True means we have tried at least
-# once; _version_cache holds the result (None = not determinable).
+# Version detection: paths, timeout, and semver pattern.
+# The result is cached after the first successful or fully-exhausted attempt
+# so we do not shell out on every status request. _version_checked=True means
+# we have tried at least once; _version_cache holds the result (None = not
+# determinable).
 # Note: this is a module-level cache. CCC runs with --workers 1 so there
 # is only one process; per-worker caching is correct and sufficient.
+#
+# These paths must match CONDUIT_BIN_DIR in install.sh.  All three install
+# options (Option A download, Option B local copy, Option C PATH) result in
+# the binary landing at _CONDUIT_BIN_PATH after install.sh runs.
+_CONDUIT_VERSION_FILE: str = "/opt/conduit/version"
+_CONDUIT_BIN_PATH: str = "/opt/conduit/conduit"
 _VERSION_TIMEOUT_S: float = 2.0
 _VERSION_PATTERN: re.Pattern[str] = re.compile(r"\d+\.\d+\.\d+")
 _version_checked: bool = False
@@ -471,75 +479,109 @@ async def get_version() -> str | None:
     """
     Return the installed Conduit version string, or None if not determinable.
 
-    Strategy: run 'conduit --version' and extract the first semver-like
-    string (X.Y.Z) from stdout. Falls back to None if:
-      - the conduit binary is not in PATH
-      - the command times out (> _VERSION_TIMEOUT_S seconds)
-      - the output does not contain a recognisable version string
-      - any other unexpected error occurs
+    Detection strategy (in priority order):
 
-    The result is cached after the first attempt. Subsequent calls return
-    the cached value without shelling out. If detection failed, None is
-    returned on all subsequent calls until the service restarts.
+    1. Read _CONDUIT_VERSION_FILE (/opt/conduit/version) — a plain-text file
+       written by install.sh (Phase 2x-d) and kept current by update.sh.
+       Fast file read; no subprocess required. This is the standard path for
+       all install.sh-managed deployments.
 
-    IMPORTANT: this has not been validated against a real Conduit installation.
-    The binary name ('conduit'), the --version flag, and the output format
-    must be confirmed on a device with Conduit installed. If 'conduit --version'
-    is not the correct invocation, update this function accordingly.
+    2. Run _CONDUIT_BIN_PATH (/opt/conduit/conduit) --version with an
+       absolute path — PATH-independent. Covers manual setups that have the
+       binary at the canonical location but no version file. Works even though
+       the conduit-cc service account has no /opt/conduit in its PATH.
+
+    3. Run 'conduit --version' from PATH — fallback for non-standard
+       installations where the Conduit binary is in the system PATH but not
+       at the canonical install location.
+
+    Falls back to None if all three strategies fail. The failure is non-fatal:
+    the API returns null and the dashboard shows '—'. The result is cached
+    after the first successful or fully-exhausted attempt; subsequent calls
+    return the cached value immediately.
 
     Returns
     -------
     str | None
-        Semver string (e.g. "1.2.3") or None if not determinable.
+        Semver string (e.g. "2.0.0") or None if not determinable.
     """
     global _version_checked, _version_cache  # noqa: PLW0603
 
     if _version_checked:
         return _version_cache
 
+    # ------------------------------------------------------------------
+    # Step 1: Version file written by install.sh (fastest — no subprocess).
+    # ------------------------------------------------------------------
     try:
-        returncode, stdout, stderr = await asyncio.wait_for(
-            _run(["conduit", "--version"]),
-            timeout=_VERSION_TIMEOUT_S,
+        text = pathlib.Path(_CONDUIT_VERSION_FILE).read_text(encoding="utf-8").strip()
+        match = _VERSION_PATTERN.search(text)
+        if match:
+            _version_cache = match.group(0)
+            logger.debug(
+                "Conduit version from %r: %r", _CONDUIT_VERSION_FILE, _version_cache
+            )
+            _version_checked = True
+            return _version_cache
+        logger.debug(
+            "Version file %r exists but contains no semver string (%r) — "
+            "trying binary",
+            _CONDUIT_VERSION_FILE, text,
         )
-        if returncode == 0 and stdout:
-            match = _VERSION_PATTERN.search(stdout)
-            if match:
-                _version_cache = match.group(0)
-                logger.debug("Conduit version detected: %r", _version_cache)
-            else:
-                logger.warning(
-                    "conduit --version output did not contain a semver string "
-                    "(stdout=%r) -- version unavailable. Validate on a device "
-                    "with Conduit installed.",
-                    stdout,
+    except OSError:
+        logger.debug(
+            "Version file %r not readable — trying binary", _CONDUIT_VERSION_FILE
+        )
+
+    # ------------------------------------------------------------------
+    # Steps 2 and 3: shell out to the binary.
+    # Try the canonical absolute path first, then the bare name (PATH).
+    # ------------------------------------------------------------------
+    for binary in [_CONDUIT_BIN_PATH, "conduit"]:
+        try:
+            returncode, stdout, stderr = await asyncio.wait_for(
+                _run([binary, "--version"]),
+                timeout=_VERSION_TIMEOUT_S,
+            )
+            if returncode == 0 and stdout:
+                match = _VERSION_PATTERN.search(stdout)
+                if match:
+                    _version_cache = match.group(0)
+                    logger.debug(
+                        "Conduit version from binary %r: %r", binary, _version_cache
+                    )
+                    break
+                logger.debug(
+                    "Binary %r --version output has no semver (stdout=%r) — "
+                    "trying next",
+                    binary, stdout,
                 )
-        else:
+            else:
+                logger.debug(
+                    "Binary %r --version returned rc=%d (stderr=%r) — trying next",
+                    binary, returncode, stderr,
+                )
+        except asyncio.TimeoutError:
+            logger.debug(
+                "Binary %r --version timed out after %.1fs — trying next",
+                binary, _VERSION_TIMEOUT_S,
+            )
+        except (FileNotFoundError, OSError):
+            logger.debug("Binary %r not found or not executable — trying next", binary)
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "conduit --version returned rc=%d (stderr=%r) -- "
-                "version unavailable.",
-                returncode, stderr,
+                "get_version(): unexpected error with binary %r: %s", binary, exc
             )
 
-    except asyncio.TimeoutError:
+    if _version_cache is None:
         logger.warning(
-            "conduit --version timed out after %.1fs -- version unavailable.",
-            _VERSION_TIMEOUT_S,
+            "Conduit version not determinable: version file %r not readable and "
+            "binary not found at %r or in PATH",
+            _CONDUIT_VERSION_FILE,
+            _CONDUIT_BIN_PATH,
         )
-    except FileNotFoundError:
-        logger.warning(
-            "'conduit' binary not found in PATH -- version unavailable. "
-            "Validate the binary name and PATH on a device with Conduit installed."
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "get_version() encountered an unexpected error: %s -- "
-            "version unavailable.",
-            exc,
-        )
-    finally:
-        _version_checked = True
 
+    _version_checked = True
     return _version_cache
 
 
