@@ -1532,3 +1532,208 @@ A compact status panel on the dashboard Overview page that shows the health of t
 ---
 
 *End of GitHub Issues — Conduit Control Center v0.1 (Cloudflare DDNS additions)*
+
+---
+
+## Issue #45 — feat: bundle Psiphon Conduit installation into install.sh (end-to-end deployment)
+
+**Labels:** `infrastructure`, `conduit`, `setup`
+**Milestone:** v0.2
+**Effort:** 3–4 days
+**Depends on:** #9 (install.sh), #10 (uninstall.sh), #11 (update.sh)
+**Blocks:** #38 (Pi hardware validation — remains blocked until this issue is implemented and validated on the Pi)
+
+### Background
+
+The original CCC scope (Option A) assumed an operator had already installed Psiphon Conduit before running `install.sh`. Issue #38 (Pi hardware validation) revealed this assumption is not satisfied: `conduit.service` does not exist after a fresh install, so the dashboard displays "Stopped" and the adapter returns an internal error for all Conduit control actions.
+
+The scope has been changed to **Option B**: CCC becomes an end-to-end deployment tool. `install.sh` is responsible for installing and configuring the Psiphon Conduit binary alongside the CCC dashboard.
+
+This issue captures all work required for Option B. It must be fully implemented and validated on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) before Issue #38 can be closed.
+
+### Design decisions
+
+**Binary source — detect-then-offer, not unconditional download.**
+`install.sh` checks for an existing `conduit` binary on `PATH` or alongside the script before offering to download from GitHub. This gives security-conscious operators full control while keeping the default path simple for beginners.
+
+**GitHub download — pinned version with SHA-256 verification.**
+The `CONDUIT_VERSION` constant in `install.sh` pins the tested Conduit release. The installer downloads `conduit-linux-arm64` and `checksums.txt` from `https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-${CONDUIT_VERSION}/` and verifies the SHA-256 before installing. Never use the GitHub `latest` redirect — Conduit has had breaking flag changes between minor versions (e.g. `--max-clients` was removed in 2.0.0 and replaced by `--max-common-clients`).
+
+**Separate system user.**
+Conduit runs as its own `conduit` system account, separate from `conduit-cc`. If the Conduit binary is ever compromised, a separate account limits blast radius.
+
+**Data directory permissions.**
+`/var/lib/conduit/data/` is owned `conduit:conduit`, mode `700`. It contains `conduit_key.json` (the node's identity keypair). Per the official Conduit CLI README: *"The Psiphon broker tracks proxy reputation by key."* Confirmed in `cli/internal/config/config.go`: the file is written with mode `0600` on first run and loaded at every start. A new key means a new broker identity and zero reputation.
+
+**Metrics bind address — `127.0.0.1:9090`, not `0.0.0.0:9090`.**
+Psiphon's docker-compose example uses `0.0.0.0:9090` because inside a container that is safe. On a bare-metal systemd service it is not. Bind to loopback only. CCC's adapter calls `http://localhost:9090/metrics` — it does not need an externally-reachable metrics port.
+
+**UFW — no hardcoded port rules for Conduit inproxy traffic.**
+The ports Conduit opens for Psiphon user traffic are determined by the embedded Psiphon configuration, which is not public. No port number appears anywhere in the `Psiphon-Inc/conduit` source tree. After install, the operator must run `ss -ulnp | grep conduit` to discover which ports the binary opened and add UFW rules manually. `install.sh` prints a reminder with this command after starting `conduit.service`.
+
+**Key preservation on uninstall.**
+`uninstall.sh` must never silently delete `/var/lib/conduit/data/`. It prompts explicitly (default: NO) and warns that deletion is irreversible and permanently destroys the node's Psiphon broker reputation.
+
+**Version pinning in `update.sh`.**
+`update.sh` reads the installed Conduit version from `/opt/conduit/version` and compares it to `CONDUIT_VERSION`. If they differ, it validates the new binary before stopping the running service, then performs a binary swap with rollback on failure.
+
+### Tasks
+
+#### Constants
+
+- [ ] Add to `install.sh`: `readonly CONDUIT_VERSION="2.0.0"`
+- [ ] Add to `install.sh`: `readonly CONDUIT_USER="conduit"`, `readonly CONDUIT_BIN_DIR="/opt/conduit"`, `readonly CONDUIT_DATA_DIR="/var/lib/conduit"`
+- [ ] Add the same `CONDUIT_VERSION` constant to `update.sh`
+
+#### Phase 1 — Validation (no system changes)
+
+- [ ] **Step 1x — Binary detection.** Check `PATH` for `conduit`, then `${SCRIPT_DIR}/conduit`. If found, record the path and skip download. If not found, inform the operator of both options (download or manual placement) and prompt for confirmation before proceeding with download.
+- [ ] If the operator confirms download: validate that `curl` is available and that `github.com` is reachable; `die` with a clear message if not.
+- [ ] Add a note in `docs/pre-install.md`: Psiphon Conduit will be installed automatically. Alternatively, download `conduit-linux-arm64` from `https://github.com/Psiphon-Inc/conduit/releases` and place it at the root of the repo before running `install.sh`.
+
+#### Phase 2 — Installation
+
+- [ ] **Step 2x-a — Create `conduit` system user** (if not already exists):
+  `useradd --system --no-create-home --shell /usr/sbin/nologin conduit`
+- [ ] **Step 2x-b — Create directories:**
+  - `/opt/conduit/` — `root:root`, `755`
+  - `/var/lib/conduit/` — `conduit:conduit`, `700`
+  - `/var/lib/conduit/data/` — `conduit:conduit`, `700`
+- [ ] **Step 2x-c — Install binary** (download path or detected path):
+  - Download: `curl -fL` to a temp path, verify SHA-256 against `checksums.txt`, then move to `/opt/conduit/conduit`
+  - Existing binary: copy from detected path, verify SHA-256 against the published `checksums.txt` for `CONDUIT_VERSION`
+  - Set owner `root:root`, mode `755`
+  - Write `/opt/conduit/version` containing `${CONDUIT_VERSION}`
+- [ ] **Step 2x-d — Install `deployment/conduit.service`** (see replacement spec below) to `/etc/systemd/system/conduit.service`
+- [ ] **Step 2x-e — Enable and start `conduit.service`:**
+  `systemctl daemon-reload && systemctl enable conduit && systemctl start conduit`
+- [ ] **Step 2x-f — Verify:** Poll for `systemctl is-active conduit` == `active` (same retry pattern as the CCC health check). On success, confirm `/var/lib/conduit/data/conduit_key.json` exists. On failure, print `journalctl -u conduit -n 30 --no-pager` and `die`.
+- [ ] **Step 2x-g — Print firewall reminder:**
+  ```
+  Conduit is running. To allow Psiphon user traffic, open the ports it is
+  listening on. Run: sudo ss -ulnp | grep conduit
+  Then add UFW rules for each listed port: sudo ufw allow <port>/udp
+  Contact conduit-oss@psiphon.ca if you are unsure which ports to open.
+  ```
+
+#### `deployment/conduit.service` — replace the existing example
+
+The current file is marked "EXAMPLE ONLY", uses `User=conduit-cc` (wrong account), and lacks `ReadWritePaths` for the data directory. Replace it entirely:
+
+```ini
+[Unit]
+Description=Psiphon Conduit inproxy node
+Documentation=https://github.com/Psiphon-Inc/conduit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conduit
+Group=conduit
+WorkingDirectory=/var/lib/conduit
+
+ExecStart=/opt/conduit/conduit start \
+    --data-dir /var/lib/conduit/data \
+    --metrics-addr 127.0.0.1:9090 \
+    --max-common-clients 50 \
+    --bandwidth 40
+
+Restart=on-failure
+RestartSec=10s
+ProtectSystem=strict
+ReadWritePaths=/var/lib/conduit
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Notes:
+- `--metrics-addr 127.0.0.1:9090`: loopback only. Port must match `conduit.metrics_port` in `config.json` (default 9090). Source: `cli/internal/metrics/metrics.go` — the metrics HTTP server binds to whatever address is passed to `--metrics-addr`.
+- `--max-common-clients 50`: 2.0.0 flag name. The flag `--max-clients` was removed in 2.0.0.
+- `ProtectSystem=strict` + `ReadWritePaths=/var/lib/conduit`: required for the data directory to be writable under strict sandboxing.
+- `WorkingDirectory=/var/lib/conduit`: keeps the process working directory off `/`.
+
+#### `update.sh`
+
+- [ ] Read installed Conduit version from `/opt/conduit/version`
+- [ ] Compare to `CONDUIT_VERSION` constant
+- [ ] If same: print "Conduit already at ${CONDUIT_VERSION} — skipping" and continue
+- [ ] If different — **pre-swap validation before stopping the running service:**
+  - [ ] Download new binary to `/tmp/conduit-new` and `checksums.txt`
+  - [ ] **Validate 1 — checksum:** `sha256sum --check` against the downloaded `checksums.txt`. `die` if it fails — do not proceed.
+  - [ ] **Validate 2 — executable bit:** `chmod +x /tmp/conduit-new`; then `[[ -x /tmp/conduit-new ]]`. `die` if it fails.
+  - [ ] **Validate 3 — binary runs:** Execute `/tmp/conduit-new --version` with a 5 s timeout. If non-zero or timeout, fall back to `/tmp/conduit-new --help`. If both fail, `die` with "Downloaded binary did not run — aborting update. Existing service untouched."
+  - [ ] **Validate 4 — version string:** Confirm the output contains `${CONDUIT_VERSION}`. `die` if it does not match.
+  - [ ] **All four checks pass — now stop the service and swap:**
+  - [ ] `systemctl stop conduit`
+  - [ ] Back up existing binary: `cp /opt/conduit/conduit /opt/conduit/conduit.bak`
+  - [ ] `mv /tmp/conduit-new /opt/conduit/conduit` + update `/opt/conduit/version`
+  - [ ] `systemctl start conduit`
+  - [ ] **Post-swap verification — all three must pass:**
+    - [ ] `systemctl is-active conduit` returns `active`
+    - [ ] `curl -s http://127.0.0.1:9090/metrics | grep 'conduit_max_common_clients 50'` returns a match
+    - [ ] `GET /api/conduit/status` from CCC returns `"node_status": "running"`
+  - [ ] If any post-swap check fails: `mv /opt/conduit/conduit.bak /opt/conduit/conduit`, restore `/opt/conduit/version`, `systemctl start conduit`, `die` with rollback notice
+- [ ] Trap on exit to clean up `/tmp/conduit-new` and temp `checksums.txt`
+- [ ] Never touch `/var/lib/conduit/` during update
+
+#### `uninstall.sh`
+
+- [ ] `systemctl stop conduit && systemctl disable conduit`
+- [ ] Remove `/etc/systemd/system/conduit.service`
+- [ ] Remove binary and version file: `rm -rf /opt/conduit/`
+- [ ] Print explicit warning before prompting:
+  ```
+  Your Conduit node keypair is stored at /var/lib/conduit/data/conduit_key.json.
+  This file represents your node's reputation on the Psiphon network.
+  Deleting it is irreversible — your node's broker reputation cannot be recovered.
+  ```
+- [ ] Prompt: "Delete /var/lib/conduit/ and its keypair? [y/N]" — default NO
+  - YES: `rm -rf /var/lib/conduit/`
+  - NO: `chown -R root:root /var/lib/conduit/ && chmod 700 /var/lib/conduit/` (preserve but orphan safely from the now-deleted user)
+- [ ] `userdel conduit` (after data decision is made)
+- [ ] `systemctl daemon-reload`
+
+#### Documentation
+
+- [ ] Update `docs/pre-install.md`: add section on Conduit binary options (auto-download vs manual placement) and the post-install firewall discovery step
+- [ ] Update `deployment/conduit.service` header comment to replace "EXAMPLE ONLY" with production deployment notes
+- [ ] Update `CHANGELOG.md` under `[Unreleased]`
+- [ ] Update `config.example.json` `_comment` to note the `conduit.metrics_port` / `--metrics-addr` coupling
+
+### Acceptance criteria
+
+**Install path (`sudo bash install.sh` on a fresh Ubuntu 22.04 ARM64 image):**
+
+- [ ] Script completes without error on a fresh image with no prior Conduit installation
+- [ ] `systemctl is-active conduit` returns `active`
+- [ ] CCC dashboard reports node status as Running
+- [ ] `curl -s http://127.0.0.1:9090/metrics | grep 'conduit_max_common_clients 50'` returns a match
+  (proves: service unit deployed, `--max-common-clients 50` parsed, metrics endpoint live, value reached Prometheus layer — source: `cli/internal/metrics/metrics.go` `SetConfig()`)
+- [ ] `/var/lib/conduit/data/conduit_key.json` exists, owned `conduit:conduit`, mode `600`
+- [ ] The `conduit` process is running as the `conduit` user, not `root` or `conduit-cc`
+
+**Update path (`sudo bash update.sh`):**
+
+- [ ] After update, `systemctl is-active conduit` returns `active`
+- [ ] After update, `curl -s http://127.0.0.1:9090/metrics | grep 'conduit_max_common_clients 50'` returns a match
+- [ ] After update, CCC dashboard reports node status as Running
+- [ ] `/var/lib/conduit/data/conduit_key.json` is unchanged after update (binary swap must never touch the data directory)
+- [ ] If the downloaded binary fails pre-swap validation, the existing service continues running and `update.sh` exits non-zero without touching `/opt/conduit/conduit`
+
+**Uninstall path (`sudo bash uninstall.sh`):**
+
+- [ ] Answering "N" at the data prompt leaves `/var/lib/conduit/data/conduit_key.json` on disk
+- [ ] Answering "Y" at the data prompt removes `/var/lib/conduit/` entirely
+- [ ] `conduit.service` is stopped and disabled regardless of the data prompt answer
+
+**Issue #38 gate:**
+
+- [ ] All of the above validated on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) before Issue #38 is closed
+
+---
+
+*End of GitHub Issues — Conduit Control Center (Issue #45 added 2026-06-09)*

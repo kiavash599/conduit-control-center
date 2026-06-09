@@ -47,6 +47,14 @@ readonly MIN_PW_LEN=12
 readonly HEALTH_TIMEOUT=60      # seconds
 readonly HEALTH_INTERVAL=5      # seconds
 
+# Psiphon Conduit binary — installed alongside CCC (Issue #45)
+# CONDUIT_VERSION is the only tested/supported release.  update.sh bumps it
+# when a new Conduit release has been validated against CCC.
+readonly CONDUIT_VERSION="2.0.0"
+readonly CONDUIT_USER="conduit"
+readonly CONDUIT_BIN_DIR="/opt/conduit"
+readonly CONDUIT_DATA_DIR="/var/lib/conduit"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 
@@ -59,6 +67,10 @@ TLS_CERT_PATH=""
 TLS_KEY_PATH=""
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""   # cleared immediately after hashing in Phase 2g
+
+# Set by phase1_validate step 1x; consumed by phase2_install step 2x-c.
+# Values: an absolute path to the binary, or the string "download".
+CONDUIT_BIN_SRC=""
 
 # --------------------------------------------------------------------------- #
 #  Terminal colours (disabled if not a TTY)                                   #
@@ -308,6 +320,43 @@ phase1_validate() {
 
     info "Admin credentials accepted"
 
+    # ---- 1x  Conduit binary detection (no system changes) ------------------ #
+    # Check PATH first, then the repository directory.  If neither has the
+    # binary, offer a GitHub download (the actual download is deferred to
+    # Phase 2x-c so Phase 1 remains read-only).
+    step "1x — Detecting Psiphon Conduit binary (v${CONDUIT_VERSION})"
+
+    local _conduit_path
+    if _conduit_path="$(command -v conduit 2>/dev/null)"; then
+        local _path_ver
+        _path_ver="$("${_conduit_path}" --version 2>/dev/null | head -1)" || true
+        info "Found conduit in PATH: ${_conduit_path}  (${_path_ver:-version unknown})"
+        CONDUIT_BIN_SRC="${_conduit_path}"
+    elif [[ -f "${SCRIPT_DIR}/conduit" && -x "${SCRIPT_DIR}/conduit" ]]; then
+        local _dir_ver
+        _dir_ver="$("${SCRIPT_DIR}/conduit" --version 2>/dev/null | head -1)" || true
+        info "Found conduit in repository: ${SCRIPT_DIR}/conduit  (${_dir_ver:-version unknown})"
+        CONDUIT_BIN_SRC="${SCRIPT_DIR}/conduit"
+    else
+        warn "Psiphon Conduit binary not found in PATH or ${SCRIPT_DIR}/"
+        printf "\n"
+        printf "  The installer can download conduit v%s from GitHub:\n" "${CONDUIT_VERSION}"
+        printf "  https://github.com/Psiphon-Inc/conduit/releases/tag/v%s\n" \
+            "${CONDUIT_VERSION}"
+        printf "\n"
+        printf "  Alternatively, place the conduit binary at ${SCRIPT_DIR}/conduit\n"
+        printf "  and re-run this installer (no download required).\n"
+        printf "\n"
+        local _dl_confirm
+        read -r -p "  Download conduit v${CONDUIT_VERSION} from GitHub now? [y/N]: " \
+            _dl_confirm
+        [[ "${_dl_confirm,,}" == "y" ]] || die \
+            "Conduit binary not available." \
+            "Place the conduit binary at ${SCRIPT_DIR}/conduit and re-run install.sh"
+        CONDUIT_BIN_SRC="download"
+        info "Conduit v${CONDUIT_VERSION} will be downloaded in Phase 2x-c"
+    fi
+
     # ---- 1j  Confirmation summary ------------------------------------------ #
     step "1j — Confirm installation"
     local _token_preview
@@ -323,6 +372,8 @@ phase1_validate() {
     printf "  %-24s %s\n" "Admin user:"  "${ADMIN_USERNAME}"
     printf "  %-24s %s\n" "Install dir:" "${APP_DIR}"
     printf "  %-24s %s\n" "Config dir:"  "${CONF_DIR}"
+    printf "  %-24s %s\n" "Conduit v${CONDUIT_VERSION}:" \
+        "${CONDUIT_BIN_SRC} (install to ${CONDUIT_BIN_DIR}/conduit)"
     printf "\n"
 
     local _proceed
@@ -623,6 +674,161 @@ EOF
     ln -sf "${APP_DIR}/scripts/ccc-unlock" /usr/local/bin/ccc-unlock
     info "ccc-unlock → ${APP_DIR}/scripts/ccc-unlock"
 
+    # ---- 2x-a  Conduit system user ----------------------------------------- #
+    step "2x-a — Creating system user '${CONDUIT_USER}'"
+    if id "${CONDUIT_USER}" &>/dev/null; then
+        info "User '${CONDUIT_USER}' already exists — skipping"
+    else
+        useradd \
+            --system \
+            --no-create-home \
+            --shell /usr/sbin/nologin \
+            --comment "Psiphon Conduit inproxy node" \
+            "${CONDUIT_USER}"
+        info "User '${CONDUIT_USER}' created"
+    fi
+
+    # ---- 2x-b  Conduit directories ----------------------------------------- #
+    step "2x-b — Creating Conduit directories"
+    # Binary dir: root-owned, 755 — binary is root:root 755
+    mkdir -p "${CONDUIT_BIN_DIR}"
+    chown root:root "${CONDUIT_BIN_DIR}"
+    chmod 755 "${CONDUIT_BIN_DIR}"
+    # Data dir and data subdirectory: conduit-owned, 700
+    # /var/lib/conduit/data/conduit_key.json is written here by the binary (0600)
+    mkdir -p "${CONDUIT_DATA_DIR}/data"
+    chown "${CONDUIT_USER}:${CONDUIT_USER}" "${CONDUIT_DATA_DIR}"
+    chmod 700 "${CONDUIT_DATA_DIR}"
+    chown "${CONDUIT_USER}:${CONDUIT_USER}" "${CONDUIT_DATA_DIR}/data"
+    chmod 700 "${CONDUIT_DATA_DIR}/data"
+    info "${CONDUIT_BIN_DIR} (755, root:root) and ${CONDUIT_DATA_DIR} (700, ${CONDUIT_USER}) ready"
+
+    # ---- 2x-c  Install Conduit binary -------------------------------------- #
+    step "2x-c — Installing Conduit binary"
+    local _conduit_tmp
+    _conduit_tmp="$(mktemp /tmp/conduit.XXXXXX)"
+
+    if [[ "${CONDUIT_BIN_SRC}" == "download" ]]; then
+        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/v${CONDUIT_VERSION}"
+        local _asset="conduit-linux-arm64"
+
+        step "  2x-c.1 — Downloading checksums.txt"
+        local _checksums
+        _checksums="$(curl -fsSL "${_gh_base}/checksums.txt")" || {
+            rm -f "${_conduit_tmp}"
+            die "Failed to download checksums.txt from GitHub." \
+                "Check internet connectivity or place the binary at ${SCRIPT_DIR}/conduit"
+        }
+
+        step "  2x-c.2 — Downloading ${_asset}"
+        curl -fsSL -o "${_conduit_tmp}" "${_gh_base}/${_asset}" || {
+            rm -f "${_conduit_tmp}"
+            die "Failed to download conduit binary from GitHub." \
+                "Check internet connectivity or place the binary at ${SCRIPT_DIR}/conduit"
+        }
+
+        step "  2x-c.3 — Verifying SHA-256 checksum"
+        local _expected_sha _actual_sha
+        _expected_sha="$(printf '%s\n' "${_checksums}" | grep "${_asset}" | awk '{print $1}')"
+        [[ -n "${_expected_sha}" ]] || {
+            rm -f "${_conduit_tmp}"
+            die "Could not find checksum for '${_asset}' in checksums.txt." \
+                "The release assets may have changed — verify manually."
+        }
+        _actual_sha="$(sha256sum "${_conduit_tmp}" | awk '{print $1}')"
+        [[ "${_actual_sha}" == "${_expected_sha}" ]] || {
+            rm -f "${_conduit_tmp}"
+            die "SHA-256 checksum mismatch for conduit binary." \
+                "Expected: ${_expected_sha}  Got: ${_actual_sha}"
+        }
+        info "SHA-256 verified: ${_actual_sha:0:16}..."
+    else
+        cp "${CONDUIT_BIN_SRC}" "${_conduit_tmp}"
+    fi
+
+    # Pre-swap validation (4 steps) — confirm binary is usable before install
+    step "  2x-c.4 — Pre-swap validation"
+    chmod +x "${_conduit_tmp}"
+    [[ -x "${_conduit_tmp}" ]] || {
+        rm -f "${_conduit_tmp}"
+        die "Binary is not executable after chmod +x."
+    }
+    local _ver_out
+    _ver_out="$("${_conduit_tmp}" --version 2>&1)" || {
+        rm -f "${_conduit_tmp}"
+        die "Binary failed --version check (non-zero exit)." \
+            "The binary may be corrupt or built for a different architecture."
+    }
+    printf '%s\n' "${_ver_out}" | grep -q "${CONDUIT_VERSION}" || {
+        rm -f "${_conduit_tmp}"
+        die "Binary version mismatch: expected ${CONDUIT_VERSION}." \
+            "Got: ${_ver_out}"
+    }
+    info "Pre-swap validation passed: ${_ver_out}"
+
+    # Install — atomic copy via install(1)
+    install -o root -g root -m 755 "${_conduit_tmp}" "${CONDUIT_BIN_DIR}/conduit"
+    rm -f "${_conduit_tmp}"
+    info "${CONDUIT_BIN_DIR}/conduit installed (root:root 755)"
+
+    # ---- 2x-d  Version file ------------------------------------------------ #
+    step "2x-d — Recording Conduit version"
+    printf '%s\n' "${CONDUIT_VERSION}" > "${CONDUIT_BIN_DIR}/version"
+    info "${CONDUIT_BIN_DIR}/version: ${CONDUIT_VERSION}"
+
+    # ---- 2x-e  Conduit systemd service ------------------------------------- #
+    step "2x-e — Installing conduit.service"
+    local _conduit_unit="/etc/systemd/system/conduit.service"
+    cp "${APP_DIR}/deployment/conduit.service" "${_conduit_unit}"
+    chown root:root "${_conduit_unit}"
+    chmod 644 "${_conduit_unit}"
+    systemctl daemon-reload
+    info "${_conduit_unit} installed"
+
+    # ---- 2x-f  Enable and start Conduit ------------------------------------ #
+    step "2x-f — Enabling and starting conduit service"
+    systemctl enable --now conduit
+    info "conduit enabled and started"
+
+    # ---- 2x-g  Verify Conduit is active ------------------------------------ #
+    step "2x-g — Verifying conduit.service"
+    local _c_attempts=0
+    local _c_max=6   # 30 seconds
+
+    while [[ "${_c_attempts}" -lt "${_c_max}" ]]; do
+        if systemctl is-active --quiet conduit 2>/dev/null; then
+            info "conduit.service is active"
+            break
+        fi
+        _c_attempts=$(( _c_attempts + 1 ))
+        step "  Waiting for conduit to start... (${_c_attempts}/${_c_max})"
+        sleep 5
+    done
+
+    if ! systemctl is-active --quiet conduit 2>/dev/null; then
+        warn "conduit.service did not become active within 30 seconds."
+        warn "Check: journalctl -u conduit -n 30 --no-pager"
+        warn "CCC installation will continue — Conduit can be started manually."
+    else
+        # Verify metrics endpoint — non-fatal; new nodes need time to bind
+        if curl -sf "http://127.0.0.1:9090/metrics" 2>/dev/null \
+                | grep -q "conduit_max_common_clients 50"; then
+            info "Metrics endpoint verified: conduit_max_common_clients=50"
+        else
+            info "Metrics endpoint not yet ready (normal on first start — give it 30 s)"
+        fi
+    fi
+
+    # ---- 2x-h  UFW firewall reminder --------------------------------------- #
+    # Conduit binds UDP ports for inproxy traffic.  The exact ports are not
+    # documented in Psiphon source and may vary by version or configuration.
+    # We cannot add UFW rules without knowing the ports.
+    step "2x-h — Conduit firewall reminder"
+    warn "ACTION REQUIRED: Conduit needs UFW rules for inproxy UDP traffic."
+    warn "After install, run:  ss -ulnp | grep conduit"
+    warn "Then for each UDP port listed, run:  ufw allow <port>/udp comment 'Conduit'"
+    warn "(See docs/pre-install.md for details.)"
+
     # ---- 2o  Enable and start service -------------------------------------- #
     step "2o — Enabling and starting ${SERVICE_NAME}"
     systemctl enable --now "${SERVICE_NAME}"
@@ -671,7 +877,17 @@ phase3_summary() {
     printf "\n"
     printf "  Service management:\n"
     printf "    systemctl status  conduit-cc\n"
+    printf "    systemctl status  conduit\n"
     printf "    journalctl -u     conduit-cc -f\n"
+    printf "    journalctl -u     conduit    -f\n"
+    printf "\n"
+    printf "  Conduit metrics endpoint:\n"
+    printf "    curl http://127.0.0.1:9090/metrics | grep conduit_max_common_clients\n"
+    printf "\n"
+    printf "  ${YELLOW}ACTION REQUIRED — Conduit firewall:${RESET}\n"
+    printf "    Conduit binds UDP port(s) for inproxy traffic.\n"
+    printf "    Discover them:  ss -ulnp | grep conduit\n"
+    printf "    Then add rules: ufw allow <port>/udp comment 'Conduit'\n"
     printf "\n"
     printf "  DDNS log:\n"
     printf "    tail -f ${LOG_DIR}/ddns.log\n"
@@ -681,8 +897,11 @@ phase3_summary() {
     printf "\n"
     printf "  ${BOLD}Next steps:${RESET}\n"
     printf "    1. Open https://${CF_RECORD_NAME}/ and log in.\n"
-    printf "    2. Pair your Conduit node from the dashboard.\n"
-    printf "    3. Verify Cloudflare SSL/TLS is set to Full (strict):\n"
+    printf "    2. Add UFW rules for Conduit UDP port(s):\n"
+    printf "         ss -ulnp | grep conduit\n"
+    printf "         ufw allow <port>/udp comment 'Conduit'\n"
+    printf "    3. Verify Conduit node status on the dashboard.\n"
+    printf "    4. Verify Cloudflare SSL/TLS is set to Full (strict):\n"
     printf "       https://dash.cloudflare.com -> SSL/TLS -> Overview\n"
     printf "\n"
     printf "  ${CYAN}Docs:${RESET} docs/pre-install.md · docs/tls-setup.md\n"

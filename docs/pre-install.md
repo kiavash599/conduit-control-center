@@ -32,12 +32,64 @@ You need:
   the registrar — Cloudflare must be managing the DNS nameservers)
 - A **Cloudflare account** with that domain added as a zone
 - A **Raspberry Pi 4** running Ubuntu 22.04 ARM64 with a public IP address
+- **Psiphon Conduit binary** — see Step 1a below
 
 > **Not using Cloudflare?** The installer requires a Cloudflare Origin
 > Certificate to validate TLS setup. If you want to use a different TLS
 > provider (e.g. Let's Encrypt), see
 > [`docs/tls-setup.md`](tls-setup.md) — you will configure nginx manually and
 > skip the installer's TLS prompts.
+
+---
+
+## Step 1a — Psiphon Conduit binary
+
+`install.sh` installs Psiphon Conduit automatically. You have three options:
+
+### Option A — Let the installer download it (recommended for most users)
+
+During Phase 1x of the install, you will be asked:
+
+```
+Download conduit v2.0.0 from GitHub now? [y/N]:
+```
+
+Answer `y` and the installer will download the binary, verify its SHA-256
+checksum against the official `checksums.txt`, run `--version` to confirm
+the binary executes, and install it.
+
+**Requires:** internet access from the Pi during install.
+
+### Option B — Place the binary in the repository directory
+
+If you have already downloaded the binary (e.g. from a machine with better
+connectivity), copy it to the same directory as `install.sh`:
+
+```bash
+# On the Pi, from the conduit-control-center directory:
+cp /path/to/conduit-linux-arm64 ./conduit
+chmod +x ./conduit
+```
+
+The installer will find it at `./conduit`, run `--version` to validate it,
+and install it — no download required.
+
+### Option C — Install the binary to PATH before running install.sh
+
+If `conduit` is already in PATH (e.g. `/usr/local/bin/conduit`), the
+installer will use it. The binary is still validated with `--version` before
+installation.
+
+### Which version?
+
+The installer expects **Conduit v2.0.0**. It validates the version string
+from `--version` output and will reject a binary that does not report this
+version. To use a different version, update `CONDUIT_VERSION` in `install.sh`
+only after testing it manually.
+
+> **Note on Conduit releases:** Psiphon does not GPG-sign release binaries.
+> The installer uses SHA-256 from the official `checksums.txt` to verify
+> integrity (not authenticity) when downloading from GitHub.
 
 ---
 
@@ -224,6 +276,43 @@ Once all items are checked, run the installer:
 ```bash
 sudo bash install.sh
 ```
+
+---
+
+## Post-install — Conduit firewall rules
+
+After `install.sh` completes, you must open UFW ports for Conduit inproxy
+traffic. The installer cannot do this automatically because the ports Conduit
+binds are not documented in the Psiphon source and may vary.
+
+**Step 1 — Discover what ports Conduit is listening on:**
+
+```bash
+ss -ulnp | grep conduit
+```
+
+You will see output like:
+
+```
+UNCONN  0  0  0.0.0.0:12345  0.0.0.0:*  users:(("conduit",pid=...))
+```
+
+**Step 2 — Add UFW rules for each UDP port shown:**
+
+```bash
+sudo ufw allow <port>/udp comment 'Conduit inproxy'
+```
+
+Repeat for each port. Then verify:
+
+```bash
+sudo ufw status
+```
+
+> **Why is this manual?** Psiphon Conduit selects its inproxy ports
+> dynamically. The exact ports are not available in the public source code
+> and may change between Conduit versions. The installer prints a reminder
+> after completing installation.
 
 ---
 

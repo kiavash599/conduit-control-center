@@ -74,6 +74,13 @@ readonly BACKUP_KEEP=3
 readonly HEALTH_TIMEOUT=60
 readonly HEALTH_INTERVAL=5
 
+# Psiphon Conduit — must match install.sh constants (Issue #45)
+# Bump CONDUIT_VERSION only after the new release has been validated with CCC.
+readonly CONDUIT_VERSION="2.0.0"
+readonly CONDUIT_USER="conduit"
+readonly CONDUIT_BIN_DIR="/opt/conduit"
+readonly CONDUIT_DATA_DIR="/var/lib/conduit"
+
 # --------------------------------------------------------------------------- #
 #  Script state                                                                #
 # --------------------------------------------------------------------------- #
@@ -412,6 +419,214 @@ phase2_preinstall() {
 }
 
 # --------------------------------------------------------------------------- #
+#  Phase 2b - Conduit binary update (independent of CCC downtime window)     #
+#                                                                             #
+#  Conduit and CCC are separate services.  This phase:                       #
+#    1. Detects the new binary (SOURCE_DIR/conduit or downloads from GitHub)  #
+#    2. Validates it (4 steps) before stopping the running Conduit            #
+#    3. Backs up the current binary as conduit.bak for single-step rollback   #
+#    4. Stops Conduit, swaps the binary, starts Conduit                      #
+#    5. Verifies post-swap (3 checks): active, metrics, version file         #
+#    6. Rolls back via conduit.bak if any post-swap check fails               #
+#                                                                             #
+#  Skipped automatically if Conduit is not installed (no ${CONDUIT_BIN_DIR}) #
+#  CCC service remains running throughout this entire phase.                  #
+# --------------------------------------------------------------------------- #
+
+phase2b_conduit_update() {
+    section "Phase 2b - Conduit binary update"
+
+    # ---- Skip if Conduit is not installed ---------------------------------- #
+    if [[ ! -f "${CONDUIT_BIN_DIR}/conduit" ]]; then
+        info "Conduit not installed at ${CONDUIT_BIN_DIR}/conduit — skipping"
+        info "(Run install.sh to install Conduit for the first time)"
+        return 0
+    fi
+
+    local _cur_conduit_ver="unknown"
+    _cur_conduit_ver="$(cat "${CONDUIT_BIN_DIR}/version" 2>/dev/null || true)"
+    info "Installed Conduit version: ${_cur_conduit_ver:-unknown}"
+
+    # ---- Detect new binary source ----------------------------------------- #
+    step "2b-a — Detecting new Conduit binary"
+    local _conduit_tmp
+    _conduit_tmp="$(mktemp /tmp/conduit.XXXXXX)"
+    local _new_binary_src=""
+
+    if [[ -f "${SOURCE_DIR}/conduit" && -x "${SOURCE_DIR}/conduit" ]]; then
+        cp "${SOURCE_DIR}/conduit" "${_conduit_tmp}"
+        _new_binary_src="${SOURCE_DIR}/conduit"
+        info "Using binary from source directory: ${_new_binary_src}"
+    else
+        # Offer download only when version would change
+        if [[ "${_cur_conduit_ver}" == "${CONDUIT_VERSION}" ]]; then
+            info "Conduit is already at v${CONDUIT_VERSION} and no new binary found in ${SOURCE_DIR}/"
+            info "Skipping Conduit binary update"
+            rm -f "${_conduit_tmp}"
+            return 0
+        fi
+
+        warn "Conduit binary not found in ${SOURCE_DIR}/ — downloading v${CONDUIT_VERSION}"
+        local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/v${CONDUIT_VERSION}"
+        local _asset="conduit-linux-arm64"
+
+        local _checksums
+        _checksums="$(curl -fsSL "${_gh_base}/checksums.txt")" || {
+            rm -f "${_conduit_tmp}"
+            die "Failed to download checksums.txt from GitHub." \
+                "Check internet connectivity or place the binary at ${SOURCE_DIR}/conduit"
+        }
+        curl -fsSL -o "${_conduit_tmp}" "${_gh_base}/${_asset}" || {
+            rm -f "${_conduit_tmp}"
+            die "Failed to download conduit binary from GitHub." \
+                "Check internet connectivity or place the binary at ${SOURCE_DIR}/conduit"
+        }
+        local _expected_sha _actual_sha
+        _expected_sha="$(printf '%s\n' "${_checksums}" | grep "${_asset}" | awk '{print $1}')"
+        [[ -n "${_expected_sha}" ]] || {
+            rm -f "${_conduit_tmp}"
+            die "Could not find checksum for '${_asset}' in checksums.txt."
+        }
+        _actual_sha="$(sha256sum "${_conduit_tmp}" | awk '{print $1}')"
+        [[ "${_actual_sha}" == "${_expected_sha}" ]] || {
+            rm -f "${_conduit_tmp}"
+            die "SHA-256 checksum mismatch for conduit binary." \
+                "Expected: ${_expected_sha}  Got: ${_actual_sha}"
+        }
+        info "SHA-256 verified: ${_actual_sha:0:16}..."
+        _new_binary_src="github/v${CONDUIT_VERSION}"
+    fi
+
+    # ---- Pre-swap validation (4 steps) ------------------------------------ #
+    # All 4 checks must pass before we stop the running Conduit service.
+    step "2b-b — Pre-swap validation (conduit service remains running)"
+    chmod +x "${_conduit_tmp}"
+    [[ -x "${_conduit_tmp}" ]] || {
+        rm -f "${_conduit_tmp}"
+        die "New binary is not executable after chmod +x."
+    }
+    local _ver_out
+    _ver_out="$("${_conduit_tmp}" --version 2>&1)" || {
+        rm -f "${_conduit_tmp}"
+        die "New binary failed --version (non-zero exit)." \
+            "Binary may be corrupt or for the wrong architecture."
+    }
+    printf '%s\n' "${_ver_out}" | grep -q "${CONDUIT_VERSION}" || {
+        rm -f "${_conduit_tmp}"
+        die "New binary version mismatch: expected ${CONDUIT_VERSION}." \
+            "Got: ${_ver_out}"
+    }
+    info "Pre-swap validation passed: ${_ver_out}"
+
+    # ---- Backup current binary -------------------------------------------- #
+    step "2b-c — Backing up current binary"
+    cp "${CONDUIT_BIN_DIR}/conduit" "${CONDUIT_BIN_DIR}/conduit.bak"
+    info "${CONDUIT_BIN_DIR}/conduit.bak created"
+
+    # ---- Stop Conduit (brief downtime for Conduit only) ------------------- #
+    step "2b-d — Stopping conduit service"
+    systemctl stop conduit 2>/dev/null || true
+    info "conduit stopped"
+
+    # ---- Swap binary ------------------------------------------------------- #
+    step "2b-e — Installing new binary"
+    install -o root -g root -m 755 "${_conduit_tmp}" "${CONDUIT_BIN_DIR}/conduit"
+    rm -f "${_conduit_tmp}"
+    printf '%s\n' "${CONDUIT_VERSION}" > "${CONDUIT_BIN_DIR}/version"
+    info "${CONDUIT_BIN_DIR}/conduit updated (root:root 755)"
+
+    # ---- Update conduit.service unit --------------------------------------- #
+    step "2b-f — Updating conduit.service"
+    if [[ -f "${SOURCE_DIR}/deployment/conduit.service" ]]; then
+        cp "${SOURCE_DIR}/deployment/conduit.service" /etc/systemd/system/conduit.service
+        chown root:root /etc/systemd/system/conduit.service
+        chmod 644 /etc/systemd/system/conduit.service
+        systemctl daemon-reload
+        info "/etc/systemd/system/conduit.service updated"
+    else
+        info "conduit.service not found in ${SOURCE_DIR}/deployment/ — keeping existing unit"
+    fi
+
+    # ---- Start Conduit ----------------------------------------------------- #
+    step "2b-g — Starting conduit service"
+    systemctl start conduit || {
+        warn "conduit failed to start — rolling back"
+        _conduit_rollback "${_cur_conduit_ver}"
+        die "Conduit start failed; rolled back to v${_cur_conduit_ver}." \
+            "Check: journalctl -u conduit -n 50 --no-pager"
+    }
+    info "conduit started"
+
+    # ---- Post-swap verification (3 checks) --------------------------------- #
+    step "2b-h — Post-swap verification"
+
+    # Check 1: systemctl is-active
+    local _c_attempts=0 _c_max=6
+    while [[ "${_c_attempts}" -lt "${_c_max}" ]]; do
+        if systemctl is-active --quiet conduit 2>/dev/null; then
+            info "Check 1/3: conduit.service is active"
+            break
+        fi
+        _c_attempts=$(( _c_attempts + 1 ))
+        step "  Waiting for conduit... (${_c_attempts}/${_c_max})"
+        sleep 5
+    done
+    if ! systemctl is-active --quiet conduit 2>/dev/null; then
+        warn "conduit.service not active after 30 s — rolling back"
+        _conduit_rollback "${_cur_conduit_ver}"
+        die "Conduit did not become active; rolled back to v${_cur_conduit_ver}." \
+            "Check: journalctl -u conduit -n 50 --no-pager"
+    fi
+
+    # Check 2: version file matches CONDUIT_VERSION
+    local _installed_ver
+    _installed_ver="$(cat "${CONDUIT_BIN_DIR}/version" 2>/dev/null || true)"
+    if [[ "${_installed_ver}" == "${CONDUIT_VERSION}" ]]; then
+        info "Check 2/3: version file = ${_installed_ver}"
+    else
+        warn "Version file mismatch (got '${_installed_ver}') — rolling back"
+        _conduit_rollback "${_cur_conduit_ver}"
+        die "Version file check failed; rolled back to v${_cur_conduit_ver}."
+    fi
+
+    # Check 3: metrics endpoint responds (non-fatal — new nodes may be slow)
+    if curl -sf "http://127.0.0.1:9090/metrics" 2>/dev/null \
+            | grep -q "conduit_max_common_clients"; then
+        info "Check 3/3: metrics endpoint reachable"
+    else
+        warn "Check 3/3: metrics endpoint not yet reachable (normal on first start)"
+        warn "Verify later: curl http://127.0.0.1:9090/metrics | grep conduit_max_common_clients"
+    fi
+
+    info "Conduit updated: ${_cur_conduit_ver} -> ${CONDUIT_VERSION}"
+}
+
+# Roll back conduit binary from .bak and restart.
+# Called internally by phase2b_conduit_update on post-swap failure.
+_conduit_rollback() {
+    local _prev_ver="${1:-unknown}"
+    set +e
+    systemctl stop conduit 2>/dev/null || true
+    if [[ -f "${CONDUIT_BIN_DIR}/conduit.bak" ]]; then
+        install -o root -g root -m 755 \
+            "${CONDUIT_BIN_DIR}/conduit.bak" \
+            "${CONDUIT_BIN_DIR}/conduit"
+        printf '%s\n' "${_prev_ver}" > "${CONDUIT_BIN_DIR}/version"
+        systemctl daemon-reload 2>/dev/null || true
+        if systemctl start conduit 2>/dev/null; then
+            info "Conduit rolled back to v${_prev_ver}"
+        else
+            error "Conduit rollback start failed."
+            error "Manual recovery: systemctl start conduit"
+        fi
+    else
+        error "conduit.bak not found — cannot roll back."
+        error "Restore manually from ${CONDUIT_BIN_DIR}/conduit.bak"
+    fi
+    set -euo pipefail
+}
+
+# --------------------------------------------------------------------------- #
 #  Phase 3 - Deploy (DOWNTIME WINDOW BEGINS)                                  #
 #                                                                             #
 #  _DOWNTIME_STARTED is set true after systemctl stop succeeds.               #
@@ -745,6 +960,7 @@ phase6_summary() {
     printf "    %-42s%s\n" "${CONF_DIR}/config.json" "(operator settings)"
     printf "    %-42s%s\n" "${CONF_DIR}/ccc.db" "(runtime database)"
     printf "    %-42s%s\n" "${LOG_DIR}/" "(logs)"
+    printf "    %-42s%s\n" "${CONDUIT_DATA_DIR}/data/conduit_key.json" "(Conduit node identity — never touched)"
     printf "\n"
     printf "  ${BOLD}Post-update review (optional):${RESET}\n"
     printf "    New config options: diff %s/config.example.json %s/config.json\n" \
@@ -763,6 +979,7 @@ _parse_args "$@"
 phase0_preflight
 phase1_backup
 phase2_preinstall
+phase2b_conduit_update
 phase3_deploy
 phase4_verify
 phase6_summary

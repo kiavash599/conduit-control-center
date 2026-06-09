@@ -12,6 +12,7 @@
   "conduit": {
     "service_name": "conduit",
     "action_timeout_seconds": 10,
+    "_comment_metrics_port": "metrics_port must match --metrics-addr in /etc/systemd/system/conduit.service. Default: 127.0.0.1:9090 (loopback only). Change both together or metrics will not work.",
     "metrics_port": 9090
   },
 

@@ -1,16 +1,31 @@
 # deployment/conduit.service
-# ---------------------------
-# EXAMPLE ONLY — this file does NOT close Issue #6.
+# --------------------------
+# Production systemd unit for Psiphon Conduit 2.0.0 (Issue #45).
 #
-# Issue #6 (Create systemd service unit) remains open and will deliver a
-# hardened, production-ready unit with sandboxing, logging, and install.sh
-# integration.  This file is provided solely to document the --metrics-addr
-# flag required for GET /api/metrics/traffic to return non-null byte values.
+# Installed to /etc/systemd/system/conduit.service by install.sh (Phase 2x-e).
+# Managed by: install.sh, update.sh, uninstall.sh
 #
-# Do not deploy this file directly to a production server without completing
-# Issue #6.
+# Binary:    /opt/conduit/conduit   (root:root 755)
+# Data dir:  /var/lib/conduit/      (conduit:conduit 700)
+# Key file:  /var/lib/conduit/data/conduit_key.json  (mode 0600, auto-created)
 #
-# Reference: docs/conduit-metrics-source.md
+# Metrics endpoint: http://127.0.0.1:9090/metrics  (loopback only)
+#   --metrics-addr MUST be 127.0.0.1:9090 (not :9090) to avoid exposing
+#   the Prometheus endpoint on the public interface.
+#   The port (9090) must match conduit.metrics_port in config.json.
+#
+# Defaults:
+#   --max-common-clients 50    Adjust for available bandwidth and CPU
+#   --bandwidth 40             Upload capacity in Mbps
+#
+# UFW: Conduit binds additional UDP ports for inproxy traffic.  The ports are
+# not fixed in advance.  After install, discover them with:
+#   ss -ulnp | grep conduit
+# Then add UFW rules for any UDP ports shown.
+#
+# conduit_key.json: The file at /var/lib/conduit/data/conduit_key.json is the
+# node identity keypair.  Losing it resets your Psiphon broker reputation to
+# zero.  Back it up before any migration or hardware replacement.
 
 [Unit]
 Description=Psiphon Conduit inproxy node
@@ -23,20 +38,17 @@ Type=simple
 User=conduit
 Group=conduit
 WorkingDirectory=/var/lib/conduit
-
-# --metrics-addr :9090 is REQUIRED for GET /api/metrics/traffic to return
-# non-null bytes_sent / bytes_received values.  Without this flag, the
-# Conduit process does not start an HTTP server and the metrics endpoint
-# in backend/conduit/adapter.py will receive a ConnectionRefusedError,
-# which it handles gracefully by returning null byte fields at HTTP 200.
-#
-# The port (9090) must match conduit.metrics_port in config.json.
-ExecStart=/usr/local/bin/conduit start \
+ExecStart=/opt/conduit/conduit start \
     --data-dir /var/lib/conduit/data \
-    --metrics-addr :9090
-
+    --metrics-addr 127.0.0.1:9090 \
+    --max-common-clients 50 \
+    --bandwidth 40
 Restart=on-failure
-RestartSec=5s
+RestartSec=10s
+ProtectSystem=strict
+ReadWritePaths=/var/lib/conduit
+PrivateTmp=yes
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=multi-user.target

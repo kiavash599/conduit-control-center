@@ -50,6 +50,11 @@ readonly APP_DIR="/opt/conduit-cc"
 readonly CONF_DIR="/etc/conduit-cc"
 readonly LOG_DIR="/var/log/conduit-cc"
 readonly SERVICE_NAME="conduit-cc"
+
+# Psiphon Conduit — must match install.sh constants (Issue #45)
+readonly CONDUIT_USER="conduit"
+readonly CONDUIT_BIN_DIR="/opt/conduit"
+readonly CONDUIT_DATA_DIR="/var/lib/conduit"
 readonly NGINX_AVAILABLE="/etc/nginx/sites-available/${SERVICE_NAME}"
 readonly NGINX_ENABLED="/etc/nginx/sites-enabled/${SERVICE_NAME}"
 readonly NGINX_RATELIMIT="/etc/nginx/conf.d/${SERVICE_NAME}-ratelimit.conf"
@@ -148,6 +153,8 @@ phase0_confirm() {
     printf "    %s\n" "${DDNS_BIN}"
     printf "    %s\n" "${CCC_UNLOCK_BIN}"
     printf "    %s\n" "conduit-cc crontab  (DDNS cron job)"
+    printf "    %s\n" "${CONDUIT_BIN_DIR}/  (Conduit binary — if present)"
+    printf "    %s\n" "/etc/systemd/system/conduit.service  (if present)"
     printf "\n"
 
     if "${PURGE}"; then
@@ -163,6 +170,9 @@ phase0_confirm() {
         printf "    %-52s\n" "${CONF_DIR}/config.json"
         printf "    %-52s\n" "${LOG_DIR}/  (all DDNS and application logs)"
         printf "    %-52s\n" "conduit-cc system user and group"
+        printf "    %-52s %s\n" \
+            "${CONDUIT_DATA_DIR}/" "<-- conduit_key.json  (UNRECOVERABLE — resets broker reputation)"
+        printf "    %-52s\n" "conduit system user"
         printf "\n"
         printf "  ${BOLD}UFW rules (22/80/443) are NOT removed.${RESET}\n"
         printf "\n"
@@ -177,6 +187,7 @@ phase0_confirm() {
         printf "    %s\n" "${CONF_DIR}/  (TLS cert and key, .env, config.json, ccc.db)"
         printf "    %s\n" "${LOG_DIR}/  (DDNS and application logs)"
         printf "    %s\n" "conduit-cc system user"
+        printf "    %s\n" "${CONDUIT_DATA_DIR}/  (conduit_key.json — Conduit node identity)"
         printf "\n"
         printf "  ${BOLD}UFW rules (22/80/443) are NOT removed.${RESET}\n"
         printf "\n"
@@ -322,6 +333,90 @@ phase4_utilities() {
 }
 
 # --------------------------------------------------------------------------- #
+#  Phase 4b — Conduit removal (Issue #45)                                   #
+#                                                                             #
+#  Standard mode (no --purge):                                               #
+#    - Stops and disables conduit.service                                    #
+#    - Removes /opt/conduit/ (binary + version file)                         #
+#    - Removes /etc/systemd/system/conduit.service                           #
+#    - PRESERVES /var/lib/conduit/ (contains conduit_key.json — node identity)#
+#    - PRESERVES conduit system user (owns /var/lib/conduit/)                #
+#                                                                             #
+#  Purge mode (--purge):                                                      #
+#    - Additionally removes /var/lib/conduit/ (conduit_key.json UNRECOVERABLE)#
+#    - Removes conduit system user                                            #
+#                                                                             #
+#  conduit_key.json: losing this file resets Psiphon broker reputation to    #
+#  zero.  The default for keypair handling is PRESERVE (no --purge required).#
+# --------------------------------------------------------------------------- #
+
+phase4b_conduit_remove() {
+    section "Phase 4b — Removing Conduit"
+
+    # Check if Conduit is installed at all; skip gracefully if not.
+    if [[ ! -f "${CONDUIT_BIN_DIR}/conduit" ]] \
+            && [[ ! -f "/etc/systemd/system/conduit.service" ]]; then
+        info "Conduit not found (${CONDUIT_BIN_DIR}/conduit absent) — skipping"
+        return 0
+    fi
+
+    # ---- 4b-a  Stop and disable conduit service ---------------------------- #
+    step "4b-a — Stopping conduit service"
+    systemctl stop conduit 2>/dev/null || true
+    info "conduit stopped (or was not running)"
+
+    step "4b-b — Disabling conduit service"
+    systemctl disable conduit 2>/dev/null || true
+    info "conduit disabled (or was not enabled)"
+
+    step "4b-c — Removing conduit.service unit"
+    rm -f /etc/systemd/system/conduit.service
+    systemctl daemon-reload
+    info "/etc/systemd/system/conduit.service removed"
+
+    # ---- 4b-b  Remove binary directory ------------------------------------- #
+    # /opt/conduit/ contains only the binary and version file — no user data.
+    step "4b-d — Removing Conduit binary (${CONDUIT_BIN_DIR}/)"
+    rm -rf "${CONDUIT_BIN_DIR}"
+    info "${CONDUIT_BIN_DIR}/ removed"
+
+    # ---- 4b-c  Keypair handling --------------------------------------------- #
+    if "${PURGE}"; then
+        # --purge: operator confirmed deletion of conduit_key.json above.
+        step "4b-e — Removing Conduit data directory (--purge)"
+        warn "Removing ${CONDUIT_DATA_DIR}/ — conduit_key.json will be PERMANENTLY DELETED."
+        rm -rf "${CONDUIT_DATA_DIR}"
+        info "${CONDUIT_DATA_DIR}/ removed"
+
+        # Remove conduit system user (safe — data dir is gone)
+        step "4b-f — Removing conduit system user"
+        userdel "${CONDUIT_USER}" 2>/dev/null || true
+        if getent group "${CONDUIT_USER}" &>/dev/null; then
+            groupdel "${CONDUIT_USER}" 2>/dev/null || true
+        fi
+        info "conduit user/group removed"
+    else
+        # Standard mode: preserve keypair and user.
+        printf "\n"
+        printf "  ${YELLOW}${BOLD}CONDUIT NODE IDENTITY${RESET}\n"
+        printf "  ${CONDUIT_DATA_DIR}/data/conduit_key.json has been PRESERVED.\n"
+        printf "\n"
+        printf "  This file is your Psiphon broker identity keypair.\n"
+        printf "  Losing it resets your node's broker reputation to zero.\n"
+        printf "\n"
+        printf "  Back it up now if you plan to migrate to a new device:\n"
+        printf "    sudo cp %s/data/conduit_key.json ~/conduit_key.json.bak\n" \
+            "${CONDUIT_DATA_DIR}"
+        printf "\n"
+        printf "  To remove the keypair permanently (cannot be undone):\n"
+        printf "    sudo bash uninstall.sh --purge\n"
+        printf "\n"
+        info "${CONDUIT_DATA_DIR}/ preserved (contains conduit_key.json)"
+        info "conduit system user preserved (owns ${CONDUIT_DATA_DIR}/)"
+    fi
+}
+
+# --------------------------------------------------------------------------- #
 #  Phase 5 — Application directory                                           #
 #                                                                             #
 #  Correction A: track whether rm -rf succeeded.  phase6_purge uses          #
@@ -412,7 +507,7 @@ phase7_summary() {
 
     if "${PURGE}"; then
         printf "  All Conduit Control Center files, configuration, and data have\n"
-        printf "  been removed.\n"
+        printf "  been removed (including conduit_key.json).\n"
     else
         printf "  Conduit Control Center has been uninstalled.\n"
         printf "\n"
@@ -420,9 +515,12 @@ phase7_summary() {
         printf "    %s\n" "${CONF_DIR}/  TLS cert and key, .env, config.json, ccc.db"
         printf "    %s\n" "${LOG_DIR}/  DDNS and application logs"
         printf "    %s\n" "conduit-cc system user"
+        printf "    %s\n" "${CONDUIT_DATA_DIR}/  Conduit data directory (conduit_key.json)"
+        printf "    %s\n" "conduit system user"
         printf "\n"
         printf "  If you reinstall, install.sh will reuse the preserved .env\n"
-        printf "  and TLS files automatically.\n"
+        printf "  and TLS files automatically.  The Conduit node identity\n"
+        printf "  (conduit_key.json) will also be reused automatically.\n"
         printf "\n"
         printf "  If reinstall fails due to a corrupt .env or ccc.db, run:\n"
         printf "    sudo bash uninstall.sh --purge\n"
@@ -452,6 +550,7 @@ phase1_service
 phase2_nginx
 phase3_ddns
 phase4_utilities
+phase4b_conduit_remove
 phase5_appdir
 
 if "${PURGE}"; then

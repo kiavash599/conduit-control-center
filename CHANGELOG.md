@@ -9,6 +9,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (v0.2 — Issue #45)
+
+**Psiphon Conduit end-to-end deployment**
+
+- `install.sh` — Phase 1x: detect Conduit binary (PATH → `./conduit` →
+  offer GitHub download with SHA-256 verification)
+- `install.sh` — Phase 2x: create `conduit` system user; create
+  `/opt/conduit/` (binary) and `/var/lib/conduit/` (data, keypair);
+  pre-swap validation (4 steps); install binary; install + enable
+  `conduit.service`; post-start verification; UFW reminder
+- `deployment/conduit.service` — production systemd unit: `conduit` user,
+  `/opt/conduit/conduit`, `--metrics-addr 127.0.0.1:9090`,
+  `--max-common-clients 50`, `--bandwidth 40`, `ProtectSystem=strict`,
+  `ReadWritePaths=/var/lib/conduit`, `PrivateTmp=yes`, `NoNewPrivileges=yes`
+- `update.sh` — `phase2b_conduit_update`: detect new binary, 4-step
+  pre-swap validation, `.bak` rollback copy, stop/swap/start, 3-check
+  post-swap verification with automatic rollback
+- `uninstall.sh` — `phase4b_conduit_remove`: stop/disable `conduit.service`,
+  remove binary directory; preserve `conduit_key.json` and `conduit` user by
+  default; `--purge` removes data directory and user
+- `config.example.json` — added `_comment_metrics_port` to document the
+  `metrics_port` ↔ `--metrics-addr` coupling
+- `docs/pre-install.md` — Step 1a: Conduit binary options (download, local
+  copy, PATH); post-install UFW firewall discovery procedure
+
 Minor cleanup items pending before the v0.1.0 tag:
 
 - `docs/architecture.md` — system architecture overview (#3)
