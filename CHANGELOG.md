@@ -9,25 +9,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Work in progress toward v0.1.0.
-See the [v0.1 milestone](https://github.com/kiavash599/conduit-control-center/milestone/1) for open issues.
+Minor cleanup items pending before the v0.1.0 tag:
 
-### In Progress
-
-- Repository structure and community health files
-- GitHub Actions CI pipeline
-- Issue and pull request templates
+- `docs/architecture.md` — system architecture overview (#3)
+- `docs/api-reference.md` — REST API reference (#3)
 
 ---
 
-## [0.1.0-dev] — Target release (not yet shipped)
+## [0.1.0-dev] — In development (not yet tagged)
 
-> **Note:** This section describes the intended scope of v0.1.0.
-> Items not yet committed to the repository:
-> `install.sh` (#9), `uninstall.sh` (#10), `update.sh` (#11),
-> `docs/pre-install.md`, `docs/tls-setup.md` (#8),
-> `docs/dev-setup.md` (#5), `docs/architecture.md`, `docs/api-reference.md`,
-> full TLS Nginx config (#7), security headers (#32).
+All items listed below are committed to the repository and were validated
+end-to-end on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) in Issue #38.
 
 ### Added
 

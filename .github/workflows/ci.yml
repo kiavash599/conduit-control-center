@@ -104,6 +104,24 @@ jobs:
             echo "install.sh not yet created — skipping"
           fi
 
+      - name: Check uninstall script syntax
+        run: |
+          if [ -f uninstall.sh ]; then
+            bash -n uninstall.sh
+            shellcheck uninstall.sh
+          else
+            echo "uninstall.sh not yet created — skipping"
+          fi
+
+      - name: Check update script syntax
+        run: |
+          if [ -f update.sh ]; then
+            bash -n update.sh
+            shellcheck update.sh
+          else
+            echo "update.sh not yet created — skipping"
+          fi
+
       - name: Check scripts directory
         run: |
           for f in scripts/*.sh; do

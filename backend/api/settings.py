@@ -80,12 +80,12 @@ class ChangePasswordRequest(BaseModel):
 
     Server-side constraints (defence-in-depth; client also validates):
       - current_password : non-empty
-      - new_password     : minimum 10 characters
+      - new_password     : minimum 12 characters (matches install.sh MIN_PW_LEN)
       - confirm_password : must equal new_password
     """
 
     current_password:  str = Field(min_length=1, max_length=1024)
-    new_password:      str = Field(min_length=10, max_length=1024)
+    new_password:      str = Field(min_length=12, max_length=1024)
     confirm_password:  str = Field(min_length=1,  max_length=1024)
 
     @model_validator(mode="after")

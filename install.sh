@@ -38,6 +38,7 @@ readonly LOG_DIR="/var/log/conduit-cc"
 readonly SERVICE_NAME="conduit-cc"
 readonly NGINX_AVAILABLE="/etc/nginx/sites-available/${SERVICE_NAME}"
 readonly NGINX_ENABLED="/etc/nginx/sites-enabled/${SERVICE_NAME}"
+readonly NGINX_RATELIMIT="/etc/nginx/conf.d/${SERVICE_NAME}-ratelimit.conf"
 readonly SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 readonly SUDOERS_FILE="/etc/sudoers.d/${SERVICE_NAME}"
 readonly DDNS_BIN="/usr/local/bin/cloudflare-ddns.sh"
@@ -515,7 +516,7 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
     # /etc/nginx/conf.d/*.conf is included inside http {} by Ubuntu's stock
     # nginx.conf, making this the idiomatic injection point.  Prefer this over
     # sed-patching nginx.conf: it is idempotent and survives nginx package upgrades.
-    cat > /etc/nginx/conf.d/conduit-cc-ratelimit.conf << 'RATELIMIT_EOF'
+    cat > ${NGINX_RATELIMIT} << 'RATELIMIT_EOF'
 # Conduit Control Center — login endpoint rate limiting zone (Issue #34)
 # Referenced by: /etc/nginx/sites-available/conduit-cc
 #   limit_req zone=login_limit burst=9 nodelay;
@@ -527,8 +528,8 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
 # on reinstall/update.
 limit_req_zone $binary_remote_addr zone=login_limit:10m rate=10r/m;
 RATELIMIT_EOF
-    chmod 644 /etc/nginx/conf.d/conduit-cc-ratelimit.conf
-    info "Rate limiting zone written to /etc/nginx/conf.d/conduit-cc-ratelimit.conf"
+    chmod 644 ${NGINX_RATELIMIT}
+    info "Rate limiting zone written to ${NGINX_RATELIMIT}"
 
     nginx -t 2>/dev/null || {
         nginx -t   # re-run without redirect so user sees the error

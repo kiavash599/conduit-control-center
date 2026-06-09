@@ -496,7 +496,11 @@ RATELIMIT_EOF
     chown root:root "${DDNS_BIN}"
     info "${DDNS_BIN} updated"
 
-    step "3g - Starting ${SERVICE_NAME}"
+    step "3g - Refreshing ccc-unlock symlink"
+    ln -sf "${APP_DIR}/scripts/ccc-unlock" /usr/local/bin/ccc-unlock
+    info "ccc-unlock → ${APP_DIR}/scripts/ccc-unlock"
+
+    step "3h - Starting ${SERVICE_NAME}"
     systemctl start "${SERVICE_NAME}"
     info "${SERVICE_NAME} started"
 }
