@@ -592,9 +592,21 @@ EOF
 
     # Install cron job for conduit-cc user (every 5 minutes).
     # Removes any existing CCC DDNS entry first to stay idempotent.
+    #
+    # Two set -e pitfalls avoided here:
+    #   1. crontab -l exits 1 when the user has no crontab yet.  Capturing it
+    #      with $(...) || true prevents the subshell from aborting.
+    #   2. grep -v exits 1 when every input line matched (nothing passed through).
+    #      The || true guard handles that edge case.
     local _cron_entry="*/5 * * * * ${DDNS_BIN} >> ${LOG_DIR}/ddns.log 2>&1"
-    (crontab -u "${APP_USER}" -l 2>/dev/null | grep -v "cloudflare-ddns"; \
-        echo "${_cron_entry}") | crontab -u "${APP_USER}" -
+    local _existing_cron
+    _existing_cron="$(crontab -u "${APP_USER}" -l 2>/dev/null || true)"
+    {
+        if [[ -n "${_existing_cron}" ]]; then
+            echo "${_existing_cron}" | grep -v "cloudflare-ddns" || true
+        fi
+        echo "${_cron_entry}"
+    } | crontab -u "${APP_USER}" -
     info "DDNS cron job installed for ${APP_USER}"
 
     # Run DDNS script once immediately; failure is a warning, not a blocker.

@@ -162,9 +162,9 @@ async def login_page(
     next_for_tpl = redirect_to if redirect_to != "/dashboard" else ""
 
     return _templates(request).TemplateResponse(
-        "login.html",
-        {
-            "request":  request,
+        request=request,
+        name="login.html",
+        context={
             "next":     next_for_tpl,
             "username": "",
             "error":    "",
@@ -215,9 +215,9 @@ async def login_form(
     def render_error(msg: str) -> HTMLResponse:
         """Re-render the login form with an inline error.  Password never included."""
         return tmpl.TemplateResponse(
-            "login.html",
-            {
-                "request":  request,
+            request=request,
+            name="login.html",
+            context={
                 "next":     next_for_tpl,
                 "username": username,   # preserved
                 "error":    msg,
@@ -288,9 +288,9 @@ async def dashboard(
     sidebar can display them without an additional API call.
     """
     return _templates(request).TemplateResponse(
-        "dashboard.html",
-        {
-            "request":         request,
+        request=request,
+        name="dashboard.html",
+        context={
             "version":         APP_VERSION,
             "username":        user.user_id,
             # session_timeout_minutes from config.json -- displayed read-only

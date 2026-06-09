@@ -38,5 +38,11 @@ aiosqlite>=0.20.0,<1.0.0
 # SRS: FR-API-01 (dashboard pages)
 jinja2>=3.1.0,<4.0.0
 
+# Starlette is a transitive dependency of FastAPI, but the minimum version
+# is pinned here explicitly because pages.py uses the Starlette ≥ 0.36
+# TemplateResponse API (request=request keyword argument).  Older Starlette
+# does not accept `request` as a keyword argument and raises TypeError.
+starlette>=0.36.0,<1.0.0
+
 # Static file serving
 python-multipart>=0.0.9,<1.0.0
