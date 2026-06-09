@@ -36,8 +36,8 @@
     <link rel="stylesheet" href="/static/css/base.css">
     {% block head_extra %}{% endblock %}
 </head>
-<body{% if self.body_class() %} class="{{ self.body_class() }}"{% endif %}>
-{% block body_class %}{% endblock %}
+{%- set _body_class %}{% block body_class %}{% endblock %}{% endset -%}
+<body{% if _body_class %} class="{{ _body_class }}"{% endif %}>
 
 {% block body %}{% endblock %}
 
