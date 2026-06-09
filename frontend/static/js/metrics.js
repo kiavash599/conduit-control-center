@@ -42,16 +42,18 @@
 
     /* ------------------------------------------------------------------
        Threshold constants
-       Named constants — easy to update for v1.1 if AppConfig exposes them.
+       Values must match AppConfig defaults in backend/config.py (alerts section).
+       CPU usage has no backend equivalent; frontend-only threshold used.
        All comparisons are >= (greater-than-or-equal).
        Temp thresholds are in °C; all others are percentages 0-100.
+       v1.0: replace with GET /api/config/thresholds so operator overrides apply.
     ------------------------------------------------------------------ */
 
     var THRESH = {
-        cpu:  { warn: 70, crit: 85 },
-        ram:  { warn: 70, crit: 85 },
-        disk: { warn: 80, crit: 90 },
-        temp: { warn: 70, crit: 80 },
+        cpu:  { warn: 70, crit: 85 },   // frontend-only; no AppConfig equivalent
+        ram:  { warn: 80, crit: 90 },   // matches ram_warning_percent / ram_critical_percent
+        disk: { warn: 75, crit: 85 },   // matches disk_warning_percent / disk_critical_percent
+        temp: { warn: 70, crit: 80 },   // matches cpu_temp_warning_celsius / cpu_temp_critical_celsius
     };
 
     /* ------------------------------------------------------------------

@@ -1,25 +1,21 @@
 {
-  "_comment": "Copy this file to config.json. On a live server, install.sh places it at /etc/conduit-cc/config.json. Do not store secrets here — secrets belong in .env.",
+  "_comment": "Copy this file to config.json. On a live server, install.sh places it at /etc/conduit-cc/config.json. Do not store secrets here — secrets belong in .env. Log level (LOG_LEVEL) is also in .env, not here.",
 
   "app": {
     "host": "127.0.0.1",
     "port": 8000,
     "session_timeout_minutes": 60,
     "max_failed_login_attempts": 5,
-    "lockout_duration_minutes": 15,
-    "log_level": "INFO"
+    "lockout_duration_minutes": 15
   },
 
   "conduit": {
     "service_name": "conduit",
-    "status_poll_interval_seconds": 5,
     "action_timeout_seconds": 10,
     "metrics_port": 9090
   },
 
   "metrics": {
-    "system_poll_interval_seconds": 10,
-    "traffic_poll_interval_seconds": 30,
     "cache_ttl_seconds": 5
   },
 
@@ -35,14 +31,11 @@
   "logs": {
     "viewer_default_lines": 200,
     "viewer_max_lines": 1000,
-    "rotation_size_mb": 10,
-    "rotation_keep_count": 5,
     "ddns_log_path": "/var/log/conduit-cc/ddns.log",
     "ddns_status_cache_seconds": 30
   },
 
   "ddns": {
-    "cron_interval_minutes": 5,
     "ip_provider_url": "https://api.ipify.org"
   }
 }
