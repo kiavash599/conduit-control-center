@@ -314,12 +314,7 @@ class TestGetVersion:
         assert result is None
 
     async def test_timeout_returns_none(self):
-        async def slow():
-            await asyncio.sleep(99)
-        with patch(
-            "backend.conduit.adapter.asyncio.wait_for",
-            side_effect=asyncio.TimeoutError,
-        ):
+        with patch("backend.conduit.adapter._run", side_effect=asyncio.TimeoutError):
             result = await get_version()
         assert result is None
 
