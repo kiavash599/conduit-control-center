@@ -148,7 +148,7 @@
             <!--
               Node Status and Control Panel — Issue #27
               ------------------------------------------
-              JS: frontend/static/js/status.js (loaded at bottom of {% block scripts %})
+              JS: frontend/static/js/status.js (loaded at bottom of the scripts block)
               API: GET /api/status (polled every 5 s via startPolling)
                    POST /api/conduit/start|stop|restart (on button click)
 
@@ -240,7 +240,7 @@
             <!--
               System Health Panel — Issue #28
               ------------------------------------------
-              JS: frontend/static/js/metrics.js (loaded in {% block scripts %})
+              JS: frontend/static/js/metrics.js (loaded in the scripts block)
               API: GET /api/metrics/system (polled every 10 s via startPolling)
 
               DOM IDs consumed by metrics.js:
@@ -368,7 +368,7 @@
             <!--
               Traffic Counter Widget — Issue #29
               ------------------------------------
-              JS: frontend/static/js/traffic.js (loaded in {% block scripts %})
+              JS: frontend/static/js/traffic.js (loaded in the scripts block)
               API: GET /api/metrics/traffic (polled every 30 s via startPolling)
                    Returns HTTP 501 until Issue #22 is implemented; treated as
                    "no data" silently — no toast shown.
@@ -430,7 +430,7 @@
             <!--
               DDNS Status Panel — Issue #43
               ------------------------------
-              JS: frontend/static/js/ddns.js (loaded in {% block scripts %})
+              JS: frontend/static/js/ddns.js (loaded in the scripts block)
               API: GET /api/ddns/status (polled every 60 s via startPolling)
 
               DOM IDs consumed by ddns.js:
@@ -526,7 +526,7 @@
             <!--
               Log Viewer Panel — Issue #30
               -----------------------------
-              JS: frontend/static/js/logs.js (loaded in {% block scripts %})
+              JS: frontend/static/js/logs.js (loaded in the scripts block)
               API: GET /api/logs?limit=200 (polled every 30 s via startPolling)
 
               Polling is section-aware: the tick skips fetching when this
@@ -607,7 +607,7 @@
             <!--
               Settings Page — Issue #31
               --------------------------
-              JS: frontend/static/js/settings.js (loaded in {% block scripts %})
+              JS: frontend/static/js/settings.js (loaded in the scripts block)
               API: PUT /api/settings/password
 
               Template variable:
