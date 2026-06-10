@@ -143,3 +143,55 @@ class TestRestartRoute:
         with patch("backend.api.conduit.get_status", new_callable=AsyncMock, return_value="stopping"):
             response = conduit_client.post("/api/conduit/restart", headers=_CSRF)
         assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# POST /api/conduit/pair  (neutralised: not implemented in this release)
+# ---------------------------------------------------------------------------
+
+
+class TestPairRoute:
+    _BODY = {"pairing_link": "psi://example-pairing-link"}
+
+    def test_wellformed_request_returns_501(self, conduit_client):
+        response = conduit_client.post(
+            "/api/conduit/pair", headers=_CSRF, json=self._BODY
+        )
+        assert response.status_code == 501
+
+    def test_empty_link_returns_422(self, conduit_client):
+        response = conduit_client.post(
+            "/api/conduit/pair", headers=_CSRF, json={"pairing_link": ""}
+        )
+        assert response.status_code == 422
+
+    def test_control_char_link_returns_422(self, conduit_client):
+        response = conduit_client.post(
+            "/api/conduit/pair", headers=_CSRF, json={"pairing_link": "bad\nlink"}
+        )
+        assert response.status_code == 422
+
+    def test_response_does_not_echo_link(self, conduit_client):
+        secret = "psi://super-secret-do-not-leak"
+        response = conduit_client.post(
+            "/api/conduit/pair", headers=_CSRF, json={"pairing_link": secret}
+        )
+        assert secret not in response.text
+
+
+class TestAdapterPairStub:
+    """adapter.pair() must be an inert stub that never spawns a subprocess."""
+
+    async def test_raises_not_implemented_and_no_subprocess(self, monkeypatch):
+        import backend.conduit.adapter as adapter
+
+        spawned = False
+
+        async def _fake_exec(*args, **kwargs):
+            nonlocal spawned
+            spawned = True
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", _fake_exec)
+        with pytest.raises(NotImplementedError):
+            await adapter.pair("psi://anything")
+        assert spawned is False

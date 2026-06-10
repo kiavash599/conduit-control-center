@@ -6,14 +6,14 @@ Conduit node control endpoints.
 Implemented in:
   Issue #17 -- Conduit adapter (systemctl wrapper)
   Issue #19 -- POST /api/conduit/start, stop, restart (this file)
-  Issue #20 -- POST /api/conduit/pair (transient pairing, no storage)
+  Issue #20 -- POST /api/conduit/pair (not implemented in this release; 501)
 
 Routes
 ------
   POST /api/conduit/start    -- start the Conduit service
   POST /api/conduit/stop     -- stop the Conduit service
   POST /api/conduit/restart  -- restart the Conduit service
-  POST /api/conduit/pair     -- pair Conduit node (Issue #20, still 501)
+  POST /api/conduit/pair     -- not implemented in this release (returns 501)
 
 Pre-condition rules
 -------------------
@@ -70,7 +70,6 @@ from backend.conduit.adapter import (
     restart,
     start,
     stop,
-    pair as adapter_pair,
 )
 from backend.dependencies import (
     AuthenticatedUser,
@@ -423,63 +422,39 @@ class PairRequest(BaseModel):
         return v
 
 
-class PairResponse(BaseModel):
-    """Response body for POST /api/conduit/pair."""
-
-    status: str   # "paired" | "failed"
-    message: str  # static operator-facing string; never link-derived
-
-
 @router.post(
     "/pair",
-    summary="Pair Conduit node (pairing link never stored)",
-    response_model=PairResponse,
+    summary="Pair Conduit node (not implemented in this release)",
     responses={
-        200: {"description": "Pairing attempt completed; check 'status' field"},
         401: {"description": "Not authenticated"},
         403: {"description": "CSRF token missing or invalid"},
         422: {"description": "Invalid pairing link (empty, too long, control chars)"},
-        503: {"description": "Conduit binary not found or unexpected adapter error"},
+        501: {"description": "Pairing is not implemented in this release"},
     },
 )
 async def conduit_pair(
     body: PairRequest,
     _user: AuthenticatedUser = Depends(get_current_user),
     _csrf: None = Depends(require_csrf_token),
-    # NOTE: no db dependency -- this endpoint makes no database writes by design.
-    # See Issue #20 design decision: pairing is a transient in-memory operation.
-    # TODO (future): add CONDUIT_PAIR audit entry once CLI interface is confirmed.
-    #   Event: CONDUIT_PAIR, detail: user={username}, result={paired|failed}
-    #   Before adding: confirm link is fully out of scope at the write site.
-) -> PairResponse:
+) -> None:
     """
-    Submit a Psiphon Conduit pairing link.
+    Conduit pairing is not implemented in this release.
 
-    The link is extracted from the request body, passed to the Conduit
-    CLI via stdin, and then goes out of scope.  It is never written to
-    any persistent storage, log, or response field.
+    Authentication, CSRF, and request-body validation (PairRequest) are still
+    enforced: an unauthenticated request returns 401, a request with a missing
+    or invalid CSRF token returns 403, and a malformed body returns 422. A
+    well-formed, authenticated, CSRF-valid request returns 501 Not Implemented.
+    Full pairing is planned for future Personal Mode work.
 
-    Returns 200 with status="paired" on success, or status="failed" on
-    CLI failure.  Returns 503 if the Conduit binary is not found.
-
-    Authentication is enforced via get_current_user (returns 401 if no
-    valid session cookie is present).
+    SECURITY CONTRACT: the pairing link in the request body is never read,
+    logged, stored, or passed to a subprocess. This handler returns 501 without
+    touching ``body.pairing_link``, which goes out of scope when the request
+    completes.
     """
-    # Extract the link to a local variable; let the Pydantic body go out
-    # of scope as soon as possible.
-    pairing_link: str = body.pairing_link
-
-    try:
-        result = await adapter_pair(pairing_link)
-    except ConduitAdapterError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        )
-    finally:
-        # Explicit deletion signals intent.  The local variable is the only
-        # reference at this point; body.pairing_link also holds one, but
-        # body goes out of scope immediately after this function returns.
-        del pairing_link
-
-    return PairResponse(status=result["status"], message=result["message"])
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Conduit pairing is not available in this release. "
+            "Full pairing support is planned for a future release."
+        ),
+    )

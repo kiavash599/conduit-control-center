@@ -27,7 +27,7 @@ Psiphon Conduit lets you share your internet bandwidth to help people in censore
 | Traffic counters | Bytes uploaded and downloaded since the last service start |
 | Log viewer | Last 200 lines of Conduit logs with auto-refresh every 30 seconds |
 | DDNS status | Current public IP and last Cloudflare DNS update result |
-| Pairing guide | Step-by-step Conduit pairing workflow |
+| Pairing | Not available in v0.1.0; planned for future Personal Mode work |
 | Configuration viewer | Read-only view of current Conduit configuration |
 | Secure login | Password-protected with account lockout after failed attempts |
 | Change password | Update your admin password from the settings page |
