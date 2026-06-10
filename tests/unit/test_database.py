@@ -10,12 +10,20 @@ Coverage:
 """
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 import aiosqlite
 import pytest
 
-from backend.database import _TABLE_DDL, create_tables, get_db, get_db_path
+from backend.database import (
+    _TABLE_DDL,
+    _restrict_db_file_permissions,
+    create_tables,
+    get_db,
+    get_db_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -147,3 +155,83 @@ class TestGetDb:
             cursor = await conn.execute("SELECT count(*) FROM sessions")
             row = await cursor.fetchone()
             assert row[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# File permissions (db-perms-600)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
+class TestDatabaseFilePermissions:
+    @pytest.fixture
+    def patched_db_path(self, tmp_path, monkeypatch):
+        db_file = tmp_path / "test.db"
+        import backend.database as db_mod
+        monkeypatch.setattr(db_mod, "_PROD_DB_PATH", tmp_path / "absent" / "ccc.db")
+        monkeypatch.setattr(db_mod, "_DEV_DB_PATH", db_file)
+        return db_file
+
+    @staticmethod
+    def _mode(p: Path) -> int:
+        return stat.S_IMODE(os.stat(p).st_mode)
+
+    @staticmethod
+    def _sidecar(db_file: Path, suffix: str) -> Path:
+        return db_file.with_name(db_file.name + suffix)
+
+    async def test_db_file_is_0600_after_create(self, patched_db_path):
+        await create_tables()
+        assert self._mode(patched_db_path) == 0o600
+
+    async def test_preexisting_loose_db_is_tightened(self, patched_db_path):
+        # Simulate a database created before this change with loose perms.
+        patched_db_path.write_bytes(b"")
+        os.chmod(patched_db_path, 0o644)
+        await create_tables()
+        assert self._mode(patched_db_path) == 0o600
+
+    def test_helper_restricts_main_and_existing_sidecars(self, patched_db_path):
+        for suffix in ("", "-wal", "-shm"):
+            f = patched_db_path if not suffix else self._sidecar(patched_db_path, suffix)
+            f.write_bytes(b"")
+            os.chmod(f, 0o644)
+        _restrict_db_file_permissions(patched_db_path)
+        for suffix in ("", "-wal", "-shm"):
+            f = patched_db_path if not suffix else self._sidecar(patched_db_path, suffix)
+            assert self._mode(f) == 0o600
+
+    def test_helper_safe_when_sidecars_absent(self, patched_db_path):
+        patched_db_path.write_bytes(b"")
+        os.chmod(patched_db_path, 0o644)
+        _restrict_db_file_permissions(patched_db_path)  # must not raise
+        assert self._mode(patched_db_path) == 0o600
+        assert not self._sidecar(patched_db_path, "-wal").exists()
+
+    @staticmethod
+    def _failing_chmod(fail_paths):
+        """Return an os.chmod replacement that raises for the given paths."""
+        real_chmod = os.chmod
+
+        def fake_chmod(path, mode, *args, **kwargs):
+            if str(path) in fail_paths:
+                raise OSError("simulated chmod failure")
+            return real_chmod(path, mode, *args, **kwargs)
+
+        return fake_chmod
+
+    def test_main_chmod_failure_raises(self, patched_db_path, monkeypatch):
+        """A chmod failure on the main DB must propagate (startup fails)."""
+        patched_db_path.write_bytes(b"")
+        monkeypatch.setattr(os, "chmod", self._failing_chmod({str(patched_db_path)}))
+        with pytest.raises(OSError):
+            _restrict_db_file_permissions(patched_db_path)
+
+    def test_sidecar_chmod_failure_is_warning_only(self, patched_db_path, monkeypatch):
+        """A chmod failure on a sidecar must NOT raise; main DB still tightened."""
+        patched_db_path.write_bytes(b"")
+        wal = self._sidecar(patched_db_path, "-wal")
+        wal.write_bytes(b"")
+        monkeypatch.setattr(os, "chmod", self._failing_chmod({str(wal)}))
+        _restrict_db_file_permissions(patched_db_path)  # must not raise
+        assert self._mode(patched_db_path) == 0o600

@@ -64,6 +64,15 @@ RestartSec=5s
 ProtectSystem=strict
 ReadWritePaths=/etc/conduit-cc
 
+# UMask=0077 ensures every file the service creates is owner-only (0600) and
+# every directory 0700.  This is the primary guarantee for the SQLite database
+# files — ccc.db and the WAL sidecars ccc.db-wal / ccc.db-shm — which hold
+# session identifiers and the audit log.  It also covers sidecars SQLite
+# recreates on its own schedule, which application code cannot reliably chmod.
+# Nothing the service creates needs group/other read: ccc.db is accessed only
+# by conduit-cc and by root (sudo ccc-unlock), and .env only by conduit-cc.
+UMask=0077
+
 # PrivateTmp=yes gives the service its own /tmp and /var/tmp namespaces,
 # isolated from all other processes.  CCC does not use temporary files
 # directly, but this prevents temp-file side-channels from other services.
