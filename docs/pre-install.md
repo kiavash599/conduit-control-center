@@ -279,40 +279,44 @@ sudo bash install.sh
 
 ---
 
-## Post-install — Conduit firewall rules
+## Post-install — firewall (UFW) rules
 
-After `install.sh` completes, you must open UFW ports for Conduit inproxy
-traffic. The installer cannot do this automatically because the ports Conduit
-binds are not documented in the Psiphon source and may vary.
+The CCC dashboard requires only three inbound **TCP** ports:
 
-**Step 1 — Discover what ports Conduit is listening on:**
+| Port | Purpose |
+|---|---|
+| 22/tcp | SSH administration |
+| 80/tcp | HTTP (redirected to HTTPS) |
+| 443/tcp | HTTPS dashboard |
+
+`install.sh` configures UFW to allow exactly these. After installation, verify:
+
+```bash
+sudo ufw status numbered
+```
+
+You should see only `22/tcp`, `80/tcp`, and `443/tcp` (plus their IPv6
+equivalents) — nothing else is required for the dashboard.
+
+### About Conduit's UDP ports
+
+Psiphon Conduit opens dynamic, high-numbered **UDP** ports for its in-proxy
+peer traffic. You can inspect them with:
 
 ```bash
 ss -ulnp | grep conduit
 ```
 
-You will see output like:
+These ports are chosen dynamically and change between runs and Conduit
+versions, so there is no fixed UDP port to open. In the validated Raspberry Pi
+reference deployment, Conduit operates correctly with only TCP 22/80/443 open
+in UFW. Additional inbound UDP rules are not required for that deployment.
 
-```
-UNCONN  0  0  0.0.0.0:12345  0.0.0.0:*  users:(("conduit",pid=...))
-```
-
-**Step 2 — Add UFW rules for each UDP port shown:**
-
-```bash
-sudo ufw allow <port>/udp comment 'Conduit inproxy'
-```
-
-Repeat for each port. Then verify:
-
-```bash
-sudo ufw status
-```
-
-> **Why is this manual?** Psiphon Conduit selects its inproxy ports
-> dynamically. The exact ports are not available in the public source code
-> and may change between Conduit versions. The installer prints a reminder
-> after completing installation.
+> **Do not blindly add UDP rules.** Running `sudo ufw allow <port>/udp` for the
+> ports shown by `ss` is both ineffective (the ports change) and an unnecessary
+> increase in attack surface. Add an inbound UDP rule only if your specific
+> deployment explicitly requires inbound UDP exposure, and only for the
+> port(s) it actually needs.
 
 ---
 
