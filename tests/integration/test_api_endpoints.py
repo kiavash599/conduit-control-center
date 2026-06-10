@@ -327,6 +327,22 @@ class TestDdnsEndpoint:
 # ---------------------------------------------------------------------------
 
 
+def _extract_hash_from_env(env_content: str) -> str | None:
+    """
+    Extract the ADMIN_PASSWORD_HASH value from .env file content.
+
+    The production code single-quotes the bcrypt hash when writing it
+    (e.g. ADMIN_PASSWORD_HASH='$2b$12$...') so that bash `source .env`
+    under `set -euo pipefail` does not treat $2 as an unbound positional
+    parameter.  pydantic-settings strips surrounding quotes automatically,
+    but test code reading the raw file must do so explicitly.
+    """
+    for line in env_content.splitlines():
+        if line.startswith("ADMIN_PASSWORD_HASH="):
+            return line.split("=", 1)[1].strip().strip("'")
+    return None
+
+
 class TestPasswordChange:
     """
     Challenge Check constraints:
@@ -368,15 +384,10 @@ class TestPasswordChange:
         self._change_pw(client, csrf, tmp_path, monkeypatch)
         env_content = (tmp_path / ".env").read_text(encoding="utf-8")
         assert "ADMIN_PASSWORD_HASH=" in env_content
-        # Extract and verify the hash
-        for line in env_content.splitlines():
-            if line.startswith("ADMIN_PASSWORD_HASH="):
-                new_hash = line.split("=", 1)[1].strip()
-                assert bcrypt.checkpw(NEW_PASSWORD.encode(), new_hash.encode()), \
-                    "Stored hash does not match NEW_PASSWORD"
-                break
-        else:
-            pytest.fail("ADMIN_PASSWORD_HASH not found in temp .env")
+        new_hash = _extract_hash_from_env(env_content)
+        assert new_hash, "ADMIN_PASSWORD_HASH not found in temp .env"
+        assert bcrypt.checkpw(NEW_PASSWORD.encode(), new_hash.encode()), \
+            "Stored hash does not match NEW_PASSWORD"
 
     def test_sessions_deleted_after_password_change(self, logged_in, tmp_path, monkeypatch):
         """
@@ -399,13 +410,9 @@ class TestPasswordChange:
         client, csrf = logged_in
         self._change_pw(client, csrf, tmp_path, monkeypatch)
 
-        # Read new hash from temp file
+        # Read new hash from temp file (single quotes are stripped by helper)
         env_content = (tmp_path / ".env").read_text(encoding="utf-8")
-        new_hash = None
-        for line in env_content.splitlines():
-            if line.startswith("ADMIN_PASSWORD_HASH="):
-                new_hash = line.split("=", 1)[1].strip()
-                break
+        new_hash = _extract_hash_from_env(env_content)
         assert new_hash, "No new hash found in temp .env"
 
         # Inject new hash via env var + clear cache so get_settings() picks it up
@@ -425,11 +432,7 @@ class TestPasswordChange:
         self._change_pw(client, csrf, tmp_path, monkeypatch)
 
         env_content = (tmp_path / ".env").read_text(encoding="utf-8")
-        new_hash = None
-        for line in env_content.splitlines():
-            if line.startswith("ADMIN_PASSWORD_HASH="):
-                new_hash = line.split("=", 1)[1].strip()
-                break
+        new_hash = _extract_hash_from_env(env_content)
         assert new_hash
 
         from backend.config import get_settings
