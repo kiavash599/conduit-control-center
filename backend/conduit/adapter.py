@@ -333,8 +333,12 @@ async def get_last_changed() -> str | None:
         Unexpected permission denial on a read-only command.
     """
     service = _service_name()
+    # Prepend "env TZ=UTC" so that systemd always returns the timestamp in UTC
+    # regardless of the server's local timezone setting.  Without this, a Pi
+    # configured for CEST (UTC+2) returns "23:57:11 CEST" which the parser
+    # would stamp as UTC, producing a negative delta and a permanent "0s" uptime.
     returncode, stdout, stderr = await _run(
-        ["systemctl", "show", service, "--property=ActiveEnterTimestamp"]
+        ["env", "TZ=UTC", "systemctl", "show", service, "--property=ActiveEnterTimestamp"]
     )
 
     if returncode != 0:

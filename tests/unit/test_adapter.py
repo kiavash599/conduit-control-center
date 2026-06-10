@@ -247,6 +247,19 @@ class TestGetLastChanged:
         with pytest.raises(ConduitAdapterError):
             await get_last_changed()
 
+    async def test_run_called_with_tz_utc(self, mock_run):
+        """systemctl must be invoked with TZ=UTC so local timezone is ignored."""
+        mock_run.return_value = (
+            0,
+            "ActiveEnterTimestamp=Sat 2026-05-31 14:30:00 UTC",
+            "",
+        )
+        await get_last_changed()
+        args_used = mock_run.call_args[0][0]  # first positional arg (the list)
+        assert args_used[:2] == ["env", "TZ=UTC"], (
+            f"Expected _run to be called with ['env', 'TZ=UTC', ...], got {args_used}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # start() / stop() / restart() — inject _control_action

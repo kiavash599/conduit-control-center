@@ -149,10 +149,18 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-# shellcheck source=/dev/null
+# Temporarily disable nounset (-u) while sourcing .env.
+# The bcrypt hash written to ADMIN_PASSWORD_HASH has the form $2b$12$...;
+# without this guard, bash -u would treat $2 as an unbound positional
+# parameter and abort the script before any JSON can be logged.
+# nounset is re-enabled immediately after sourcing so the rest of the
+# script still benefits from it.
+set +u
 set -a
+# shellcheck source=/dev/null
 source "$ENV_FILE"
 set +a
+set -u
 
 # Re-declare sourced variables with safe defaults.
 # Explicit assignment satisfies shellcheck SC2154 (var referenced but not

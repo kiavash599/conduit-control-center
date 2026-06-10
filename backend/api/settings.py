@@ -119,7 +119,11 @@ def _write_password_hash(new_hash: str) -> None:
     """
     env_path: Path = get_env_file_path()
     target_key = "ADMIN_PASSWORD_HASH="
-    new_line   = f"{target_key}{new_hash}\n"
+    # Single-quote the bcrypt hash so that bash `source .env` under
+    # `set -euo pipefail` does not interpret the $2b$12$... prefix as
+    # positional parameter references ($2, $12, etc.).
+    # pydantic-settings strips surrounding single quotes before loading the value.
+    new_line   = f"{target_key}'{new_hash}'\n"
 
     try:
         existing = env_path.read_text(encoding="utf-8")

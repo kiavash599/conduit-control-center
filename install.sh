@@ -518,11 +518,14 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
     # Clear the plaintext password immediately after hashing.
     unset ADMIN_PASSWORD
 
+    # Single-quote the hash so that bash `source .env` under `set -euo pipefail`
+    # does not interpret the $2b$12$... prefix as unbound positional parameters.
+    # pydantic-settings strips surrounding single quotes before loading the value.
     if grep -q "^ADMIN_PASSWORD_HASH=" "${CONF_DIR}/.env"; then
-        sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=${_pw_hash}|" \
+        sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH='${_pw_hash}'|" \
             "${CONF_DIR}/.env"
     else
-        printf 'ADMIN_PASSWORD_HASH=%s\n' "${_pw_hash}" >> "${CONF_DIR}/.env"
+        printf "ADMIN_PASSWORD_HASH='%s'\n" "${_pw_hash}" >> "${CONF_DIR}/.env"
     fi
     info "ADMIN_PASSWORD_HASH written to .env"
 
