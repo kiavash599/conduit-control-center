@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.1  
+**Revision:** 1.2  
 **Date:** 2026-06-10  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
@@ -16,7 +16,7 @@
    - 3.1 [Audit Scope](#31-audit-scope)
    - 3.2 [Conduit Linux CLI Capability Matrix](#32-conduit-linux-cli-capability-matrix)
    - 3.3 [Confirmed Findings Summary](#33-confirmed-findings-summary)
-4. [v0.1.1 — Maintenance Release](#4-v011--maintenance-release)
+4. [v0.1.0 Maintenance Items](#4-v010-maintenance-items)
 5. [D1 — UX/UI Design Milestone (Gate for v0.2.0)](#5-d1--uxui-design-milestone-gate-for-v020)
    - 5.1 [Design Principles](#51-design-principles)
    - 5.2 [Information Architecture](#52-information-architecture)
@@ -159,18 +159,18 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 
 ---
 
-## 4. v0.1.1 — Maintenance Release
+## 4. v0.1.0 Maintenance Items
 
-v0.1.1 is a maintenance-only release. No new user-facing features. All items correspond to open GitHub issues.
+These maintenance items are included in the v0.1.0 first public release. No new user-facing features. They are tracked here by descriptive name; corresponding GitHub issues have not yet been created.
 
-| Issue | Title | Priority |
+| Item | Description | Priority |
 |---|---|:---:|
-| #3 | Review and correct the unsupported `conduit pair`-based pairing workflow in `adapter.pair()` / `/api/conduit/pair`. `conduit pair` is not a CLI subcommand in any Conduit release (confirmed on `main` and `release-cli-2.0.0`). Full pairing functionality is planned for v0.4.0 (Section 8). | High |
-| #4 | Restrict `ccc.db` file permissions (644 → 600) | High |
-| #5 | Remove duplicate DDNS cron entry from root crontab | Medium |
-| #6 | Update UFW firewall rules in `pre-install.md` based on production validation | Low |
+| `pairing-neutralise` | Review and correct the unsupported `conduit pair`-based pairing workflow in `adapter.pair()` / `/api/conduit/pair`. `conduit pair` is not a CLI subcommand in any Conduit release (confirmed on `main` and `release-cli-2.0.0`). Full pairing functionality is planned for v0.4.0 (Section 8). | High |
+| `db-perms-600` | Restrict `ccc.db` file permissions (644 → 600) | High |
+| `root-crontab-cleanup` | Remove duplicate DDNS cron entry from root crontab | Medium |
+| `ufw-doc-update` | Update UFW firewall rules in `pre-install.md` based on production validation | Low |
 
-**Release criteria:** all four issues resolved, tests green, CHANGELOG updated.
+**Release criteria:** all four maintenance items resolved, tests green, CHANGELOG updated.
 
 ---
 
@@ -502,6 +502,7 @@ The following items are explicitly out of scope for all planned versions and req
 |---|---|---|---|
 | 1.0 | 2026-06-10 | CCC Development Team | Initial draft. R1 capability audit complete. |
 | 1.1 | 2026-06-10 | CCC Development Team | Added Section 5: D1 — UX/UI Design Milestone as formal gate for v0.2.0. Sections 5–9 renumbered to 6–10. Smart Assistant Automatic mode deferred to v0.3.0. Theme persistence changed from localStorage to server-side cookie. |
+| 1.2 | 2026-06-10 | CCC Development Team | Section 4 corrected: retitled to v0.1.0 Maintenance Items (folded into first public release); replaced collision issue numbers #3–#6 with descriptive names; removed inaccurate "open GitHub issues" claim. |
 
 ---
 
