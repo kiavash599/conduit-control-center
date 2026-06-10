@@ -165,7 +165,7 @@ v0.1.1 is a maintenance-only release. No new user-facing features. All items cor
 
 | Issue | Title | Priority |
 |---|---|:---:|
-| #3 | Harden `pair()` subprocess PATH in `adapter.py` | High |
+| #3 | Review and correct the unsupported `conduit pair`-based pairing workflow in `adapter.pair()` / `/api/conduit/pair`. `conduit pair` is not a CLI subcommand in any Conduit release (confirmed on `main` and `release-cli-2.0.0`). Full pairing functionality is planned for v0.4.0 (Section 8). | High |
 | #4 | Restrict `ccc.db` file permissions (644 → 600) | High |
 | #5 | Remove duplicate DDNS cron entry from root crontab | Medium |
 | #6 | Update UFW firewall rules in `pre-install.md` based on production validation | Low |
