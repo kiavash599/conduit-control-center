@@ -34,11 +34,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `docs/pre-install.md` — Step 1a: Conduit binary options (download, local
   copy, PATH); post-install UFW firewall discovery procedure
 
-Minor cleanup items pending before the v0.1.0 tag:
-
-- `docs/architecture.md` — system architecture overview (#3)
-- `docs/api-reference.md` — REST API reference (#3)
-
 ---
 
 ## [0.1.0-dev] — In development (not yet tagged)
@@ -91,7 +86,7 @@ end-to-end on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) in Issue #38.
 - `docs/tls-setup.md` — Cloudflare Origin Certificate and Let's Encrypt setup
 - `docs/dev-setup.md` — local development environment guide
 - `docs/architecture.md` — system architecture overview
-- `docs/api-reference.md` — REST API reference
+- API reference provided by the live OpenAPI docs at `/api/docs`, `/api/redoc`, and `/api/openapi.json` (no separate hand-maintained reference file)
 
 ### Security
 

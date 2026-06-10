@@ -99,7 +99,7 @@ The installer will:
 | [docs/tls-setup.md](docs/tls-setup.md) | TLS certificate configuration (Cloudflare Origin Cert and Let's Encrypt) |
 | [docs/dev-setup.md](docs/dev-setup.md) | Local development environment setup |
 | [docs/architecture.md](docs/architecture.md) | System architecture overview |
-| [docs/api-reference.md](docs/api-reference.md) | REST API reference |
+| API reference | Interactive OpenAPI docs served by your running instance at `/api/docs` (Swagger UI), `/api/redoc` (ReDoc), and `/api/openapi.json` (raw schema) |
 
 ---
 
