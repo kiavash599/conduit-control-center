@@ -10,7 +10,7 @@
 
 # Web framework — FastAPI + ASGI server
 # SRS: FR-API-01, FR-API-02, WBS task 3.1
-fastapi>=0.110.0,<1.0.0
+fastapi>=0.133.0,<1.0.0
 uvicorn[standard]>=0.29.0,<1.0.0
 
 # Data validation and settings management
@@ -38,11 +38,11 @@ aiosqlite>=0.20.0,<1.0.0
 # SRS: FR-API-01 (dashboard pages)
 jinja2>=3.1.0,<4.0.0
 
-# Starlette is a transitive dependency of FastAPI, but the minimum version
-# is pinned here explicitly because pages.py uses the Starlette ≥ 0.36
-# TemplateResponse API (request=request keyword argument).  Older Starlette
-# does not accept `request` as a keyword argument and raises TypeError.
-starlette>=0.36.0,<1.0.0
+# Starlette is a transitive dependency of FastAPI. It is pinned to the 1.0.x
+# line (>=1.0.1,<1.1.0) to remediate PYSEC-2026-161 / CVE-2026-48710 (Host-
+# header path poisoning, fixed in 1.0.1) with a minimal upgrade. Starlette
+# 1.0 support requires FastAPI >=0.133.0 (PR #14987); pages.py uses request=.
+starlette>=1.0.1,<1.1.0
 
 # Static file serving
 python-multipart>=0.0.9,<1.0.0
