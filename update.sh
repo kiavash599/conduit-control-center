@@ -716,6 +716,18 @@ RATELIMIT_EOF
     ln -sf "${APP_DIR}/scripts/ccc-unlock" /usr/local/bin/ccc-unlock
     info "ccc-unlock → ${APP_DIR}/scripts/ccc-unlock"
 
+    # Journal read access for the Logs page (GET /api/logs).
+    # The Logs page runs, as ${APP_USER} and WITHOUT sudo:  journalctl -u conduit
+    # systemd-journal membership is required to read another unit's journal.
+    # Run BEFORE (re)starting the service so the new process inherits the group
+    # (also repairs existing installs that predate the journal-access fix).
+    if getent group systemd-journal >/dev/null; then
+        usermod -aG systemd-journal "${APP_USER}"
+        info "${APP_USER} ensured in systemd-journal (Logs page: journalctl -u conduit)"
+    else
+        warn "systemd-journal group not found - Logs page may return HTTP 503"
+    fi
+
     step "3h - Starting ${SERVICE_NAME}"
     systemctl start "${SERVICE_NAME}"
     info "${SERVICE_NAME} started"

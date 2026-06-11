@@ -406,6 +406,19 @@ phase2_install() {
         info "User '${APP_USER}' created"
     fi
 
+    # ---- 2a (cont.)  Journal read access for the Logs page ---------------- #
+    # The Logs page (GET /api/logs) runs, as ${APP_USER} and WITHOUT sudo:
+    #     journalctl -u conduit
+    # A non-privileged user can only read another unit's journal when it is a
+    # member of the systemd-journal group. Idempotent; must run before the
+    # service is first started so the service process inherits the membership.
+    if getent group systemd-journal >/dev/null; then
+        usermod -aG systemd-journal "${APP_USER}"
+        info "Added '${APP_USER}' to systemd-journal (Logs page: journalctl -u conduit)"
+    else
+        warn "systemd-journal group not found - Logs page may return HTTP 503"
+    fi
+
     # ---- 2b  Application files --------------------------------------------- #
     step "2b — Copying application files to ${APP_DIR}"
     mkdir -p "${APP_DIR}"
