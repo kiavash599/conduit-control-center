@@ -166,7 +166,9 @@ phase1_validate() {
         "Run: sudo bash install.sh"
 
     local os_id os_version os_arch
+    # shellcheck source=/dev/null
     os_id="$(. /etc/os-release && echo "${ID}")"
+    # shellcheck source=/dev/null
     os_version="$(. /etc/os-release && echo "${VERSION_ID}")"
     os_arch="$(uname -m)"
 
@@ -185,7 +187,7 @@ phase1_validate() {
     step "1b — Pre-install checklist"
     printf "\n"
     printf "  Before continuing, confirm you have completed all steps in:\n"
-    printf "  ${BOLD}docs/pre-install.md${RESET}\n\n"
+    printf '  %sdocs/pre-install.md%s\n\n' "${BOLD}" "${RESET}"
     printf "  Checklist summary:\n"
     printf "    [ ] Cloudflare DNS A record created (not CNAME), proxy ON\n"
     printf "    [ ] SSL/TLS mode set to Full (strict)\n"
@@ -344,7 +346,7 @@ phase1_validate() {
         printf "  https://github.com/Psiphon-Inc/conduit/releases/tag/v%s\n" \
             "${CONDUIT_VERSION}"
         printf "\n"
-        printf "  Alternatively, place the conduit binary at ${SCRIPT_DIR}/conduit\n"
+        printf '  Alternatively, place the conduit binary at %s/conduit\n' "${SCRIPT_DIR}"
         printf "  and re-run this installer (no download required).\n"
         printf "\n"
         local _dl_confirm
@@ -363,7 +365,7 @@ phase1_validate() {
     _token_preview="${CF_API_TOKEN:0:6}..."
 
     printf "\n"
-    printf "  ${BOLD}Installation summary${RESET}\n"
+    printf '  %sInstallation summary%s\n' "${BOLD}" "${RESET}"
     printf "  %-24s %s\n" "Zone:"        "${CF_ZONE_NAME}"
     printf "  %-24s %s\n" "Hostname:"    "${CF_RECORD_NAME}"
     printf "  %-24s %s\n" "API token:"   "${_token_preview}  (hidden)"
@@ -873,10 +875,10 @@ EOF
 phase3_summary() {
     section "Phase 3 — Installation complete"
     printf "\n"
-    printf "  ${GREEN}OK${RESET} Conduit Control Center is installed and running.\n"
+    printf '  %sOK%s Conduit Control Center is installed and running.\n' "${GREEN}" "${RESET}"
     printf "\n"
-    printf "  ${BOLD}Dashboard URL:${RESET}  https://${CF_RECORD_NAME}/\n"
-    printf "  ${BOLD}Admin user:${RESET}     ${ADMIN_USERNAME}\n"
+    printf '  %sDashboard URL:%s  https://%s/\n' "${BOLD}" "${RESET}" "${CF_RECORD_NAME}"
+    printf '  %sAdmin user:%s     %s\n' "${BOLD}" "${RESET}" "${ADMIN_USERNAME}"
     printf "\n"
     printf "  Service management:\n"
     printf "    systemctl status  conduit-cc\n"
@@ -887,19 +889,19 @@ phase3_summary() {
     printf "  Conduit metrics endpoint:\n"
     printf "    curl http://127.0.0.1:9090/metrics | grep conduit_max_common_clients\n"
     printf "\n"
-    printf "  ${YELLOW}ACTION REQUIRED — Conduit firewall:${RESET}\n"
+    printf '  %sACTION REQUIRED — Conduit firewall:%s\n' "${YELLOW}" "${RESET}"
     printf "    Conduit binds UDP port(s) for inproxy traffic.\n"
     printf "    Discover them:  ss -ulnp | grep conduit\n"
     printf "    Then add rules: ufw allow <port>/udp comment 'Conduit'\n"
     printf "\n"
     printf "  DDNS log:\n"
-    printf "    tail -f ${LOG_DIR}/ddns.log\n"
+    printf '    tail -f %s/ddns.log\n' "${LOG_DIR}"
     printf "\n"
     printf "  If your admin account is locked out:\n"
     printf "    sudo ccc-unlock\n"
     printf "\n"
-    printf "  ${BOLD}Next steps:${RESET}\n"
-    printf "    1. Open https://${CF_RECORD_NAME}/ and log in.\n"
+    printf '  %sNext steps:%s\n' "${BOLD}" "${RESET}"
+    printf '    1. Open https://%s/ and log in.\n' "${CF_RECORD_NAME}"
     printf "    2. Add UFW rules for Conduit UDP port(s):\n"
     printf "         ss -ulnp | grep conduit\n"
     printf "         ufw allow <port>/udp comment 'Conduit'\n"
@@ -907,7 +909,7 @@ phase3_summary() {
     printf "    4. Verify Cloudflare SSL/TLS is set to Full (strict):\n"
     printf "       https://dash.cloudflare.com -> SSL/TLS -> Overview\n"
     printf "\n"
-    printf "  ${CYAN}Docs:${RESET} docs/pre-install.md · docs/tls-setup.md\n"
+    printf '  %sDocs:%s docs/pre-install.md · docs/tls-setup.md\n' "${CYAN}" "${RESET}"
     printf "\n"
 }
 
