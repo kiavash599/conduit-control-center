@@ -28,7 +28,6 @@ from __future__ import annotations
 import bcrypt
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from tests.integration.conftest import KNOWN_PASSWORD, NEW_PASSWORD
 

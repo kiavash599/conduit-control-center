@@ -26,7 +26,6 @@ password-change endpoint can verify the current password field.
 """
 from __future__ import annotations
 
-import pytest
 
 from tests.integration.conftest import KNOWN_PASSWORD, NEW_PASSWORD
 

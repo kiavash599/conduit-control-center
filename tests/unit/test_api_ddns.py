@@ -33,8 +33,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
-import backend.api.ddns as ddns_mod
-from backend.api.ddns import DdnsStatusResponse, _reset_ddns_cache, router
+from backend.api.ddns import _reset_ddns_cache, router
 from backend.dependencies import AuthenticatedUser, get_current_user
 
 

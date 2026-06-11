@@ -11,7 +11,6 @@ Coverage:
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -136,7 +135,6 @@ class TestTouchSession:
 
         # Advance time by patching _now so the second call yields a later value
         from unittest.mock import patch
-        from datetime import datetime, timezone
         later = _now() + timedelta(seconds=2)
         with patch("backend.auth.sessions._now", return_value=later):
             await touch_session(db, sid)

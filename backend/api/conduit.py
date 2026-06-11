@@ -59,7 +59,6 @@ from datetime import datetime, timezone
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.conduit.adapter import (

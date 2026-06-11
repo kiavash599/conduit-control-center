@@ -15,7 +15,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiosqlite
 import pytest
 from fastapi import HTTPException
 
@@ -131,7 +130,6 @@ class TestGetCurrentUser:
 
     async def test_valid_session_returns_user(self, db):
         from backend.auth.sessions import create_session
-        from types import SimpleNamespace
         # get_app_config is used inside backend.auth.sessions, not backend.dependencies
         with patch(
             "backend.auth.sessions.get_app_config",
@@ -143,7 +141,6 @@ class TestGetCurrentUser:
 
     async def test_valid_session_touches_session(self, db):
         from backend.auth.sessions import create_session
-        from types import SimpleNamespace
         with patch(
             "backend.auth.sessions.get_app_config",
             return_value=SimpleNamespace(session_timeout_minutes=60),
@@ -162,7 +159,6 @@ class TestGetCurrentUser:
 class TestRequireAuthHtml:
     async def test_valid_session_returns_user(self, db):
         from backend.auth.sessions import create_session
-        from types import SimpleNamespace
         with patch(
             "backend.auth.sessions.get_app_config",
             return_value=SimpleNamespace(session_timeout_minutes=60),

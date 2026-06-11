@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from backend.config import AppConfig, get_app_config, get_settings
 
