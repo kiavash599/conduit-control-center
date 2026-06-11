@@ -178,10 +178,10 @@ _on_exit() {
         phase5_rollback
         local _rb_rc=$?
         if [[ "${_rb_rc}" -eq 0 ]]; then
-            printf '\n%sRollback succeeded.%s ' "${GREEN}" "${RESET}" >&2
+            printf '\n%bRollback succeeded.%b ' "${GREEN}" "${RESET}" >&2
             printf "Service is running version %s.\n" "${CURRENT_VERSION}" >&2
         else
-            printf '\n%sRollback failed.%s Manual intervention required.\n' "${RED}" "${RESET}" >&2
+            printf '\n%bRollback failed.%b Manual intervention required.\n' "${RED}" "${RESET}" >&2
             _print_manual_recovery
         fi
         exit 1
@@ -191,7 +191,7 @@ _on_exit() {
 trap '_on_exit' EXIT
 
 _print_manual_recovery() {
-    printf '\n%sManual recovery steps:%s\n' "${BOLD}" "${RESET}" >&2
+    printf '\n%bManual recovery steps:%b\n' "${BOLD}" "${RESET}" >&2
     if [[ -n "${BACKUP_DIR}" ]]; then
         printf "  1. tar -xzf %s/conf.tar.gz -C /\n" \
             "${BACKUP_DIR}" >&2
@@ -956,7 +956,7 @@ phase6_summary() {
     printf "  Backup retained at:\n"
     printf "    %s\n" "${BACKUP_DIR}"
     printf "\n"
-    printf '  %sNot modified during update:%s\n' "${BOLD}" "${RESET}"
+    printf '  %bNot modified during update:%b\n' "${BOLD}" "${RESET}"
     printf "    %-42s%s\n" "${CONF_DIR}/.env" "(credentials and secrets)"
     printf "    %-42s%s\n" "${CONF_DIR}/tls/" "(TLS certificate and private key)"
     printf "    %-42s%s\n" "${CONF_DIR}/config.json" "(operator settings)"
@@ -964,7 +964,7 @@ phase6_summary() {
     printf "    %-42s%s\n" "${LOG_DIR}/" "(logs)"
     printf "    %-42s%s\n" "${CONDUIT_DATA_DIR}/data/conduit_key.json" "(Conduit node identity — never touched)"
     printf "\n"
-    printf '  %sPost-update review (optional):%s\n' "${BOLD}" "${RESET}"
+    printf '  %bPost-update review (optional):%b\n' "${BOLD}" "${RESET}"
     printf "    New config options: diff %s/config.example.json %s/config.json\n" \
         "${APP_DIR}" "${CONF_DIR}"
     printf "    Release notes:      cat %s/CHANGELOG.md\n" "${APP_DIR}"
