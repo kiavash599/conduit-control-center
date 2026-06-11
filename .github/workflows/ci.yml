@@ -45,8 +45,10 @@ jobs:
       - name: Install dev dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Copy example env file
-        run: cp .env.example .env
+      - name: Prepare .env for tests
+        run: |
+          cp .env.example .env
+          sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=$(python -c 'import secrets; print(secrets.token_hex(32))')|" .env
 
       - name: Run unit tests with coverage
         run: |
