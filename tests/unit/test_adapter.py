@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import urllib.error
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -262,36 +262,61 @@ class TestGetLastChanged:
 
 
 # ---------------------------------------------------------------------------
-# start() / stop() / restart() — inject _control_action
+# start() / stop() / restart() — exercise the REAL _control_action
 # ---------------------------------------------------------------------------
 
 
 class TestControlActions:
     """
-    _control_action is referenced in adapter.py but not yet implemented.
-    We inject a mock to cover the three thin wrapper functions.
+    Drive the real _control_action through start()/stop()/restart() by mocking
+    only its boundaries (_run for the systemctl call, get_status for the poll).
+    The helper is NOT injected — if it is removed again, these tests fail
+    instead of silently passing (regression guard for the F821 defect).
     """
 
-    @pytest.fixture(autouse=True)
-    def inject_control_action(self):
-        async def _mock_action(action: str, target: str) -> dict:
-            return {"success": True, "status": target, "message": f"{action} ok"}
-        adapter_mod._control_action = _mock_action  # type: ignore[attr-defined]
-        yield
-        if hasattr(adapter_mod, "_control_action"):
-            del adapter_mod._control_action  # type: ignore[attr-defined]
+    async def test_control_action_exists(self):
+        # Regression guard: the production helper must be defined.
+        assert asyncio.iscoroutinefunction(adapter_mod._control_action)
 
-    async def test_start_calls_action_with_running(self):
-        result = await start()
-        assert result["status"] == "running"
+    async def test_start_runs_systemctl_and_waits_for_running(self):
+        with patch("backend.conduit.adapter._run") as mock_run, \
+             patch("backend.conduit.adapter.get_status") as mock_status:
+            mock_run.return_value = (0, "", "")
+            mock_status.return_value = "running"
+            result = await start()
+        mock_run.assert_awaited_once_with(["sudo", "systemctl", "start", "conduit"])
+        assert result == {
+            "success": True,
+            "status": "running",
+            "message": "Conduit start successful.",
+        }
 
-    async def test_stop_calls_action_with_stopped(self):
-        result = await stop()
+    async def test_stop_runs_systemctl_and_waits_for_stopped(self):
+        with patch("backend.conduit.adapter._run") as mock_run, \
+             patch("backend.conduit.adapter.get_status") as mock_status:
+            mock_run.return_value = (0, "", "")
+            mock_status.return_value = "stopped"
+            result = await stop()
+        mock_run.assert_awaited_once_with(["sudo", "systemctl", "stop", "conduit"])
+        assert result["success"] is True
         assert result["status"] == "stopped"
 
-    async def test_restart_calls_action_with_running(self):
-        result = await restart()
+    async def test_restart_runs_systemctl_and_waits_for_running(self):
+        with patch("backend.conduit.adapter._run") as mock_run, \
+             patch("backend.conduit.adapter.get_status") as mock_status:
+            mock_run.return_value = (0, "", "")
+            mock_status.return_value = "running"
+            result = await restart()
+        mock_run.assert_awaited_once_with(["sudo", "systemctl", "restart", "conduit"])
         assert result["status"] == "running"
+
+    async def test_permission_denied_propagates(self):
+        # Non-zero rc + permission-denied stderr -> ConduitPermissionError,
+        # raised before any polling.
+        with patch("backend.conduit.adapter._run") as mock_run:
+            mock_run.return_value = (1, "", "permission denied")
+            with pytest.raises(ConduitPermissionError):
+                await start()
 
 
 # ---------------------------------------------------------------------------

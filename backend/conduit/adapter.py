@@ -411,6 +411,117 @@ async def get_last_changed() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Shared implementation for the state-changing actions (sudo required)
+# ---------------------------------------------------------------------------
+
+
+async def _control_action(action: str, desired_status: ConduitStatus) -> dict:
+    """
+    Run 'sudo systemctl <action> <service>' then poll for desired_status.
+
+    sudo is prepended here -- and ONLY here. Read-only functions (get_status,
+    get_last_changed) call systemctl directly without sudo.
+
+    Parameters
+    ----------
+    action         : "start" | "stop" | "restart"
+    desired_status : ConduitStatus to wait for after the command
+
+    Returns
+    -------
+    dict with keys:
+        success : bool
+        status  : ConduitStatus  (final observed status)
+        message : str
+
+    Raises
+    ------
+    ConduitPermissionError
+        sudo denied the command. Most likely cause: the sudoers rule in
+        /etc/sudoers.d/conduit-cc is missing or has the wrong service name.
+        Remember: the service name in config.json must exactly match the
+        name in the sudoers rule. If you change one, change the other and
+        re-run install.sh.
+    ConduitAdapterError
+        systemctl returned a non-permission failure (e.g. service not found,
+        dependency failure).
+    """
+    service = _service_name()
+    logger.info("Conduit adapter: sudo systemctl %r %r", action, service)
+
+    # sudo is prepended here intentionally. See module docstring for the
+    # required sudoers rule and the service-name coupling requirement.
+    returncode, _stdout, stderr = await _run(
+        ["sudo", "systemctl", action, service]
+    )
+
+    if returncode != 0:
+        if _check_permission_denied(returncode, stderr):
+            logger.error(
+                "sudo systemctl %r %r: permission denied (rc=%d, stderr=%r). "
+                "Check /etc/sudoers.d/conduit-cc -- service name in the rule "
+                "must match conduit_service_name in config.json (%r).",
+                action, service, returncode, stderr, service,
+            )
+            raise ConduitPermissionError(
+                f"Insufficient privilege to {action} the Conduit service. "
+                "Run install.sh to configure the required sudoers rule, "
+                "or verify that the service name in config.json matches "
+                "the name in /etc/sudoers.d/conduit-cc."
+            )
+        logger.error(
+            "sudo systemctl %r %r failed (rc=%d, stderr=%r)",
+            action, service, returncode, stderr,
+        )
+        raise ConduitAdapterError(
+            f"Failed to {action} the Conduit service. "
+            "Check server logs for details."
+        )
+
+    # Read timeout from config; operator-configurable via conduit_action_timeout_seconds in config.json.
+    timeout_s: float = get_app_config().conduit_action_timeout_seconds
+
+    # Poll for desired_status up to timeout_s.
+    elapsed = 0.0
+    final_status: ConduitStatus = "error"
+
+    while elapsed < timeout_s:
+        await asyncio.sleep(_POLL_INTERVAL_S)
+        elapsed += _POLL_INTERVAL_S
+        try:
+            final_status = await get_status()
+        except ConduitAdapterError:
+            # Transient error during poll -- keep waiting
+            continue
+
+        if final_status == desired_status:
+            logger.info(
+                "Conduit %r succeeded: status=%r after %.1fs",
+                action, final_status, elapsed,
+            )
+            return {
+                "success": True,
+                "status": final_status,
+                "message": f"Conduit {action} successful.",
+            }
+
+    # Timeout: command was sent but desired state not reached.
+    logger.warning(
+        "Conduit %r timed out after %.1fs: final_status=%r (wanted %r)",
+        action, elapsed, final_status, desired_status,
+    )
+    return {
+        "success": False,
+        "status": final_status,
+        "message": (
+            f"Conduit {action} command was sent but the service did not "
+            f"reach '{desired_status}' within {timeout_s:.0f}s. "
+            f"Current status: '{final_status}'."
+        ),
+    }
+
+
 async def start() -> dict:
     """
     Start the Conduit service and wait up to conduit_action_timeout_seconds (config.json) for "running".
