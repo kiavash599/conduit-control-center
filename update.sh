@@ -77,6 +77,7 @@ readonly HEALTH_INTERVAL=5
 # Psiphon Conduit — must match install.sh constants (Issue #45)
 # Bump CONDUIT_VERSION only after the new release has been validated with CCC.
 readonly CONDUIT_VERSION="2.0.0"
+# shellcheck disable=SC2034  # mirrors install.sh constants (Issue #45); unused in update.sh
 readonly CONDUIT_USER="conduit"
 readonly CONDUIT_BIN_DIR="/opt/conduit"
 readonly CONDUIT_DATA_DIR="/var/lib/conduit"
@@ -177,10 +178,10 @@ _on_exit() {
         phase5_rollback
         local _rb_rc=$?
         if [[ "${_rb_rc}" -eq 0 ]]; then
-            printf "\n${GREEN}Rollback succeeded.${RESET} " >&2
+            printf '\n%sRollback succeeded.%s ' "${GREEN}" "${RESET}" >&2
             printf "Service is running version %s.\n" "${CURRENT_VERSION}" >&2
         else
-            printf "\n${RED}Rollback failed.${RESET} Manual intervention required.\n" >&2
+            printf '\n%sRollback failed.%s Manual intervention required.\n' "${RED}" "${RESET}" >&2
             _print_manual_recovery
         fi
         exit 1
@@ -190,7 +191,7 @@ _on_exit() {
 trap '_on_exit' EXIT
 
 _print_manual_recovery() {
-    printf "\n${BOLD}Manual recovery steps:${RESET}\n" >&2
+    printf '\n%sManual recovery steps:%s\n' "${BOLD}" "${RESET}" >&2
     if [[ -n "${BACKUP_DIR}" ]]; then
         printf "  1. tar -xzf %s/conf.tar.gz -C /\n" \
             "${BACKUP_DIR}" >&2
@@ -877,10 +878,11 @@ phase5_rollback() {
                 > "${NGINX_AVAILABLE}" 2>/dev/null; then
             info "nginx config re-applied"
             if nginx -t 2>/dev/null; then
-                systemctl is-active --quiet nginx 2>/dev/null \
-                    && systemctl reload nginx 2>/dev/null \
-                    && info "nginx reloaded" \
-                    || true
+                if systemctl is-active --quiet nginx 2>/dev/null; then
+                    if systemctl reload nginx 2>/dev/null; then
+                        info "nginx reloaded"
+                    fi
+                fi
             else
                 warn "nginx -t failed after rollback - check config manually"
             fi
@@ -954,7 +956,7 @@ phase6_summary() {
     printf "  Backup retained at:\n"
     printf "    %s\n" "${BACKUP_DIR}"
     printf "\n"
-    printf "  ${BOLD}Not modified during update:${RESET}\n"
+    printf '  %sNot modified during update:%s\n' "${BOLD}" "${RESET}"
     printf "    %-42s%s\n" "${CONF_DIR}/.env" "(credentials and secrets)"
     printf "    %-42s%s\n" "${CONF_DIR}/tls/" "(TLS certificate and private key)"
     printf "    %-42s%s\n" "${CONF_DIR}/config.json" "(operator settings)"
@@ -962,7 +964,7 @@ phase6_summary() {
     printf "    %-42s%s\n" "${LOG_DIR}/" "(logs)"
     printf "    %-42s%s\n" "${CONDUIT_DATA_DIR}/data/conduit_key.json" "(Conduit node identity — never touched)"
     printf "\n"
-    printf "  ${BOLD}Post-update review (optional):${RESET}\n"
+    printf '  %sPost-update review (optional):%s\n' "${BOLD}" "${RESET}"
     printf "    New config options: diff %s/config.example.json %s/config.json\n" \
         "${APP_DIR}" "${CONF_DIR}"
     printf "    Release notes:      cat %s/CHANGELOG.md\n" "${APP_DIR}"
