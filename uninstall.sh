@@ -143,7 +143,7 @@ phase0_confirm() {
     section "Conduit Control Center — Uninstaller"
     printf "\n"
 
-    printf "  ${BOLD}Will remove:${RESET}\n"
+    printf '  %sWill remove:%s\n' "${BOLD}" "${RESET}"
     printf "    %s\n" "${APP_DIR}/  (application files and Python venv)"
     printf "    %s\n" "${SYSTEMD_UNIT}"
     printf "    %s\n" "${NGINX_AVAILABLE}"
@@ -160,7 +160,7 @@ phase0_confirm() {
     if "${PURGE}"; then
         # Correction C: name origin.key and SESSION_SECRET explicitly so the
         # operator understands exactly what is unrecoverable.
-        printf "  ${RED}${BOLD}--purge: will also permanently delete:${RESET}\n"
+        printf '  %s%s--purge: will also permanently delete:%s\n' "${RED}" "${BOLD}" "${RESET}"
         printf "    %-52s %s\n" \
             "${CONF_DIR}/tls/origin.key" "<-- TLS private key  (UNRECOVERABLE)"
         printf "    %-52s %s\n" \
@@ -174,22 +174,22 @@ phase0_confirm() {
             "${CONDUIT_DATA_DIR}/" "<-- conduit_key.json  (UNRECOVERABLE — resets broker reputation)"
         printf "    %-52s\n" "conduit system user"
         printf "\n"
-        printf "  ${BOLD}UFW rules (22/80/443) are NOT removed.${RESET}\n"
+        printf '  %sUFW rules (22/80/443) are NOT removed.%s\n' "${BOLD}" "${RESET}"
         printf "\n"
-        printf "  ${RED}This data CANNOT be recovered.${RESET}\n"
+        printf '  %sThis data CANNOT be recovered.%s\n' "${RED}" "${RESET}"
         printf "\n"
         local _confirm
-        printf "  Type '${BOLD}yes${RESET}' to confirm permanent deletion: "
+        printf '  Type '\''%syes%s'\'' to confirm permanent deletion: ' "${BOLD}" "${RESET}"
         read -r _confirm
         [[ "${_confirm}" == "yes" ]] || die "Purge cancelled. No changes made."
     else
-        printf "  ${BOLD}Will preserve (use --purge to remove):${RESET}\n"
+        printf '  %sWill preserve (use --purge to remove):%s\n' "${BOLD}" "${RESET}"
         printf "    %s\n" "${CONF_DIR}/  (TLS cert and key, .env, config.json, ccc.db)"
         printf "    %s\n" "${LOG_DIR}/  (DDNS and application logs)"
         printf "    %s\n" "conduit-cc system user"
         printf "    %s\n" "${CONDUIT_DATA_DIR}/  (conduit_key.json — Conduit node identity)"
         printf "\n"
-        printf "  ${BOLD}UFW rules (22/80/443) are NOT removed.${RESET}\n"
+        printf '  %sUFW rules (22/80/443) are NOT removed.%s\n' "${BOLD}" "${RESET}"
         printf "\n"
         local _confirm
         read -r -p "  Continue? [y/N]: " _confirm
@@ -398,8 +398,8 @@ phase4b_conduit_remove() {
     else
         # Standard mode: preserve keypair and user.
         printf "\n"
-        printf "  ${YELLOW}${BOLD}CONDUIT NODE IDENTITY${RESET}\n"
-        printf "  ${CONDUIT_DATA_DIR}/data/conduit_key.json has been PRESERVED.\n"
+        printf '  %s%sCONDUIT NODE IDENTITY%s\n' "${YELLOW}" "${BOLD}" "${RESET}"
+        printf '  %s/data/conduit_key.json has been PRESERVED.\n' "${CONDUIT_DATA_DIR}"
         printf "\n"
         printf "  This file is your Psiphon broker identity keypair.\n"
         printf "  Losing it resets your node's broker reputation to zero.\n"
@@ -511,7 +511,7 @@ phase7_summary() {
     else
         printf "  Conduit Control Center has been uninstalled.\n"
         printf "\n"
-        printf "  ${BOLD}Preserved (use --purge to remove):${RESET}\n"
+        printf '  %sPreserved (use --purge to remove):%s\n' "${BOLD}" "${RESET}"
         printf "    %s\n" "${CONF_DIR}/  TLS cert and key, .env, config.json, ccc.db"
         printf "    %s\n" "${LOG_DIR}/  DDNS and application logs"
         printf "    %s\n" "conduit-cc system user"
@@ -527,13 +527,13 @@ phase7_summary() {
     fi
 
     printf "\n"
-    printf "  ${BOLD}UFW rules were NOT modified.${RESET}\n"
+    printf '  %sUFW rules were NOT modified.%s\n' "${BOLD}" "${RESET}"
     printf "  Review with:  sudo ufw status\n"
     printf "  To close ports 80 and 443 if no longer needed:\n"
     printf "    sudo ufw delete allow 80/tcp\n"
     printf "    sudo ufw delete allow 443/tcp\n"
     printf "\n"
-    printf "  ${BOLD}nginx default site:${RESET} not restored automatically.\n"
+    printf '  %snginx default site:%s not restored automatically.\n' "${BOLD}" "${RESET}"
     printf "  If install.sh removed it, restore with:\n"
     printf "    sudo ln -sf /etc/nginx/sites-available/default \\\\\n"
     printf "                /etc/nginx/sites-enabled/default\n"
