@@ -87,8 +87,34 @@ API tokens are never written to it.
 - **CSRF protection.** A double-submit cookie pattern guards all
   state-changing endpoints.
 - **Hardening.** Nginx sends a strict Content-Security-Policy and related
-  security headers; the Conduit and CCC systemd units run with least-privilege
-  sandboxing (`ProtectSystem=strict`, `PrivateTmp=yes`, `NoNewPrivileges=yes`).
+  security headers. The CCC systemd unit runs with least-privilege sandboxing:
+  `ProtectSystem=strict`, `ReadWritePaths=/etc/conduit-cc`, `UMask=0077`,
+  `PrivateTmp=yes`, `ProtectHome=yes` (see *Service control privilege* below).
+
+### Service control privilege (v0.1.1)
+
+**CCC v0.1.1 production baseline: verified.** The control buttons
+(start/stop/restart) run `sudo systemctl <action> conduit` as the unprivileged
+`conduit-cc` user.
+
+G14 (control buttons) initially failed with HTTP 503 - the journal showed
+`sudo: The "no new privileges" flag is set, which prevents sudo from running as
+root.` Root cause: several systemd hardening directives (`SystemCallFilter=`,
+`RestrictAddressFamilies=`, `RestrictNamespaces=`, `LockPersonality=`,
+`PrivateDevices=`) *implicitly* enable `NoNewPrivileges=yes`, which blocks
+`sudo`'s setuid elevation.
+
+**Hotfix:** the NNP-implying directives were removed from
+`deployment/conduit-cc.service`. Retained hardening (none implies
+`NoNewPrivileges`): `ProtectSystem=strict`, `ReadWritePaths=/etc/conduit-cc`,
+`UMask=0077`, `PrivateTmp=yes`, `ProtectHome=yes`. This is a deliberate v0.1.x
+trade-off - reduced syscall/namespace sandboxing in exchange for working
+Conduit controls - and is **not** the intended long-term architecture.
+
+**Planned for v1.x (not yet implemented):** replace `sudo`/`systemctl` control
+with polkit + systemd D-Bus (no setuid required), which is compatible with
+`NoNewPrivileges=yes` and allows the stronger hardening directives to be
+restored.
 
 ## Technology stack
 
