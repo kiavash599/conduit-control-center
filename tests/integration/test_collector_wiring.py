@@ -55,6 +55,10 @@ def _cfg(enabled: bool):
         traffic_collector_enabled=enabled,
         traffic_collect_interval_seconds=60.0,
         traffic_gap_threshold_seconds=90.0,
+        # Retention settings added in Step 5 (read by _maybe_start_traffic_collector)
+        traffic_snapshot_retention_days=7,
+        traffic_delta_retention_days=90,
+        traffic_hourly_retention_days=180,
     )
 
 

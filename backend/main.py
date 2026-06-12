@@ -101,6 +101,9 @@ def _maybe_start_traffic_collector(app: FastAPI) -> None:
     collector = TrafficCollector(
         interval_seconds=cfg.traffic_collect_interval_seconds,
         gap_threshold_seconds=cfg.traffic_gap_threshold_seconds,
+        snapshot_retention_days=cfg.traffic_snapshot_retention_days,
+        delta_retention_days=cfg.traffic_delta_retention_days,
+        hourly_retention_days=cfg.traffic_hourly_retention_days,
     )
     app.state.traffic_collector = collector
     app.state.traffic_collector_task = asyncio.create_task(

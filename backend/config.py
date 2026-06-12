@@ -224,6 +224,15 @@ class AppConfig:
         self.traffic_gap_threshold_seconds: float = traffic.get(
             "gap_threshold_seconds", 90.0
         )
+        self.traffic_snapshot_retention_days: int = traffic.get(
+            "snapshot_retention_days", 7
+        )
+        self.traffic_delta_retention_days: int = traffic.get(
+            "delta_retention_days", 90
+        )
+        self.traffic_hourly_retention_days: int = traffic.get(
+            "hourly_retention_days", 180
+        )
 
 
 @lru_cache(maxsize=1)

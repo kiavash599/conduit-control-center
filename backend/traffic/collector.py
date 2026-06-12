@@ -34,6 +34,7 @@ from typing import Awaitable, Callable, Optional
 
 from backend.conduit.errors import ConduitUnreachableError, MetricsContractError
 from backend.traffic import repository as repo
+from backend.traffic import retention
 from backend.traffic.accounting import Epoch, Snapshot, decide
 from backend.traffic.models import CounterReading
 
@@ -77,6 +78,9 @@ class TrafficCollector:
         lock_retries: int = 5,
         lock_retry_delay_seconds: float = 1.0,
         shutdown_budget_seconds: float = 5.0,
+        snapshot_retention_days: int = 7,
+        delta_retention_days: int = 90,
+        hourly_retention_days: int = 180,
         holder_id: Optional[str] = None,
     ) -> None:
         self._metrics_reader = metrics_reader
@@ -89,6 +93,9 @@ class TrafficCollector:
         self._lock_retries = max(1, lock_retries)
         self._lock_retry_delay = lock_retry_delay_seconds
         self._shutdown_budget = shutdown_budget_seconds
+        self._snapshot_days = snapshot_retention_days
+        self._delta_days = delta_retention_days
+        self._hourly_days = hourly_retention_days
         self._holder_id = holder_id or f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
         self._stop = asyncio.Event()
@@ -96,6 +103,7 @@ class TrafficCollector:
         self._prev: Optional[Snapshot] = None
         self._epoch: Optional[Epoch] = None
         self._first_tick = True
+        self._last_prune_day: Optional[str] = None
 
     # -- lazy default resolution (keeps module import light) -----------------
     def _reader(self) -> Callable[[], Awaitable[CounterReading]]:
@@ -238,6 +246,29 @@ class TrafficCollector:
         self._epoch = Epoch(id=epoch_id, build_rev=build_rev)
         self._first_tick = False
 
+        # Prune on a slow (daily) cadence, in its own transaction.
+        await self._maybe_prune(now)
+
+    async def _maybe_prune(self, now: str) -> None:
+        """Run retention pruning once per UTC day (best-effort, isolated)."""
+        day = now[:10]
+        if day == self._last_prune_day:
+            return
+        try:
+            async with self._dbf()() as db:
+                await self._apply_pragmas(db)
+                await db.execute("BEGIN IMMEDIATE")
+                await retention.prune(
+                    db, now_ts=now,
+                    snapshot_days=self._snapshot_days,
+                    delta_days=self._delta_days,
+                    hourly_days=self._hourly_days,
+                )
+                await db.commit()
+            self._last_prune_day = day
+        except Exception:  # noqa: BLE001 - pruning must never crash the loop
+            logger.warning("traffic collector: prune failed", exc_info=False)
+
     async def _persist(self, decision, now: str) -> tuple[int, int]:
         """Success path: one BEGIN IMMEDIATE transaction. Raises on DB failure."""
         current_epoch_id = self._epoch.id if self._epoch else None
@@ -248,6 +279,15 @@ class TrafficCollector:
                 db, decision,
                 current_epoch_id=current_epoch_id,
                 holder_id=self._holder_id, now_ts=now,
+            )
+            # Rollups + lazy lifetime checkpoint, atomic with the snapshot/delta.
+            await retention.apply_tick(
+                db,
+                counted=bool(decision.delta.counted),
+                ts_utc=decision.delta.ts_utc,
+                bytes_up_delta=decision.delta.bytes_up_delta,
+                bytes_down_delta=decision.delta.bytes_down_delta,
+                now_ts=now,
             )
             await db.commit()
         return snapshot_id, epoch_id
