@@ -119,6 +119,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from backend.config import get_app_config
+from backend.traffic.models import CounterReading
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,31 @@ class ConduitPermissionError(ConduitAdapterError):
     API callers should return HTTP 503 with a message indicating that the
     server is not configured for service control, so operators know to
     check the sudoers rule rather than the service itself.
+    """
+
+
+class ConduitUnreachableError(ConduitAdapterError):
+    """
+    Raised by ``read_counters()`` when the Conduit Prometheus endpoint cannot
+    be reached (connection refused, timeout, DNS, or a non-2xx HTTP status).
+
+    Distinct from ``MetricsContractError``: this means "Conduit / the metrics
+    server is down or unreachable", not "the metrics are malformed". The
+    traffic collector treats this as a scrape gap (no delta, health failure),
+    not a metric-format problem.
+    """
+
+
+class MetricsContractError(ConduitAdapterError):
+    """
+    Raised by ``read_counters()`` when a *required* Conduit metric
+    (``conduit_bytes_uploaded`` / ``conduit_bytes_downloaded`` /
+    ``conduit_uptime_seconds``) is missing from an otherwise-successful
+    scrape, or its value cannot be parsed as a number.
+
+    This signals that Conduit's metrics format has changed (an upgrade
+    signal). The collector flags it (``parse_gap``) rather than fabricating a
+    zero value, which would corrupt the delta ledger.
     """
 
 
@@ -892,3 +918,155 @@ async def get_traffic_metrics() -> dict | None:
         downloaded,
     )
     return {"bytes_uploaded": uploaded, "bytes_downloaded": downloaded}
+
+
+# ---------------------------------------------------------------------------
+# Public API -- typed counter reader for the traffic collector (P0 Step 0)
+# ---------------------------------------------------------------------------
+#
+# read_counters() is the single, typed input to the traffic persistence
+# collector. Unlike get_traffic_metrics() (which is forgiving and returns
+# None/partial data for the dashboard), read_counters() is strict:
+#   - required metrics missing/unparseable        -> MetricsContractError
+#   - endpoint unreachable / non-2xx HTTP status  -> ConduitUnreachableError
+# It never coerces a missing required counter to 0, because a fabricated zero
+# would corrupt the delta ledger. It does not own ts/seq -- the collector
+# assigns those.
+
+# Additional Conduit metric names (see _METRIC_BYTES_* above).
+_METRIC_UPTIME_SECONDS = "conduit_uptime_seconds"
+_METRIC_BUILD_INFO     = "conduit_build_info"
+_METRIC_IS_LIVE        = "conduit_is_live"
+
+# build_rev is a label on the conduit_build_info gauge:
+#   conduit_build_info{build_repo="...",build_rev="8531118",...} 1
+_BUILD_REV_PATTERN: re.Pattern[str] = re.compile(r'build_rev="([^"]*)"')
+
+
+def _extract_gauge_raw(text: str, metric_name: str) -> str | None:
+    """
+    Return the raw value token of an unlabelled gauge line, or None if absent.
+
+    Same matching rule as ``_parse_prometheus_gauge`` (``"<name> <value>"``,
+    skipping labelled ``<name>{...}`` and ``#`` comment lines) but returns the
+    raw string so the caller can decide int vs float parsing.
+    """
+    prefix = metric_name + " "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            parts = line.split()
+            if len(parts) >= 2:
+                return parts[1]
+    return None
+
+
+def _require_int(text: str, metric_name: str) -> int:
+    """Parse a required cumulative byte counter; raise MetricsContractError on miss."""
+    raw = _extract_gauge_raw(text, metric_name)
+    if raw is None:
+        raise MetricsContractError(
+            f"Required Conduit metric '{metric_name}' is missing from the "
+            "metrics response."
+        )
+    try:
+        return int(float(raw))
+    except (ValueError, OverflowError) as exc:
+        raise MetricsContractError(
+            f"Required Conduit metric '{metric_name}' has an unparseable value."
+        ) from exc
+
+
+def _require_float(text: str, metric_name: str) -> float:
+    """Parse a required float gauge (uptime); raise MetricsContractError on miss."""
+    raw = _extract_gauge_raw(text, metric_name)
+    if raw is None:
+        raise MetricsContractError(
+            f"Required Conduit metric '{metric_name}' is missing from the "
+            "metrics response."
+        )
+    try:
+        return float(raw)
+    except (ValueError, OverflowError) as exc:
+        raise MetricsContractError(
+            f"Required Conduit metric '{metric_name}' has an unparseable value."
+        ) from exc
+
+
+def _extract_build_rev(text: str) -> str | None:
+    """Return the build_rev label from conduit_build_info, or None if absent."""
+    for line in text.splitlines():
+        if line.startswith(_METRIC_BUILD_INFO + "{"):
+            match = _BUILD_REV_PATTERN.search(line)
+            if match:
+                return match.group(1)
+    return None
+
+
+def _parse_is_live(text: str) -> bool | None:
+    """Return conduit_is_live as a bool, or None if absent/unparseable (optional)."""
+    raw = _extract_gauge_raw(text, _METRIC_IS_LIVE)
+    if raw is None:
+        return None
+    try:
+        return bool(int(float(raw)))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _fetch_metrics_text(url: str) -> str:
+    """Blocking urllib fetch of the Prometheus payload (run via asyncio.to_thread)."""
+    with urllib.request.urlopen(url, timeout=_METRICS_TIMEOUT_S) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+async def read_counters() -> CounterReading:
+    """
+    Read Conduit's cumulative byte counters and uptime as a typed CounterReading.
+
+    Scrapes ``http://localhost:{conduit_metrics_port}/metrics`` and extracts:
+      - ``conduit_bytes_uploaded``   -> bytes_up        (required)
+      - ``conduit_bytes_downloaded`` -> bytes_down      (required)
+      - ``conduit_uptime_seconds``   -> uptime_seconds  (required, float)
+      - ``conduit_build_info``       -> build_rev       (optional, None if absent)
+      - ``conduit_is_live``          -> is_live         (optional, None if absent)
+
+    Returns
+    -------
+    CounterReading
+
+    Raises
+    ------
+    ConduitUnreachableError
+        The metrics endpoint could not be reached (connection refused, timeout,
+        or a non-2xx HTTP status). HTTPError is a URLError subclass and is
+        therefore covered here.
+    MetricsContractError
+        A required metric was missing or unparseable. A fabricated zero is
+        never returned, because it would corrupt the delta ledger.
+    """
+    port = get_app_config().conduit_metrics_port
+    url = f"http://localhost:{port}/metrics"
+
+    try:
+        text = await asyncio.to_thread(_fetch_metrics_text, url)
+    except (urllib.error.URLError, OSError) as exc:
+        # URLError covers HTTPError (non-2xx) and connection failures;
+        # OSError covers socket-level errors / timeouts not wrapped by urllib.
+        logger.debug("read_counters: metrics endpoint %r unreachable (%s)", url, exc)
+        raise ConduitUnreachableError(
+            "Conduit metrics endpoint is unreachable."
+        ) from exc
+
+    bytes_up = _require_int(text, _METRIC_BYTES_UPLOADED)
+    bytes_down = _require_int(text, _METRIC_BYTES_DOWNLOADED)
+    uptime_seconds = _require_float(text, _METRIC_UPTIME_SECONDS)
+    build_rev = _extract_build_rev(text)
+    is_live = _parse_is_live(text)
+
+    return CounterReading(
+        bytes_up=bytes_up,
+        bytes_down=bytes_down,
+        uptime_seconds=uptime_seconds,
+        build_rev=build_rev,
+        is_live=is_live,
+    )
