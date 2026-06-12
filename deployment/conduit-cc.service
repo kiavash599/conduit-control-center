@@ -83,73 +83,43 @@ PrivateTmp=yes
 # accesses these paths.
 ProtectHome=yes
 
-# PrivateDevices=yes hides physical block devices and TTYs.  Pseudo-devices
-# (/dev/null, /dev/urandom, /dev/zero) are preserved.  Python's secrets
-# module and the conduit binary both use /dev/urandom — these are preserved.
-PrivateDevices=yes
-
-# RestrictAddressFamilies restricts which socket families the service and
-# all its child processes may use:
+# NoNewPrivileges is deliberately NOT enabled, and the hardening directives
+# that *implicitly* enable it have been REMOVED for v0.1.x.
 #
-#   AF_INET   — uvicorn binds 127.0.0.1:8000; urllib fetches localhost:9090
-#               for Conduit metrics
-#   AF_INET6  — defensive inclusion; Python DNS may use IPv6 for localhost
-#               resolution even when binding to 127.0.0.1
-#   AF_UNIX   — systemctl communicates with systemd via D-Bus on a Unix
-#               socket (/run/systemd/private/); journalctl uses the journal
-#               socket.  Both are spawned as child processes by the backend.
-#
-# aiosqlite (SQLite) uses file I/O — no socket family needed.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-
-# LockPersonality=yes prevents changing the execution domain (personality(2)
-# syscall).  Python, uvicorn, and all child processes run under the standard
-# Linux ABI.
-LockPersonality=yes
-
-# RestrictNamespaces=yes blocks namespace creation (clone with CLONE_NEWNS,
-# CLONE_NEWPID, CLONE_NEWNET, etc.).  asyncio.create_subprocess_exec uses
-# fork()+exec(), not namespace creation.  Python threads use CLONE_THREAD,
-# which is not a namespace operation and is not blocked.
-RestrictNamespaces=yes
-
-# SystemCallFilter=@system-service allows the syscall set needed by
-# Python/uvicorn/asyncio/aiosqlite:
-#   - fork, clone (thread creation and subprocess spawning)
-#   - execve (subprocesses: systemctl, journalctl, conduit)
-#   - network socket calls
-#   - file I/O
-#   - signals, IPC, clocks, memory management
-# It blocks: ptrace, kexec, mount, iopl, kernel module operations, reboot.
-#
-# This filter is independent of the NoNewPrivileges mechanism.  execve() is
-# allowed by @system-service; the setuid bit on /usr/bin/sudo is honoured
-# because NoNewPrivileges is NOT set (see below).
-SystemCallFilter=@system-service
-
-# NoNewPrivileges=yes is intentionally OMITTED.
-#
-# This directive calls prctl(PR_SET_NO_NEW_PRIVS), which permanently prevents
-# any child process from gaining privilege via the setuid file attribute.
-# backend/conduit/adapter.py calls:
+# Control model: the backend (unprivileged conduit-cc account) starts/stops/
+# restarts conduit.service via the setuid binary /usr/bin/sudo:
 #
 #   ["sudo", "systemctl", "start|stop|restart", "conduit"]
 #
-# sudo depends on the setuid file bit on /usr/bin/sudo to elevate to root.
-# With PR_SET_NO_NEW_PRIVS set, that bit is ignored and sudo fails with
-# "sudo: effective uid is not 0, is /usr/bin/sudo on a filesystem mounted
-# with the 'nosuid' option?".  This would break all Conduit controls.
+# sudo's setuid elevation requires that PR_SET_NO_NEW_PRIVS is NOT set. Per
+# systemd.exec(5), several hardening directives IMPLICITLY set
+# NoNewPrivileges=yes (hence PR_SET_NO_NEW_PRIVS), which silently breaks sudo:
+#   "sudo: The 'no new privileges' flag is set, which prevents sudo from
+#    running as root."
 #
-# Alternatives investigated and ruled out for v0.1:
-#   - AmbientCapabilities=CAP_SETUID: not applicable — sudo uses the file
-#     setuid bit, not the CAP_SETUID syscall capability.
-#   - D-Bus + polkit: correct long-term approach.  Requires a polkit policy
-#     file, a D-Bus client library, and significant adapter rewrite.
-#     Targeted for v1.x.
+# These directives each imply NoNewPrivileges=yes and are therefore OMITTED
+# in v0.1.x (do NOT re-add them while sudo is the control mechanism):
+#   - SystemCallFilter=
+#   - RestrictAddressFamilies=
+#   - RestrictNamespaces=
+#   - LockPersonality=
+#   - PrivateDevices=
+# An explicit "NoNewPrivileges=no" does NOT override the above: the kernel
+# cannot install an unprivileged seccomp filter without no_new_privs, so
+# systemd forces it on whenever any of these directives is present.
 #
-# Risk: without NoNewPrivileges, a compromised conduit-cc process could
-# invoke sudo (within the sudoers rule scope).  The sudoers rule is scoped to
-# three specific systemctl commands only — blast radius is limited.
+# Retained hardening (above) does NOT imply NoNewPrivileges:
+#   ProtectSystem=strict, ReadWritePaths=, UMask=0077, PrivateTmp=yes,
+#   ProtectHome=yes.
+#
+# Residual risk: a compromised conduit-cc process could invoke sudo, but only
+# the three systemctl commands allowed by /etc/sudoers.d/conduit-cc.
+#
+# TODO (v1.x): replace sudo with polkit + systemd D-Bus control. systemctl
+# over D-Bus needs no setuid, so it is compatible with NoNewPrivileges=yes,
+# allowing the omitted SystemCallFilter / Restrict* / Private* directives to
+# be restored. Touches backend/conduit/adapter.py and the install.sh sudoers
+# rule.
 
 [Install]
 WantedBy=multi-user.target
