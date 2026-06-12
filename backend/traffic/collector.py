@@ -7,8 +7,9 @@ The in-process traffic persistence collector (P0 Step 3b).
 A single asyncio task that, once per interval, reads Conduit's counters, runs
 the pure accounting state machine, and persists the result through the
 repository. It enforces single-writer behaviour with an OS advisory lock
-(flock), uses a fresh per-tick connection with ``BEGIN IMMEDIATE``, and isolates
-failures into a separate health-update transaction.
+(flock), uses a fresh per-tick connection whose implicit transaction is
+committed atomically, and isolates failures into a separate health-update
+transaction.
 
 This module is intentionally lean: it imports only ``backend.conduit.errors``
 (dependency-free), the pure ``accounting`` core, and the ``repository`` SQL
@@ -188,8 +189,15 @@ class TrafficCollector:
 
     # -- pragmas / reseed ----------------------------------------------------
     async def _apply_pragmas(self, db) -> None:
-        # Autocommit so the explicit BEGIN IMMEDIATE controls the transaction.
-        db.isolation_level = None
+        # NOTE: do NOT set db.isolation_level here. aiosqlite's isolation_level
+        # property setter mutates the underlying sqlite3 connection from the
+        # event-loop thread rather than aiosqlite's worker thread, which raises
+        # "SQLite objects created in a thread can only be used in that same
+        # thread". We instead rely on aiosqlite's implicit (deferred)
+        # transaction plus commit() for atomicity, and on the flock for
+        # single-writer enforcement. PRAGMAs below are safe -- execute() is
+        # dispatched onto the worker thread. They run before any DML, so
+        # foreign_keys=ON takes effect (it cannot change inside a transaction).
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA busy_timeout=5000")
         await db.execute("PRAGMA foreign_keys=ON")
@@ -257,7 +265,6 @@ class TrafficCollector:
         try:
             async with self._dbf()() as db:
                 await self._apply_pragmas(db)
-                await db.execute("BEGIN IMMEDIATE")
                 await retention.prune(
                     db, now_ts=now,
                     snapshot_days=self._snapshot_days,
@@ -270,11 +277,13 @@ class TrafficCollector:
             logger.warning("traffic collector: prune failed", exc_info=False)
 
     async def _persist(self, decision, now: str) -> tuple[int, int]:
-        """Success path: one BEGIN IMMEDIATE transaction. Raises on DB failure."""
+        """Success path: one implicit transaction committed atomically. Raises on DB failure."""
         current_epoch_id = self._epoch.id if self._epoch else None
         async with self._dbf()() as db:
             await self._apply_pragmas(db)
-            await db.execute("BEGIN IMMEDIATE")
+            # Implicit (deferred) transaction: aiosqlite opens it on the first
+            # write below and commit() makes the whole tick atomic. On any
+            # exception the connection is closed without commit -> rollback.
             snapshot_id, epoch_id = await repo.persist_tick(
                 db, decision,
                 current_epoch_id=current_epoch_id,
