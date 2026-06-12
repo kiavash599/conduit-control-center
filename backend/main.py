@@ -44,6 +44,7 @@ from backend.auth.sessions import (
 from backend._version import APP_VERSION
 from backend.dependencies import AuthRedirect
 from backend.pages import router as pages_router
+from backend.traffic.collector import TrafficCollector
 from backend.api import (
     auth_router,
     conduit_router,
@@ -78,6 +79,58 @@ _STATIC_DIR = _PROJECT_ROOT / "frontend" / "static"
 _TEMPLATES_DIR = _PROJECT_ROOT / "frontend" / "templates"
 
 # ---------------------------------------------------------------------------
+# Traffic persistence collector wiring (P0 Step 3c)
+# ---------------------------------------------------------------------------
+# Ship-dark: the collector starts only when traffic_collector_enabled is true in
+# config.json. The wiring is factored into small helpers so it can be unit
+# tested without driving the full application lifespan.
+
+# How long to wait for a graceful collector stop before cancelling the task.
+# Slightly above the collector's own bounded final-snapshot budget (5 s).
+_COLLECTOR_SHUTDOWN_TIMEOUT_S: float = 8.0
+
+
+def _maybe_start_traffic_collector(app: FastAPI) -> None:
+    """Start the traffic collector as a background task, if enabled."""
+    cfg = get_app_config()
+    app.state.traffic_collector = None
+    app.state.traffic_collector_task = None
+    if not cfg.traffic_collector_enabled:
+        logger.info("Traffic collector disabled by config (ship-dark default)")
+        return
+    collector = TrafficCollector(
+        interval_seconds=cfg.traffic_collect_interval_seconds,
+        gap_threshold_seconds=cfg.traffic_gap_threshold_seconds,
+    )
+    app.state.traffic_collector = collector
+    app.state.traffic_collector_task = asyncio.create_task(
+        collector.run(), name="traffic-collector"
+    )
+    logger.info("Traffic collector started (holder=%s)", collector.holder_id)
+
+
+async def _stop_traffic_collector(app: FastAPI) -> None:
+    """Request a graceful stop, await within budget, then cancel if needed."""
+    task = getattr(app.state, "traffic_collector_task", None)
+    collector = getattr(app.state, "traffic_collector", None)
+    if task is None:
+        return
+    if collector is not None:
+        collector.request_stop()
+    try:
+        await asyncio.wait_for(task, timeout=_COLLECTOR_SHUTDOWN_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    except asyncio.CancelledError:
+        pass
+    logger.info("Traffic collector stopped")
+
+
+# ---------------------------------------------------------------------------
 # Lifespan (startup / shutdown)
 # ---------------------------------------------------------------------------
 
@@ -102,6 +155,9 @@ async def lifespan(app: FastAPI):
         _purge_loop(), name="session-purge"
     )
 
+    # Start the traffic collector (no-op unless explicitly enabled)
+    _maybe_start_traffic_collector(app)
+
     app.state.started_at = time.time()
     logger.info(
         "Startup complete -- listening on port %d",
@@ -115,6 +171,10 @@ async def lifespan(app: FastAPI):
     # "Task was destroyed but it is pending" warnings.
     # ---------------------------------------------------------------------------
     logger.info("Conduit Control Center shutting down")
+
+    # Stop the traffic collector first (graceful, with a bounded final snapshot)
+    await _stop_traffic_collector(app)
+
     purge_task.cancel()
     try:
         await purge_task

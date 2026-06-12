@@ -38,5 +38,12 @@
 
   "ddns": {
     "ip_provider_url": "https://api.ipify.org"
+  },
+
+  "traffic": {
+    "_comment": "Persistent traffic accounting collector. Ship-dark: disabled by default. Set collector_enabled to true to begin recording Conduit byte counters into ccc.db. Aggregate-only; no per-user data. Safe to leave disabled.",
+    "collector_enabled": false,
+    "collect_interval_seconds": 60,
+    "gap_threshold_seconds": 90
   }
 }

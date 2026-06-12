@@ -212,6 +212,19 @@ class AppConfig:
             "ip_provider_url", "https://api.ipify.org"
         )
 
+        # -- Traffic persistence collector (P0) ------------------------------
+        # Ship-dark: the collector starts only when explicitly enabled. A
+        # missing "traffic" section (e.g. an existing install) yields the
+        # disabled default, so there is no behaviour change on upgrade.
+        traffic = data.get("traffic", {})
+        self.traffic_collector_enabled: bool = traffic.get("collector_enabled", False)
+        self.traffic_collect_interval_seconds: float = traffic.get(
+            "collect_interval_seconds", 60.0
+        )
+        self.traffic_gap_threshold_seconds: float = traffic.get(
+            "gap_threshold_seconds", 90.0
+        )
+
 
 @lru_cache(maxsize=1)
 def get_app_config() -> AppConfig:
