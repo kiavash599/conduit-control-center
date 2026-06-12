@@ -34,6 +34,8 @@ from typing import AsyncGenerator
 
 import aiosqlite
 
+from backend.traffic.schema import apply_traffic_schema
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -147,6 +149,9 @@ async def create_tables() -> None:
         await db.execute("PRAGMA foreign_keys=ON")
         for ddl in _TABLE_DDL:
             await db.execute(ddl)
+        # P0 traffic persistence schema (Step 1) -- landed dormant; no collector
+        # runs until the traffic_collector_enabled flag is set in a later step.
+        await apply_traffic_schema(db)
         await db.commit()
     # Tighten permissions after the file (and any sidecars) exist on disk.
     _restrict_db_file_permissions(db_path)
