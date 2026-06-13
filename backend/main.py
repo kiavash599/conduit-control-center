@@ -54,6 +54,7 @@ from backend.api import (
     metrics_router,
     settings_router,
     status_router,
+    traffic_router,
 )
 
 # ---------------------------------------------------------------------------
@@ -239,6 +240,7 @@ app.include_router(metrics_router, prefix="/api/metrics")
 app.include_router(logs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api/settings")
 app.include_router(ddns_router, prefix="/api/ddns")
+app.include_router(traffic_router, prefix="/api/traffic")
 
 # ---------------------------------------------------------------------------
 # Static files
