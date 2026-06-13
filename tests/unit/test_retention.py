@@ -235,3 +235,104 @@ class TestPruning:
         assert counts["deltas"] == 0
         cur = await tdb.execute("SELECT COUNT(*) FROM traffic_delta")
         assert (await cur.fetchone())[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint carry-forward
+# ---------------------------------------------------------------------------
+# Retires the P0 "second UTC checkpoint carry-forward" conditional: exercises the
+# previously-untested branch of write_due_checkpoint where the base comes from a
+# *prior* checkpoint (base = prior_checkpoint.total), not 0. Deterministic — no
+# real UTC midnight required.
+
+
+class TestCheckpointCarryForward:
+    """
+    Days: D1=2026-06-11, D2=2026-06-12, D3=2026-06-13.
+    A 'first tick of day T' has now_ts T 00:00:30Z and checkpoints yesterday=T-1.
+    Counted totals: D1=100/200, D2=30/40, D3=7/8.
+    """
+
+    D1 = "2026-06-11T10:00:00Z"
+    D2 = "2026-06-12T10:00:00Z"
+    D3 = "2026-06-13T10:00:00Z"
+    TICK_D2 = "2026-06-12T00:00:30Z"   # checkpoints yesterday = D1 (base = 0)
+    TICK_D3 = "2026-06-13T00:00:30Z"   # checkpoints yesterday = D2 (base = checkpoint[D1])
+
+    async def _seed(self, db):
+        await _delta(db, self.D1, 60, 120, counted=1)
+        await _delta(db, "2026-06-11T18:00:00Z", 40, 80, counted=1)  # D1 totals 100/200
+        await _delta(db, self.D2, 30, 40, counted=1)
+        await _delta(db, self.D3, 7, 8, counted=1)
+        await db.commit()
+
+    async def _cp(self, db, day):
+        return await _one(
+            db,
+            "SELECT total_bytes_up, total_bytes_down FROM lifetime_checkpoint WHERE day_utc = ?",
+            (day,),
+        )
+
+    async def test_first_checkpoint_uses_base_zero(self, tdb):
+        await self._seed(tdb)
+        wrote = await write_due_checkpoint(tdb, now_ts=self.TICK_D2)
+        await tdb.commit()
+        assert wrote is True
+        cp1 = await self._cp(tdb, "2026-06-11")
+        assert (cp1["total_bytes_up"], cp1["total_bytes_down"]) == (100, 200)
+
+    async def test_carry_forward_uses_prior_checkpoint(self, tdb):
+        await self._seed(tdb)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D2)   # checkpoint[D1] = (100, 200)
+        await tdb.commit()
+        wrote = await write_due_checkpoint(tdb, now_ts=self.TICK_D3)
+        await tdb.commit()
+        assert wrote is True
+        cp1 = await self._cp(tdb, "2026-06-11")
+        cp2 = await self._cp(tdb, "2026-06-12")
+        # carry-forward: checkpoint[D2] == checkpoint[D1] + Σ(D2 counted) == (130, 240)
+        assert (cp2["total_bytes_up"], cp2["total_bytes_down"]) == (130, 240)
+        assert cp2["total_bytes_up"] == cp1["total_bytes_up"] + 30
+        assert cp2["total_bytes_down"] == cp1["total_bytes_down"] + 40
+
+    async def test_lifetime_consistent_after_carry_forward(self, tdb):
+        await self._seed(tdb)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D2)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D3)
+        await tdb.commit()
+        # lifetime = checkpoint[D2](130/240) + Σ(counted, day > D2 == D3 == 7/8) == (137, 248)
+        # which also equals Σ(all counted deltas)
+        assert await compute_lifetime(tdb) == (137, 248)
+
+    async def test_second_checkpoint_idempotent(self, tdb):
+        await self._seed(tdb)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D2)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D3)
+        await tdb.commit()
+        again = await write_due_checkpoint(tdb, now_ts=self.TICK_D3)
+        await tdb.commit()
+        assert again is False
+        cur = await tdb.execute("SELECT COUNT(*) FROM lifetime_checkpoint")
+        assert (await cur.fetchone())[0] == 2   # exactly D1 and D2
+
+    async def test_carry_forward_across_empty_day(self, tdb):
+        await _delta(tdb, self.D1, 100, 200, counted=1)   # no D2 deltas
+        await _delta(tdb, self.D3, 7, 8, counted=1)
+        await tdb.commit()
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D2)   # checkpoint[D1] = (100, 200)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D3)   # checkpoint[D2] = (100,200) + 0
+        await tdb.commit()
+        cp2 = await self._cp(tdb, "2026-06-12")
+        assert (cp2["total_bytes_up"], cp2["total_bytes_down"]) == (100, 200)
+
+    async def test_carry_forward_excludes_uncounted(self, tdb):
+        await _delta(tdb, self.D1, 100, 200, counted=1)
+        await _delta(tdb, self.D2, 30, 40, counted=1)
+        await _delta(tdb, self.D2, 999, 999, counted=0)   # uncounted on D2 must not affect the checkpoint
+        await _delta(tdb, self.D3, 7, 8, counted=1)
+        await tdb.commit()
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D2)
+        await write_due_checkpoint(tdb, now_ts=self.TICK_D3)
+        await tdb.commit()
+        cp2 = await self._cp(tdb, "2026-06-12")
+        assert (cp2["total_bytes_up"], cp2["total_bytes_down"]) == (130, 240)
