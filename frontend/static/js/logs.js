@@ -24,7 +24,7 @@
  * ----------------------
  * GET /api/logs spawns a journalctl subprocess — more expensive than the
  * other dashboard poll endpoints.  The tick function returns immediately
- * if #section-logs is hidden (user is on Overview or Settings).
+ * if the System section is hidden (user is on Dashboard or Settings).
  * This avoids unnecessary subprocess calls on the Raspberry Pi while the
  * user is not actively viewing the log panel.
  *
@@ -81,13 +81,14 @@
 
     /* ------------------------------------------------------------------
        isLogsVisible
-       Returns true when #section-logs is the active (non-hidden) section.
+       Returns true when the section containing the log viewer is the active
+       (non-hidden) section. Since IA-2 the viewer lives in #section-system.
        Reads el.hidden set by dashboard.html's showSection() — no coupling
        to the navigation mechanism itself.
     ------------------------------------------------------------------ */
 
     function isLogsVisible() {
-        var section = el('section-logs');
+        var section = el('section-system');
         return section ? !section.hidden : false;
     }
 
@@ -274,7 +275,7 @@
        Called by startPolling every 30 seconds.
 
        Guards (both must pass before fetching):
-         1. Section visible  — skips if #section-logs is hidden
+         1. Section visible  — skips if #section-system is hidden
          2. At bottom        — skips if user has scrolled up (not at bottom)
             Exception: !hasLoaded — always fetch on first view (before
             any data has loaded), so the viewer is not empty when the
@@ -326,9 +327,9 @@
         }
 
         // hashchange listener: trigger an immediate first-load fetch when
-        // the user navigates to #logs before the next 30-second tick fires.
+        // the user navigates to #system before the next 30-second tick fires.
         // This prevents the viewer from appearing empty for up to 30 seconds
-        // after navigating to the Logs section.
+        // after navigating to the System section.
         window.addEventListener('hashchange', function () {
             if (isLogsVisible() && !hasLoaded) {
                 fetchLogs(true);

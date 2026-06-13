@@ -14,10 +14,12 @@
   Navigation (hash-based, Issue #26)
   ------------------------------------
   Three sections controlled by window.location.hash:
-    #overview  -- node status + system health + traffic (Issues #27-#29)
-    #logs      -- log viewer (Issue #30)
+    #dashboard -- node status + system health + traffic + DDNS (Issues #27-29, 43)
+    #system    -- log viewer (Issue #30)
     #settings  -- change password (Issue #31)
-  Default: #overview (empty or unrecognised hash).
+  Legacy aliases (IA-2 Phase 2.1): #overview -> #dashboard, #logs -> #system.
+  Panel relocation (health/DDNS -> #system) is Phase 2.2, not yet applied.
+  Default: #dashboard (empty or unrecognised hash).
   The hashchange event listener updates the active nav item, visible section,
   and document.title without a page reload.
 
@@ -32,8 +34,8 @@
   Content placeholders
   ---------------------
   Each section <div> is empty. Panel content is injected by:
-    #overview  -- Issues #27 (node status), #28 (metrics), #29 (traffic)
-    #logs      -- Issue #30 (log viewer)
+    #dashboard -- Issues #27 (node status), #28 (metrics), #29 (traffic)
+    #system    -- Issue #30 (log viewer)
     #settings  -- Issue #31 (settings / change password)
 -->
 
@@ -55,10 +57,10 @@
 
         <!-- Navigation -->
         <nav class="nav" aria-label="Dashboard sections">
-            <a href="#overview"
+            <a href="#dashboard"
                class="nav__item"
-               id="nav-overview"
-               data-section="overview"
+               id="nav-dashboard"
+               data-section="dashboard"
                aria-current="false">
                 <!-- Icon: monitor / node -->
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
@@ -68,13 +70,13 @@
                     <path d="M5 13h6M8 11v2" stroke="currentColor"
                           stroke-width="1.5" stroke-linecap="round"/>
                 </svg>
-                Overview
+                Dashboard
             </a>
 
-            <a href="#logs"
+            <a href="#system"
                class="nav__item"
-               id="nav-logs"
-               data-section="logs"
+               id="nav-system"
+               data-section="system"
                aria-current="false">
                 <!-- Icon: list / log lines -->
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
@@ -83,7 +85,7 @@
                           stroke="currentColor" stroke-width="1.5"
                           stroke-linecap="round"/>
                 </svg>
-                Logs
+                System
             </a>
 
             <a href="#settings"
@@ -136,14 +138,14 @@
 
         <!-- Page header (section title updated by JS) -->
         <div class="page-header">
-            <h1 class="page-title" id="page-title">Overview</h1>
+            <h1 class="page-title" id="page-title">Dashboard</h1>
             <p class="page-subtitle text-dim" id="page-subtitle">
-                Node status and system health
+                Contribution status and traffic
             </p>
         </div>
 
-        <!-- ── Section: Overview ──────────────────────────────────────── -->
-        <div id="section-overview" class="section" aria-labelledby="page-title">
+        <!-- ── Section: Dashboard ─────────────────────────────────────── -->
+        <div id="section-dashboard" class="section" aria-labelledby="page-title">
 
             <!--
               Node Status and Control Panel — Issue #27
@@ -520,8 +522,8 @@
 
         </div>
 
-        <!-- ── Section: Logs ─────────────────────────────────────────── -->
-        <div id="section-logs" class="section" aria-labelledby="page-title" hidden>
+        <!-- ── Section: System ───────────────────────────────────────── -->
+        <div id="section-system" class="section" aria-labelledby="page-title" hidden>
 
             <!--
               Log Viewer Panel — Issue #30

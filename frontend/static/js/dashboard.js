@@ -13,8 +13,10 @@
  *
  * Sections
  * --------
- * Hash-based navigation: #overview, #logs, #settings.
- * Default: #overview for empty or unrecognised hash.
+ * Hash-based navigation: #dashboard, #system, #settings.
+ * Default: #dashboard for empty or unrecognised hash.
+ * Legacy aliases (IA-2): #overview -> #dashboard, #logs -> #system
+ * (resolved + canonicalised in getCurrentSection so old links still work).
  * The hashchange event updates active nav state, visible section,
  * and document.title without a page reload or API call.
  *
@@ -45,17 +47,17 @@
        Section metadata
     ------------------------------------------------------------------ */
     var SECTIONS = {
-        overview: {
-            id:       'section-overview',
-            navId:    'nav-overview',
-            title:    'Overview',
-            subtitle: 'Node status and system health',
+        dashboard: {
+            id:       'section-dashboard',
+            navId:    'nav-dashboard',
+            title:    'Dashboard',
+            subtitle: 'Contribution status and traffic',
         },
-        logs: {
-            id:       'section-logs',
-            navId:    'nav-logs',
-            title:    'Logs',
-            subtitle: 'Conduit service log (last 200 lines)',
+        system: {
+            id:       'section-system',
+            navId:    'nav-system',
+            title:    'System',
+            subtitle: 'Host health, connectivity, and logs',
         },
         settings: {
             id:       'section-settings',
@@ -65,7 +67,18 @@
         },
     };
 
-    var DEFAULT_SECTION = 'overview';
+    var DEFAULT_SECTION = 'dashboard';
+
+    /* ------------------------------------------------------------------
+       Legacy hash aliases (IA-2 hash migration).
+       Old bookmarks/deep links keep working: the legacy hash resolves to
+       its new section and the address bar is canonicalised in place
+       (replaceState — no new history entry, no reload, no hashchange).
+    ------------------------------------------------------------------ */
+    var LEGACY_ALIASES = {
+        overview: 'dashboard',
+        logs:     'system',
+    };
 
     /* ------------------------------------------------------------------
        Navigation: show section, update title, mark active nav item
@@ -73,6 +86,12 @@
 
     function getCurrentSection() {
         var hash = (window.location.hash || '').replace('#', '').toLowerCase();
+        if (LEGACY_ALIASES.hasOwnProperty(hash)) {
+            hash = LEGACY_ALIASES[hash];
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, '', '#' + hash);
+            }
+        }
         return SECTIONS[hash] ? hash : DEFAULT_SECTION;
     }
 
