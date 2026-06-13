@@ -953,3 +953,68 @@ a:hover {
     padding: var(--space-4) 0;
     text-align: center;
 }
+
+
+/* ============================================================================
+   D1 PATTERN & STATE VOCABULARY  (IA-1)
+   ----------------------------------------------------------------------------
+   Reusable conventions for the D1 shell restructure (IA-2) and future panels.
+   ADDITIVE ONLY: none of the selectors below are applied by current markup, so
+   this block is inert and changes no rendered output today. Markup adopts these
+   classes during IA-2.
+
+   D1 panel/card pattern catalog (P1-P7) -> existing class combinations:
+     P1 Status card        : .card > .card__header (+ .badge) + .status-meta (+ .btn-group)
+     P2 KPI tile           : .panel-grid > .card (label + value + .progress-bar)
+     P3 Key/value readout  : .card > .status-meta
+     P4 Time-series card   : .card + chart container + range control   (built later)
+     P5 Control card       : .card > form / .btn-group + inline status note
+     P6 Stream/log viewer  : .card > .log-viewer (+ footer)
+     P7 Inline banner      : .ddns-warning-banner pattern (role="alert")
+   New vocabulary introduced here: group headings + the universal panel-state
+   classes (loading / empty-or-disabled / error). "populated" is the default
+   state and needs no class.
+   ============================================================================ */
+
+/* Grouped section stacks: a labelled heading above a group of cards.
+   Formalises the ad-hoc "System Health" group heading used in the dashboard. */
+.group {
+    margin-top: var(--space-8);
+}
+.group:first-child {
+    margin-top: 0;
+}
+.group__heading {
+    margin: 0 0 var(--space-4);
+    font-size: var(--text-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-muted);
+}
+
+/* Universal panel states (D1): loading / populated / empty-or-disabled / error.
+   'populated' is the default and needs no class. */
+
+/* loading: neutral placeholder (e.g. a dimmed "-" before the first response) */
+.is-loading {
+    color: var(--color-text-dim);
+}
+
+/* empty / disabled / not-recording: a centred, muted in-card message block.
+   Used by the future "Lifetime & history" card when the collector is off. */
+.empty-state {
+    padding: var(--space-6) var(--space-4);
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+}
+.empty-state__hint {
+    margin-top: var(--space-2);
+    color: var(--color-text-dim);
+    font-size: var(--text-xs);
+}
+
+/* error: inline, dim danger note (no toast for background polls) */
+.panel-error {
+    color: var(--color-danger);
+    font-size: var(--text-sm);
+}
