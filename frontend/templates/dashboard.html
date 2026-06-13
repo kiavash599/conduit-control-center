@@ -14,11 +14,10 @@
   Navigation (hash-based, Issue #26)
   ------------------------------------
   Three sections controlled by window.location.hash:
-    #dashboard -- node status + system health + traffic + DDNS (Issues #27-29, 43)
-    #system    -- log viewer (Issue #30)
+    #dashboard -- node status + current-run traffic (Issues #27, #29)
+    #system    -- system health + DDNS + logs (Issues #28, #43, #30)
     #settings  -- change password (Issue #31)
-  Legacy aliases (IA-2 Phase 2.1): #overview -> #dashboard, #logs -> #system.
-  Panel relocation (health/DDNS -> #system) is Phase 2.2, not yet applied.
+  Legacy aliases (IA-2): #overview -> #dashboard, #logs -> #system.
   Default: #dashboard (empty or unrecognised hash).
   The hashchange event listener updates the active nav item, visible section,
   and document.title without a page reload.
@@ -31,12 +30,13 @@
   from triggering apiFetch's redirect-to-login logic before the explicit
   logout redirect, which could cause a flash or double-redirect.
 
-  Content placeholders
-  ---------------------
-  Each section <div> is empty. Panel content is injected by:
-    #dashboard -- Issues #27 (node status), #28 (metrics), #29 (traffic)
-    #system    -- Issue #30 (log viewer)
+  Section membership (IA-2.2 — panels relocated per D1)
+  -----------------------------------------------------
+    #dashboard -- Issues #27 (node status), #29 (traffic)
+    #system    -- Issues #28 (metrics), #43 (DDNS), #30 (log viewer)
     #settings  -- Issue #31 (settings / change password)
+  Panel internals and all DOM IDs are unchanged from IA-2.1; only the
+  containing section and a .group / .group__heading wrapper were added.
 -->
 
 {% block title %}Dashboard — Conduit Control Center{% endblock %}
@@ -144,7 +144,7 @@
             </p>
         </div>
 
-        <!-- ── Section: Dashboard ─────────────────────────────────────── -->
+        <!-- ── Section: Dashboard (contribution-first) ────────────────── -->
         <div id="section-dashboard" class="section" aria-labelledby="page-title">
 
             <!--
@@ -240,140 +240,17 @@
             </div><!-- /#node-status-card -->
 
             <!--
-              System Health Panel — Issue #28
-              ------------------------------------------
-              JS: frontend/static/js/metrics.js (loaded in the scripts block)
-              API: GET /api/metrics/system (polled every 10 s via startPolling)
-
-              DOM IDs consumed by metrics.js:
-                metric-cpu-value    — CPU usage percentage text
-                metric-cpu-bar      — CPU progress bar fill
-                metric-ram-value    — RAM usage percentage text
-                metric-ram-detail   — RAM "used / total" secondary label
-                metric-ram-bar      — RAM progress bar fill
-                metric-disk-value   — Disk usage percentage text
-                metric-disk-detail  — Disk "used / total" secondary label
-                metric-disk-bar     — Disk progress bar fill
-                metric-temp-value   — CPU temperature text (or "N/A")
-                metric-temp-bar     — Temp progress bar fill (0% when null)
-            -->
-            <div id="system-health-panel" class="mt-8">
-
-                <h2 class="font-semi text-muted mb-4">System Health</h2>
-
-                <div class="panel-grid">
-
-                    <!-- ── CPU ──────────────────────────────── -->
-                    <div class="card">
-                        <p class="text-xs text-muted font-medium">CPU</p>
-                        <p class="text-2xl font-semi mt-2"
-                           id="metric-cpu-value"
-                           aria-live="polite"
-                           aria-atomic="true">—</p>
-                        <!--
-                          No secondary detail row for CPU:
-                          a percentage is self-contained and the absolute
-                          core-count adds no actionable information here.
-                        -->
-                        <div class="progress-bar mt-2"
-                             role="progressbar"
-                             aria-label="CPU usage"
-                             aria-valuenow="0"
-                             aria-valuemin="0"
-                             aria-valuemax="100">
-                            <div class="progress-bar__fill"
-                                 id="metric-cpu-bar"></div>
-                        </div>
-                    </div>
-
-                    <!-- ── RAM ──────────────────────────────── -->
-                    <div class="card">
-                        <p class="text-xs text-muted font-medium">RAM</p>
-                        <p class="text-2xl font-semi mt-2"
-                           id="metric-ram-value"
-                           aria-live="polite"
-                           aria-atomic="true">—</p>
-                        <!--
-                          Secondary row shows absolute "used / total" values.
-                          85 % means different things on 1 GB vs 4 GB;
-                          the absolute figure makes it actionable.
-                        -->
-                        <p class="text-xs text-dim mt-1"
-                           id="metric-ram-detail"
-                           aria-label="RAM used and total"></p>
-                        <div class="progress-bar mt-2"
-                             role="progressbar"
-                             aria-label="RAM usage"
-                             aria-valuenow="0"
-                             aria-valuemin="0"
-                             aria-valuemax="100">
-                            <div class="progress-bar__fill"
-                                 id="metric-ram-bar"></div>
-                        </div>
-                    </div>
-
-                    <!-- ── Disk ─────────────────────────────── -->
-                    <div class="card">
-                        <p class="text-xs text-muted font-medium">Disk</p>
-                        <p class="text-2xl font-semi mt-2"
-                           id="metric-disk-value"
-                           aria-live="polite"
-                           aria-atomic="true">—</p>
-                        <!-- Secondary row: same rationale as RAM above -->
-                        <p class="text-xs text-dim mt-1"
-                           id="metric-disk-detail"
-                           aria-label="Disk used and total"></p>
-                        <div class="progress-bar mt-2"
-                             role="progressbar"
-                             aria-label="Disk usage"
-                             aria-valuenow="0"
-                             aria-valuemin="0"
-                             aria-valuemax="100">
-                            <div class="progress-bar__fill"
-                                 id="metric-disk-bar"></div>
-                        </div>
-                    </div>
-
-                    <!-- ── CPU Temperature ───────────────────── -->
-                    <div class="card">
-                        <p class="text-xs text-muted font-medium">CPU Temp</p>
-                        <!--
-                          Shows "N/A" (not "—") when temperature_celsius
-                          is null on a successful API response.  This is
-                          expected on non-Pi hardware and is distinct from
-                          a connection error ("—").  metrics.js handles both.
-                        -->
-                        <p class="text-2xl font-semi mt-2"
-                           id="metric-temp-value"
-                           aria-live="polite"
-                           aria-atomic="true">—</p>
-                        <!--
-                          Bar width mirrors °C value directly (e.g. 52 °C → 52 %).
-                          Threshold colours: amber ≥ 70 °C, red ≥ 80 °C.
-                          Bar is 0 % (invisible) when temperature is null.
-                        -->
-                        <div class="progress-bar mt-2"
-                             role="progressbar"
-                             aria-label="CPU temperature"
-                             aria-valuenow="0"
-                             aria-valuemin="0"
-                             aria-valuemax="100">
-                            <div class="progress-bar__fill"
-                                 id="metric-temp-bar"></div>
-                        </div>
-                    </div>
-
-                </div><!-- /.panel-grid -->
-
-            </div><!-- /#system-health-panel -->
-
-            <!--
               Traffic Counter Widget — Issue #29
               ------------------------------------
               JS: frontend/static/js/traffic.js (loaded in the scripts block)
               API: GET /api/metrics/traffic (polled every 30 s via startPolling)
                    Returns HTTP 501 until Issue #22 is implemented; treated as
                    "no data" silently — no toast shown.
+
+              NOTE (IA-2.2): this remains the current-run traffic widget bound to
+              /api/metrics/traffic. The persistent "Lifetime & history" card built
+              on /api/traffic/* is a later milestone (IA-3 / Traffic Card) — not
+              wired here.
 
               DOM IDs consumed by traffic.js:
                 traffic-sent          — bytes sent in human-readable format
@@ -429,179 +306,318 @@
 
             </div><!-- /#traffic-card -->
 
-            <!--
-              DDNS Status Panel — Issue #43
-              ------------------------------
-              JS: frontend/static/js/ddns.js (loaded in the scripts block)
-              API: GET /api/ddns/status (polled every 60 s via startPolling)
+        </div><!-- /#section-dashboard -->
 
-              DOM IDs consumed by ddns.js:
-                ddns-hostname       — Cloudflare record name (or "—" when unset)
-                ddns-ip             — current public IP registered in Cloudflare
-                ddns-last-updated   — relative time of last DDNS script run
-                ddns-result-badge   — result badge (class swapped per result)
-                ddns-last-message   — human-readable message from DDNS script
-                ddns-warning-banner — shown when consecutive_errors >= 3
-
-              Badge mapping (base.css classes):
-                updated   -> badge--success  (green)
-                no_change -> badge--neutral  (grey)
-                error     -> badge--danger   (red)
-                unknown   -> badge--unknown  (grey)
-
-              Warning banner threshold: consecutive_errors >= 3.
-              No toast on poll failure — silent renderUnavailable() only.
-            -->
-            <div class="card mt-4" id="ddns-status-card">
-
-                <div class="card__header">
-                    <div>
-                        <h2 class="card__title">DDNS Status</h2>
-                        <p class="card__subtitle">Cloudflare DNS automatic update</p>
-                    </div>
-                    <!--
-                      aria-live="polite": screen readers announce badge changes.
-                      aria-atomic="true": announce the full text, not just the diff.
-                      Initial class badge--unknown: rendered before first poll.
-                    -->
-                    <span class="badge badge--unknown"
-                          id="ddns-result-badge"
-                          role="status"
-                          aria-live="polite"
-                          aria-atomic="true">unknown</span>
-                </div>
-
-                <!--
-                  Warning banner — hidden until consecutive_errors >= 3.
-                  Uses CSS variable tokens from base.css — no new classes.
-                  role="alert" announces the banner to screen readers when it
-                  becomes visible (the content change triggers the live region).
-                -->
-                <div id="ddns-warning-banner"
-                     class="ddns-warning-banner"
-                     role="alert"
-                     hidden>
-                    &#9888; DDNS has failed 3+ consecutive times. Your dashboard may become
-                    unreachable. Check <code>/var/log/conduit-cc/ddns.log</code>.
-                </div>
-
-                <dl class="status-meta" aria-label="DDNS status details">
-                    <div class="status-meta__row">
-                        <dt class="status-meta__key">Hostname</dt>
-                        <dd class="status-meta__val"
-                            id="ddns-hostname"
-                            aria-live="polite"
-                            aria-atomic="true">—</dd>
-                    </div>
-                    <div class="status-meta__row">
-                        <dt class="status-meta__key">Current IP</dt>
-                        <dd class="status-meta__val"
-                            id="ddns-ip"
-                            aria-live="polite"
-                            aria-atomic="true"
-                            title="This is the public IP Cloudflare is currently pointing to. If your ISP changes your IP and DDNS fails, this value will be stale.">—</dd>
-                    </div>
-                    <div class="status-meta__row">
-                        <dt class="status-meta__key">Last updated</dt>
-                        <dd class="status-meta__val"
-                            id="ddns-last-updated"
-                            aria-live="polite"
-                            aria-atomic="true">—</dd>
-                    </div>
-                    <div class="status-meta__row">
-                        <dt class="status-meta__key">Last message</dt>
-                        <dd class="status-meta__val"
-                            id="ddns-last-message"
-                            aria-live="polite"
-                            aria-atomic="true">—</dd>
-                    </div>
-                </dl>
-
-            </div><!-- /#ddns-status-card -->
-
-
-        </div>
-
-        <!-- ── Section: System ───────────────────────────────────────── -->
+        <!-- ── Section: System (host health, connectivity, logs) ──────── -->
         <div id="section-system" class="section" aria-labelledby="page-title" hidden>
 
-            <!--
-              Log Viewer Panel — Issue #30
-              -----------------------------
-              JS: frontend/static/js/logs.js (loaded in the scripts block)
-              API: GET /api/logs?limit=200 (polled every 30 s via startPolling)
-
-              Polling is section-aware: the tick skips fetching when this
-              section is hidden, avoiding unnecessary journalctl subprocess
-              calls while the user is on Overview or Settings.
-
-              DOM IDs consumed by logs.js:
-                log-viewer-card   — outer card container
-                log-viewer        — scrollable log output area
-                log-refresh-btn   — manual Refresh button
-                log-scroll-btn    — scroll-to-bottom button (hidden when at bottom)
-                log-line-count    — "N lines" count badge
-
-              XSS safety: logs.js uses textContent exclusively — no innerHTML.
-            -->
-            <div class="card" id="log-viewer-card">
-
-                <!-- Card header: title + manual refresh button -->
-                <div class="card__header">
-                    <div>
-                        <h2 class="card__title">Logs</h2>
-                        <p class="card__subtitle">Conduit service log (last 200 lines)</p>
-                    </div>
-                    <button id="log-refresh-btn"
-                            class="btn btn--secondary btn--sm"
-                            type="button"
-                            aria-label="Refresh log view">
-                        Refresh
-                    </button>
-                </div>
+            <!-- ── Group: System Health (relocated from Dashboard — IA-2.2) ── -->
+            <div class="group">
+                <h2 class="group__heading">System Health</h2>
 
                 <!--
-                  Scrollable monospace log output.
-                  role="log" semantics: announces region to screen readers.
-                  aria-live="off": individual log lines are NOT announced
-                  (would be extremely disruptive for 200 lines).
-                  Log lines are populated by logs.js via textContent — never innerHTML.
+                  System Health Panel — Issue #28
+                  ------------------------------------------
+                  JS: frontend/static/js/metrics.js (loaded in the scripts block)
+                  API: GET /api/metrics/system (polled every 10 s via startPolling)
+
+                  DOM IDs consumed by metrics.js:
+                    metric-cpu-value    — CPU usage percentage text
+                    metric-cpu-bar      — CPU progress bar fill
+                    metric-ram-value    — RAM usage percentage text
+                    metric-ram-detail   — RAM "used / total" secondary label
+                    metric-ram-bar      — RAM progress bar fill
+                    metric-disk-value   — Disk usage percentage text
+                    metric-disk-detail  — Disk "used / total" secondary label
+                    metric-disk-bar     — Disk progress bar fill
+                    metric-temp-value   — CPU temperature text (or "N/A")
+                    metric-temp-bar     — Temp progress bar fill (0% when null)
                 -->
-                <div class="log-viewer"
-                     id="log-viewer"
-                     role="log"
-                     aria-label="Conduit service log output"
-                     aria-live="off">
-                    <!-- Populated by logs.js after first fetch -->
-                </div>
+                <div id="system-health-panel">
 
-                <!-- Footer: line count + scroll-to-bottom button -->
-                <div class="mt-2 flex justify-between items-center">
+                    <div class="panel-grid">
+
+                        <!-- ── CPU ──────────────────────────────── -->
+                        <div class="card">
+                            <p class="text-xs text-muted font-medium">CPU</p>
+                            <p class="text-2xl font-semi mt-2"
+                               id="metric-cpu-value"
+                               aria-live="polite"
+                               aria-atomic="true">—</p>
+                            <!--
+                              No secondary detail row for CPU:
+                              a percentage is self-contained and the absolute
+                              core-count adds no actionable information here.
+                            -->
+                            <div class="progress-bar mt-2"
+                                 role="progressbar"
+                                 aria-label="CPU usage"
+                                 aria-valuenow="0"
+                                 aria-valuemin="0"
+                                 aria-valuemax="100">
+                                <div class="progress-bar__fill"
+                                     id="metric-cpu-bar"></div>
+                            </div>
+                        </div>
+
+                        <!-- ── RAM ──────────────────────────────── -->
+                        <div class="card">
+                            <p class="text-xs text-muted font-medium">RAM</p>
+                            <p class="text-2xl font-semi mt-2"
+                               id="metric-ram-value"
+                               aria-live="polite"
+                               aria-atomic="true">—</p>
+                            <!--
+                              Secondary row shows absolute "used / total" values.
+                              85 % means different things on 1 GB vs 4 GB;
+                              the absolute figure makes it actionable.
+                            -->
+                            <p class="text-xs text-dim mt-1"
+                               id="metric-ram-detail"
+                               aria-label="RAM used and total"></p>
+                            <div class="progress-bar mt-2"
+                                 role="progressbar"
+                                 aria-label="RAM usage"
+                                 aria-valuenow="0"
+                                 aria-valuemin="0"
+                                 aria-valuemax="100">
+                                <div class="progress-bar__fill"
+                                     id="metric-ram-bar"></div>
+                            </div>
+                        </div>
+
+                        <!-- ── Disk ─────────────────────────────── -->
+                        <div class="card">
+                            <p class="text-xs text-muted font-medium">Disk</p>
+                            <p class="text-2xl font-semi mt-2"
+                               id="metric-disk-value"
+                               aria-live="polite"
+                               aria-atomic="true">—</p>
+                            <!-- Secondary row: same rationale as RAM above -->
+                            <p class="text-xs text-dim mt-1"
+                               id="metric-disk-detail"
+                               aria-label="Disk used and total"></p>
+                            <div class="progress-bar mt-2"
+                                 role="progressbar"
+                                 aria-label="Disk usage"
+                                 aria-valuenow="0"
+                                 aria-valuemin="0"
+                                 aria-valuemax="100">
+                                <div class="progress-bar__fill"
+                                     id="metric-disk-bar"></div>
+                            </div>
+                        </div>
+
+                        <!-- ── CPU Temperature ───────────────────── -->
+                        <div class="card">
+                            <p class="text-xs text-muted font-medium">CPU Temp</p>
+                            <!--
+                              Shows "N/A" (not "—") when temperature_celsius
+                              is null on a successful API response.  This is
+                              expected on non-Pi hardware and is distinct from
+                              a connection error ("—").  metrics.js handles both.
+                            -->
+                            <p class="text-2xl font-semi mt-2"
+                               id="metric-temp-value"
+                               aria-live="polite"
+                               aria-atomic="true">—</p>
+                            <!--
+                              Bar width mirrors °C value directly (e.g. 52 °C → 52 %).
+                              Threshold colours: amber ≥ 70 °C, red ≥ 80 °C.
+                              Bar is 0 % (invisible) when temperature is null.
+                            -->
+                            <div class="progress-bar mt-2"
+                                 role="progressbar"
+                                 aria-label="CPU temperature"
+                                 aria-valuenow="0"
+                                 aria-valuemin="0"
+                                 aria-valuemax="100">
+                                <div class="progress-bar__fill"
+                                     id="metric-temp-bar"></div>
+                            </div>
+                        </div>
+
+                    </div><!-- /.panel-grid -->
+
+                </div><!-- /#system-health-panel -->
+            </div><!-- /group: System Health -->
+
+            <!-- ── Group: Connectivity (relocated from Dashboard — IA-2.2) ── -->
+            <div class="group">
+                <h2 class="group__heading">Connectivity</h2>
+
+                <!--
+                  DDNS Status Panel — Issue #43
+                  ------------------------------
+                  JS: frontend/static/js/ddns.js (loaded in the scripts block)
+                  API: GET /api/ddns/status (polled every 60 s via startPolling)
+
+                  DOM IDs consumed by ddns.js:
+                    ddns-hostname       — Cloudflare record name (or "—" when unset)
+                    ddns-ip             — current public IP registered in Cloudflare
+                    ddns-last-updated   — relative time of last DDNS script run
+                    ddns-result-badge   — result badge (class swapped per result)
+                    ddns-last-message   — human-readable message from DDNS script
+                    ddns-warning-banner — shown when consecutive_errors >= 3
+
+                  Badge mapping (base.css classes):
+                    updated   -> badge--success  (green)
+                    no_change -> badge--neutral  (grey)
+                    error     -> badge--danger   (red)
+                    unknown   -> badge--unknown  (grey)
+
+                  Warning banner threshold: consecutive_errors >= 3.
+                  No toast on poll failure — silent renderUnavailable() only.
+                -->
+                <div class="card" id="ddns-status-card">
+
+                    <div class="card__header">
+                        <div>
+                            <h2 class="card__title">DDNS Status</h2>
+                            <p class="card__subtitle">Cloudflare DNS automatic update</p>
+                        </div>
+                        <!--
+                          aria-live="polite": screen readers announce badge changes.
+                          aria-atomic="true": announce the full text, not just the diff.
+                          Initial class badge--unknown: rendered before first poll.
+                        -->
+                        <span class="badge badge--unknown"
+                              id="ddns-result-badge"
+                              role="status"
+                              aria-live="polite"
+                              aria-atomic="true">unknown</span>
+                    </div>
+
                     <!--
-                      Line count: "200 lines" or empty.
-                      textContent set by logs.js — no innerHTML.
+                      Warning banner — hidden until consecutive_errors >= 3.
+                      Uses CSS variable tokens from base.css — no new classes.
+                      role="alert" announces the banner to screen readers when it
+                      becomes visible (the content change triggers the live region).
                     -->
-                    <span class="text-xs text-dim"
-                          id="log-line-count"
-                          aria-live="polite"></span>
+                    <div id="ddns-warning-banner"
+                         class="ddns-warning-banner"
+                         role="alert"
+                         hidden>
+                        &#9888; DDNS has failed 3+ consecutive times. Your dashboard may become
+                        unreachable. Check <code>/var/log/conduit-cc/ddns.log</code>.
+                    </div>
+
+                    <dl class="status-meta" aria-label="DDNS status details">
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Hostname</dt>
+                            <dd class="status-meta__val"
+                                id="ddns-hostname"
+                                aria-live="polite"
+                                aria-atomic="true">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Current IP</dt>
+                            <dd class="status-meta__val"
+                                id="ddns-ip"
+                                aria-live="polite"
+                                aria-atomic="true"
+                                title="This is the public IP Cloudflare is currently pointing to. If your ISP changes your IP and DDNS fails, this value will be stale.">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Last updated</dt>
+                            <dd class="status-meta__val"
+                                id="ddns-last-updated"
+                                aria-live="polite"
+                                aria-atomic="true">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Last message</dt>
+                            <dd class="status-meta__val"
+                                id="ddns-last-message"
+                                aria-live="polite"
+                                aria-atomic="true">—</dd>
+                        </div>
+                    </dl>
+
+                </div><!-- /#ddns-status-card -->
+            </div><!-- /group: Connectivity -->
+
+            <!-- ── Group: Logs (already in System; self-titled card) ──────── -->
+            <div class="group">
+
+                <!--
+                  Log Viewer Panel — Issue #30
+                  -----------------------------
+                  JS: frontend/static/js/logs.js (loaded in the scripts block)
+                  API: GET /api/logs?limit=200 (polled every 30 s via startPolling)
+
+                  Polling is section-aware: the tick skips fetching when the
+                  System section is hidden, avoiding unnecessary journalctl
+                  subprocess calls while the user is on Dashboard or Settings.
+
+                  DOM IDs consumed by logs.js:
+                    log-viewer-card   — outer card container
+                    log-viewer        — scrollable log output area
+                    log-refresh-btn   — manual Refresh button
+                    log-scroll-btn    — scroll-to-bottom button (hidden when at bottom)
+                    log-line-count    — "N lines" count badge
+
+                  XSS safety: logs.js uses textContent exclusively — no innerHTML.
+                -->
+                <div class="card" id="log-viewer-card">
+
+                    <!-- Card header: title + manual refresh button -->
+                    <div class="card__header">
+                        <div>
+                            <h2 class="card__title">Logs</h2>
+                            <p class="card__subtitle">Conduit service log (last 200 lines)</p>
+                        </div>
+                        <button id="log-refresh-btn"
+                                class="btn btn--secondary btn--sm"
+                                type="button"
+                                aria-label="Refresh log view">
+                            Refresh
+                        </button>
+                    </div>
 
                     <!--
-                      Scroll-to-bottom button: hidden when viewer is at the bottom,
-                      visible when user has scrolled up.  logs.js toggles btn.hidden.
-                      Clicking scrolls to bottom and hides the button.
+                      Scrollable monospace log output.
+                      role="log" semantics: announces region to screen readers.
+                      aria-live="off": individual log lines are NOT announced
+                      (would be extremely disruptive for 200 lines).
+                      Log lines are populated by logs.js via textContent — never innerHTML.
                     -->
-                    <button id="log-scroll-btn"
-                            class="btn btn--ghost btn--sm"
-                            type="button"
-                            hidden
-                            aria-label="Scroll to latest log entry">
-                        ↓ Latest
-                    </button>
-                </div>
+                    <div class="log-viewer"
+                         id="log-viewer"
+                         role="log"
+                         aria-label="Conduit service log output"
+                         aria-live="off">
+                        <!-- Populated by logs.js after first fetch -->
+                    </div>
 
-            </div><!-- /#log-viewer-card -->
+                    <!-- Footer: line count + scroll-to-bottom button -->
+                    <div class="mt-2 flex justify-between items-center">
+                        <!--
+                          Line count: "200 lines" or empty.
+                          textContent set by logs.js — no innerHTML.
+                        -->
+                        <span class="text-xs text-dim"
+                              id="log-line-count"
+                              aria-live="polite"></span>
 
-        </div>
+                        <!--
+                          Scroll-to-bottom button: hidden when viewer is at the bottom,
+                          visible when user has scrolled up.  logs.js toggles btn.hidden.
+                          Clicking scrolls to bottom and hides the button.
+                        -->
+                        <button id="log-scroll-btn"
+                                class="btn btn--ghost btn--sm"
+                                type="button"
+                                hidden
+                                aria-label="Scroll to latest log entry">
+                            ↓ Latest
+                        </button>
+                    </div>
+
+                </div><!-- /#log-viewer-card -->
+            </div><!-- /group: Logs -->
+
+        </div><!-- /#section-system -->
 
         <!-- ── Section: Settings ─────────────────────────────────────── -->
         <div id="section-settings" class="section" aria-labelledby="page-title" hidden>
