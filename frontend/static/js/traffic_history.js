@@ -105,6 +105,9 @@
 
     /* ===================== SVG chart helpers (TC-2b) ===================== */
 
+    // Fixed chart height (px) — stable across viewports (UX review TC-2c).
+    var CHART_H = 200;
+
     var SVG_NS = 'http://www.w3.org/2000/svg';
     // Build an SVG element with attributes set via setAttribute (presentation
     // attributes only — no inline style, so CSP style-src 'self' is satisfied).
@@ -159,6 +162,7 @@
     var lastRecordingSince = null;   // ISO from summary; used for the partial note
     var seriesReqSeq      = 0;       // monotonic token for the race guard
     var seriesLoadedRange = null;    // range whose series is currently rendered
+    var lastSeries        = null;    // {buckets, granularity} cached for resize re-render
 
     /* ===================== summary (TC-1) ===================== */
 
@@ -236,18 +240,24 @@
         });
     }
 
-    // Hand-built SVG grouped bar chart (TC-2b). Sent/Received per bucket on a
-    // shared Y scale, shrink-to-fit via viewBox. Styling is by CSS class only.
+    // Hand-built SVG grouped bar chart. Sent/Received per bucket on a shared Y
+    // scale. Rendered in real pixels (measured container width + fixed height)
+    // so text stays legible at any width and the height is stable (TC-2c).
+    // Styling is by CSS class only. The legend lives in HTML (dashboard.html).
     function renderChart(buckets, granularity) {
         var plot = el('th-chart-plot');
         if (!plot) return;
-        plot.textContent = '';   // clear any previous render
+        var W = plot.clientWidth;
+        if (!W) return;            // not laid out (hidden) — re-rendered when shown/resized
+        var H = CHART_H;
 
-        var VIEW_W = 640, VIEW_H = 220;
-        var PAD_L = 52, PAD_R = 12, PAD_T = 26, PAD_B = 22;
-        var x0 = PAD_L, x1 = VIEW_W - PAD_R;
-        var y0 = PAD_T, y1 = VIEW_H - PAD_B;
+        plot.textContent = '';     // clear any previous render
+
+        var PAD_L = 50, PAD_R = 10, PAD_T = 8, PAD_B = 20;
+        var x0 = PAD_L, x1 = W - PAD_R;
+        var y0 = PAD_T, y1 = H - PAD_B;
         var plotH = y1 - y0, plotW = x1 - x0;
+        if (plotW <= 0) return;    // container too narrow to draw
 
         var n = buckets.length;
         var maxVal = 0;
@@ -256,10 +266,11 @@
         });
         var top = niceCeil(maxVal);
 
+        // No viewBox: 1 user unit = 1 px, so the CSS px font-size renders at its
+        // true size regardless of card width (fixes mobile label legibility).
         var svg = svgEl('svg', {
-            viewBox: '0 0 ' + VIEW_W + ' ' + VIEW_H,
+            width: W, height: H,
             'class': 'th-chart__svg',
-            preserveAspectRatio: 'xMidYMid meet',
             focusable: 'false',
             'aria-hidden': 'true',
         });
@@ -271,7 +282,7 @@
                 'class': 'chart-gridline', x1: x0, y1: y, x2: x1, y2: y,
             }));
             var lbl = svgEl('text', {
-                'class': 'chart-label', x: x0 - 6, y: y + 3, 'text-anchor': 'end',
+                'class': 'chart-label', x: x0 - 6, y: y + 4, 'text-anchor': 'end',
             });
             lbl.textContent = formatBytes(val);
             svg.appendChild(lbl);
@@ -287,7 +298,8 @@
         var barW = Math.max(1, groupW * 0.32);
         var gap = groupW * 0.08;
         var pairW = barW * 2 + gap;
-        var step = Math.max(1, Math.ceil(n / 7));   // <= ~7 x-axis labels
+        var maxTicks = W < 400 ? 5 : 7;             // fewer x-labels on narrow widths
+        var step = Math.max(1, Math.ceil(n / maxTicks));
 
         function bar(bx, val, cls, label, kind) {
             if (val <= 0) return;
@@ -309,22 +321,12 @@
             bar(left + barW + gap, b.bytes_down || 0, 'chart-bar--down', lbl, 'received');
             if (i % step === 0 || i === n - 1) {
                 var xt = svgEl('text', {
-                    'class': 'chart-label', x: center, y: VIEW_H - 6, 'text-anchor': 'middle',
+                    'class': 'chart-label', x: center, y: H - 6, 'text-anchor': 'middle',
                 });
                 xt.textContent = shortLabel(b.bucket_utc, granularity);
                 svg.appendChild(xt);
             }
         });
-
-        // Legend (top-left).
-        function legend(lx, cls, text) {
-            svg.appendChild(svgEl('rect', { 'class': cls, x: lx, y: 8, width: 10, height: 10 }));
-            var t = svgEl('text', { 'class': 'chart-legend__text', x: lx + 14, y: 17 });
-            t.textContent = text;
-            svg.appendChild(t);
-        }
-        legend(x0, 'chart-bar--up', 'Sent');
-        legend(x0 + 70, 'chart-bar--down', 'Received');
 
         plot.appendChild(svg);
     }
@@ -353,13 +355,15 @@
             total += (b.bytes_up || 0) + (b.bytes_down || 0);
         });
         if (total === 0) {
+            lastSeries = null;
             showChartState('empty');     // recording, but no traffic in range
             return;
         }
+        lastSeries = { buckets: buckets, granularity: data.granularity };
         renderTable(buckets, data.granularity);
-        renderChart(buckets, data.granularity);
         updatePartialNote(buckets);
-        showChartState('data');
+        showChartState('data');          // show first so the plot has a measurable width
+        renderChart(buckets, data.granularity);
     }
 
     /**
@@ -442,6 +446,19 @@
         // Series refresh poll (TC-2a): 60 s; guards inside seriesTick implement
         // the range-aware, visible-only cadence. Registered for logout.
         window.CCC.pollers.push(startPolling(seriesTick, 60000));
+
+        // Re-render the chart on viewport resize (px-based geometry). Debounced;
+        // only acts when the chart data sub-state is visible.
+        var resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                var dataEl = el('th-chart-data');
+                if (lastSeries && dataEl && !dataEl.hidden) {
+                    renderChart(lastSeries.buckets, lastSeries.granularity);
+                }
+            }, 150);
+        });
     });
 
 })();

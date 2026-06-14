@@ -1029,12 +1029,44 @@ a:hover {
    data table reuses the existing .sr-only utility.
    ============================================================================ */
 
-/* Range selector: a small segmented button group (24h / 7d / 30d). */
+/* Separate the chart block from the summary block above it (TC-2c). */
+.traffic-history-chart {
+    margin-top: var(--space-5);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+}
+
+/* Chart head: legend (left) + range selector (right). */
 .th-chart__head {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
     margin-bottom: var(--space-4);
 }
+
+/* HTML legend (CSS-px text — legible at any width; TC-2c). */
+.th-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+.th-legend__item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-xs);
+    color: var(--color-text-muted);
+}
+.th-legend__swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.th-legend__swatch--up   { background: var(--color-chart-up); }
+.th-legend__swatch--down { background: var(--color-chart-down); }
 .th-range {
     display: inline-flex;
     border: 1px solid var(--color-border);
@@ -1089,10 +1121,10 @@ a:hover {
     --color-chart-down: #2dd4bf;               /* Received — teal (non-status) */
 }
 
+/* SVG sized in real px by JS (width/height attributes) — no width:100%/height:auto
+   so 1 user unit = 1 px and text renders at its true CSS size (TC-2c). */
 .th-chart__svg {
     display: block;
-    width: 100%;
-    height: auto;
 }
 .chart-bar--up   { fill: var(--color-chart-up); }
 .chart-bar--down { fill: var(--color-chart-down); }
@@ -1100,11 +1132,6 @@ a:hover {
 .chart-gridline  { stroke: var(--color-border); stroke-width: 1; opacity: 0.4; }
 .chart-label {
     fill: var(--color-text-dim);
-    font-size: 9px;
-    font-family: var(--font-family);
-}
-.chart-legend__text {
-    fill: var(--color-text-muted);
-    font-size: 9px;
+    font-size: 11px;
     font-family: var(--font-family);
 }
