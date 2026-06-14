@@ -94,6 +94,36 @@
         return formatUtc(bucketUtc);
     }
 
+    // Compact axis label: daily -> "MM-DD"; hourly -> "HH:00" (UTC).
+    function shortLabel(bucketUtc, granularity) {
+        if (granularity === 'day') return bucketUtc.slice(5);
+        var d = parseBucketStart(bucketUtc);
+        if (isNaN(d.getTime())) return '';
+        var hh = d.getUTCHours();
+        return (hh < 10 ? '0' : '') + hh + ':00';
+    }
+
+    /* ===================== SVG chart helpers (TC-2b) ===================== */
+
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+    // Build an SVG element with attributes set via setAttribute (presentation
+    // attributes only — no inline style, so CSP style-src 'self' is satisfied).
+    function svgEl(name, attrs) {
+        var e = document.createElementNS(SVG_NS, name);
+        if (attrs) {
+            Object.keys(attrs).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+        }
+        return e;
+    }
+    // Round a positive value up to a "nice" 1/2/5 x 10^n bound for the Y axis.
+    function niceCeil(v) {
+        if (v <= 0) return 1;
+        var p = Math.pow(10, Math.floor(Math.log10(v)));
+        var f = v / p;
+        var nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+        return nf * p;
+    }
+
     /* ===================== DOM helpers ===================== */
 
     function el(id) { return document.getElementById(id); }
@@ -206,6 +236,99 @@
         });
     }
 
+    // Hand-built SVG grouped bar chart (TC-2b). Sent/Received per bucket on a
+    // shared Y scale, shrink-to-fit via viewBox. Styling is by CSS class only.
+    function renderChart(buckets, granularity) {
+        var plot = el('th-chart-plot');
+        if (!plot) return;
+        plot.textContent = '';   // clear any previous render
+
+        var VIEW_W = 640, VIEW_H = 220;
+        var PAD_L = 52, PAD_R = 12, PAD_T = 26, PAD_B = 22;
+        var x0 = PAD_L, x1 = VIEW_W - PAD_R;
+        var y0 = PAD_T, y1 = VIEW_H - PAD_B;
+        var plotH = y1 - y0, plotW = x1 - x0;
+
+        var n = buckets.length;
+        var maxVal = 0;
+        buckets.forEach(function (b) {
+            maxVal = Math.max(maxVal, b.bytes_up || 0, b.bytes_down || 0);
+        });
+        var top = niceCeil(maxVal);
+
+        var svg = svgEl('svg', {
+            viewBox: '0 0 ' + VIEW_W + ' ' + VIEW_H,
+            'class': 'th-chart__svg',
+            preserveAspectRatio: 'xMidYMid meet',
+            focusable: 'false',
+            'aria-hidden': 'true',
+        });
+
+        // Y gridlines + byte labels (0 / mid / top).
+        [0, top / 2, top].forEach(function (val) {
+            var y = y1 - (val / top) * plotH;
+            svg.appendChild(svgEl('line', {
+                'class': 'chart-gridline', x1: x0, y1: y, x2: x1, y2: y,
+            }));
+            var lbl = svgEl('text', {
+                'class': 'chart-label', x: x0 - 6, y: y + 3, 'text-anchor': 'end',
+            });
+            lbl.textContent = formatBytes(val);
+            svg.appendChild(lbl);
+        });
+
+        // Baseline axis.
+        svg.appendChild(svgEl('line', {
+            'class': 'chart-axis', x1: x0, y1: y1, x2: x1, y2: y1,
+        }));
+
+        // Grouped bars.
+        var groupW = plotW / n;
+        var barW = Math.max(1, groupW * 0.32);
+        var gap = groupW * 0.08;
+        var pairW = barW * 2 + gap;
+        var step = Math.max(1, Math.ceil(n / 7));   // <= ~7 x-axis labels
+
+        function bar(bx, val, cls, label, kind) {
+            if (val <= 0) return;
+            var h = (val / top) * plotH;
+            var rect = svgEl('rect', {
+                'class': cls, x: bx, y: y1 - h, width: barW, height: h,
+            });
+            var t = svgEl('title');
+            t.textContent = label + ' — ' + kind + ' ' + formatBytes(val);
+            rect.appendChild(t);
+            svg.appendChild(rect);
+        }
+
+        buckets.forEach(function (b, i) {
+            var center = x0 + groupW * (i + 0.5);
+            var left = center - pairW / 2;
+            var lbl = bucketLabel(b.bucket_utc, granularity);
+            bar(left, b.bytes_up || 0, 'chart-bar--up', lbl, 'sent');
+            bar(left + barW + gap, b.bytes_down || 0, 'chart-bar--down', lbl, 'received');
+            if (i % step === 0 || i === n - 1) {
+                var xt = svgEl('text', {
+                    'class': 'chart-label', x: center, y: VIEW_H - 6, 'text-anchor': 'middle',
+                });
+                xt.textContent = shortLabel(b.bucket_utc, granularity);
+                svg.appendChild(xt);
+            }
+        });
+
+        // Legend (top-left).
+        function legend(lx, cls, text) {
+            svg.appendChild(svgEl('rect', { 'class': cls, x: lx, y: 8, width: 10, height: 10 }));
+            var t = svgEl('text', { 'class': 'chart-legend__text', x: lx + 14, y: 17 });
+            t.textContent = text;
+            svg.appendChild(t);
+        }
+        legend(x0, 'chart-bar--up', 'Sent');
+        legend(x0 + 70, 'chart-bar--down', 'Received');
+
+        plot.appendChild(svg);
+    }
+
     function updatePartialNote(buckets) {
         var note = el('th-chart-partial');
         if (!note) return;
@@ -234,6 +357,7 @@
             return;
         }
         renderTable(buckets, data.granularity);
+        renderChart(buckets, data.granularity);
         updatePartialNote(buckets);
         showChartState('data');
     }

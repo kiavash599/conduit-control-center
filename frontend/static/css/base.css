@@ -1073,3 +1073,38 @@ a:hover {
     color: var(--color-text-dim);
     font-size: var(--text-xs);
 }
+
+
+/* ============================================================================
+   TRAFFIC HISTORY — SVG grouped bar chart  (TC-2b)
+   ----------------------------------------------------------------------------
+   The chart is hand-built as inline SVG by traffic_history.js (createElementNS
+   + presentation attributes). All colour/typography comes from these classes
+   (no inline style attributes — CSP style-src 'self'). Two intentional chart
+   colours, distinct from the status palette. The .sr-only table remains the
+   accessible representation; the SVG is aria-hidden.
+   ============================================================================ */
+:root {
+    --color-chart-up:   var(--color-accent);   /* Sent — indigo */
+    --color-chart-down: #2dd4bf;               /* Received — teal (non-status) */
+}
+
+.th-chart__svg {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+.chart-bar--up   { fill: var(--color-chart-up); }
+.chart-bar--down { fill: var(--color-chart-down); }
+.chart-axis      { stroke: var(--color-border); stroke-width: 1; }
+.chart-gridline  { stroke: var(--color-border); stroke-width: 1; opacity: 0.4; }
+.chart-label {
+    fill: var(--color-text-dim);
+    font-size: 9px;
+    font-family: var(--font-family);
+}
+.chart-legend__text {
+    fill: var(--color-text-muted);
+    font-size: 9px;
+    font-family: var(--font-family);
+}
