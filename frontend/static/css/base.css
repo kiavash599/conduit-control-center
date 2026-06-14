@@ -1018,3 +1018,58 @@ a:hover {
     color: var(--color-danger);
     font-size: var(--text-sm);
 }
+
+
+/* ============================================================================
+   TRAFFIC HISTORY — range selector + chart sub-state helpers  (TC-2a)
+   ----------------------------------------------------------------------------
+   Styling for the Lifetime & History chart's range control and notes. The SVG
+   plot itself (and its colours/axes) is added in TC-2b. Chart sub-states reuse
+   the IA-1 classes (.is-loading / .empty-state / .panel-error); the accessible
+   data table reuses the existing .sr-only utility.
+   ============================================================================ */
+
+/* Range selector: a small segmented button group (24h / 7d / 30d). */
+.th-chart__head {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--space-4);
+}
+.th-range {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+.th-range__btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    font-weight: var(--font-weight-medium);
+    padding: var(--space-1) var(--space-3);
+    cursor: pointer;
+}
+.th-range__btn + .th-range__btn {
+    border-left: 1px solid var(--color-border);
+}
+.th-range__btn:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-raised);
+}
+.th-range__btn[aria-pressed="true"] {
+    background: var(--color-accent-muted);
+    color: var(--color-accent);
+}
+.th-range__btn:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: -2px;
+}
+
+/* Partial-coverage note (range begins before recording started). */
+.th-chart__note {
+    margin-bottom: var(--space-3);
+    color: var(--color-text-dim);
+    font-size: var(--text-xs);
+}

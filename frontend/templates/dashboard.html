@@ -396,7 +396,70 @@
                             <dd class="status-meta__val" id="th-updated">—</dd>
                         </div>
                     </dl>
-                    <!-- Chart slot reserved for TC-2 (series). Not rendered in TC-1. -->
+
+                    <!--
+                      Traffic history chart — TC-2a (range selector + states + sr-only
+                      table; the SVG plot is added in TC-2b). These chart sub-states
+                      reuse the IA-1 classes and are independent of the card-level
+                      states above (summary vs series are separate fetches).
+
+                      DOM IDs consumed by traffic_history.js:
+                        th-range-24h / th-range-7d / th-range-30d  (range buttons)
+                        th-chart-loading / th-chart-error / th-chart-empty / th-chart-data
+                        th-chart-partial   (partial-coverage note)
+                        th-chart-plot      (SVG mount point — empty until TC-2b)
+                        th-chart-table     (sr-only data table; tbody rows injected)
+                    -->
+                    <div class="traffic-history-chart">
+
+                        <div class="th-chart__head">
+                            <h3 id="th-chart-heading" class="sr-only">Traffic history</h3>
+                            <div class="th-range" role="group" aria-label="Chart time range">
+                                <button type="button" class="th-range__btn"
+                                        id="th-range-24h" data-range="24h"
+                                        aria-pressed="true">24h</button>
+                                <button type="button" class="th-range__btn"
+                                        id="th-range-7d" data-range="7d"
+                                        aria-pressed="false">7d</button>
+                                <button type="button" class="th-range__btn"
+                                        id="th-range-30d" data-range="30d"
+                                        aria-pressed="false">30d</button>
+                            </div>
+                        </div>
+
+                        <!-- chart sub-states (mutually exclusive; toggled via .hidden) -->
+                        <p id="th-chart-loading" class="is-loading">Loading chart…</p>
+
+                        <p id="th-chart-error"
+                           class="panel-error"
+                           role="status"
+                           aria-live="polite"
+                           hidden>Chart unavailable.</p>
+
+                        <div id="th-chart-empty"
+                             class="empty-state"
+                             role="status"
+                             aria-live="polite"
+                             hidden>No traffic recorded yet for this range.</div>
+
+                        <!-- populated: SVG plot (TC-2b) + partial note + sr-only table -->
+                        <div id="th-chart-data" hidden>
+                            <p id="th-chart-partial" class="th-chart__note" hidden></p>
+                            <div id="th-chart-plot" class="th-chart__plot" aria-hidden="true"></div>
+                            <table id="th-chart-table" class="sr-only">
+                                <caption>Traffic per period (UTC)</caption>
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Period (UTC)</th>
+                                        <th scope="col">Sent</th>
+                                        <th scope="col">Received</th>
+                                    </tr>
+                                </thead>
+                                <tbody><!-- rows injected by traffic_history.js --></tbody>
+                            </table>
+                        </div>
+
+                    </div><!-- /.traffic-history-chart -->
                 </div>
 
             </div><!-- /#traffic-history-card -->

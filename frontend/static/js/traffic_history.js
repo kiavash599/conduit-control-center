@@ -1,38 +1,43 @@
 /**
  * frontend/static/js/traffic_history.js
- * Lifetime & History traffic card — TC-1 (scaffold; chart added in TC-2)
+ * Lifetime & History traffic card.
+ *   TC-1: summary binding + four card states.
+ *   TC-2a: range selector + /series integration + race guard + chart sub-states
+ *          + sr-only data table + range-aware polling. (No SVG yet — TC-2b.)
  *
- * API endpoint
- * ------------
- *   GET /api/traffic/summary   polled every 60 seconds via startPolling()
- *   (GET /api/traffic/series is wired in TC-2 — not used here.)
+ * API endpoints
+ * -------------
+ *   GET /api/traffic/summary                      polled every 60 s (card state)
+ *   GET /api/traffic/series?range=24h|7d|30d      chart data (range-aware refresh)
  *
- * Response schema (backend/api/traffic.py, CI77)
- * ----------------------------------------------
- *   status           string        collector health (e.g. "running", "disabled")
- *   recording_since  string|null   ISO 8601 UTC of earliest epoch (null => never recorded)
- *   last_ok_ts_utc   string|null   ISO 8601 UTC of last successful collector tick
- *   lifetime         {bytes_up, bytes_down} | null   persistent totals (null => not recording)
- *   windows          { last_24h:{bytes_up,bytes_down}, last_7d:{bytes_up,bytes_down} }
+ * Summary schema (backend/api/traffic.py, CI77)
+ *   status, recording_since|null, last_ok_ts_utc|null,
+ *   lifetime{bytes_up,bytes_down}|null, windows{last_24h,last_7d}
+ * Series schema
+ *   range, granularity("hour"|"day"), buckets:[{bucket_utc,bytes_up,bytes_down}]
+ *   Dense + zero-filled. Invalid range -> 422. Auth required -> 401.
  *
- * Four-state model (IA-1 vocabulary)
- * ----------------------------------
- *   loading                — before the first response
- *   populated              — recording_since present (lifetime may be zero)
- *   disabled/not recording — HTTP 200 with recording_since null (ship-dark default)
- *   error                  — fetch failure or non-2xx (except 401 -> /login redirect)
+ * Card states (TC-1): loading / populated(body) / not-recording(empty) / error.
+ * Chart sub-states (TC-2a, inside the body): loading / data / empty(no-history) /
+ *   error. Summary and series are independent fetches, so a series failure shows
+ *   the chart error sub-state WITHOUT blanking the lifetime totals.
  *
- * Polling error strategy
- * ----------------------
- * Uses raw fetch() (not apiFetch) to suppress apiFetch's toast-on-error,
- * matching traffic.js / status.js / metrics.js. 401 -> redirect to /login.
- * All other non-2xx and network failures render the inline error state
- * silently (no toast). The /summary endpoint returns HTTP 200 even when the
- * collector is disabled, so "not recording" is distinguished from "error"
- * by inspecting recording_since on a 200 response.
+ * Range-aware polling (approved TC-2 refinement)
+ *   - fetch on load + on range change (all ranges)
+ *   - 24h only: visible-only 60 s refresh (matches collector tick + summary)
+ *   - 7d / 30d: no timed refresh (daily buckets — load + range change only)
+ *   Refresh is gated on the Dashboard section being visible; startPolling also
+ *   pauses on a hidden tab.
  *
- * formatBytes / relativeTime are duplicated from traffic.js (no module system
- * in v0.1 — a small, contained duplication is preferable to polluting app.js).
+ * Request race guard: each /series fetch carries a monotonically increasing
+ * token; only the latest response renders (prevents fast range-switch flicker).
+ *
+ * Polling error strategy: raw fetch() (not apiFetch) to stay toast-silent,
+ * matching traffic.js. 401 -> /login redirect; other non-2xx / network -> the
+ * relevant error state, no toast. /summary returns 200 even when disabled, so
+ * "not recording" is read from recording_since, not from an error.
+ *
+ * formatBytes / relativeTime duplicated from traffic.js (no module system).
  *
  * Script loading order:
  *   api.js -> app.js -> dashboard.js -> ... -> traffic.js -> traffic_history.js
@@ -42,10 +47,8 @@
 (function () {
     'use strict';
 
-    /* ------------------------------------------------------------------
-       formatBytes — raw byte count to human-readable (B/KB/MB/GB).
-       Duplicated from traffic.js (same tiers/labels for consistency).
-    ------------------------------------------------------------------ */
+    /* ===================== formatting helpers ===================== */
+
     function formatBytes(bytes) {
         if (bytes == null) return '—';
         var gb = bytes / (1024 * 1024 * 1024);
@@ -57,9 +60,6 @@
         return (bytes || 0) + ' B';
     }
 
-    /* ------------------------------------------------------------------
-       relativeTime — ISO 8601 to a relative string. From traffic.js.
-    ------------------------------------------------------------------ */
     function relativeTime(isoStr) {
         if (!isoStr) return '—';
         var dt = new Date(isoStr);
@@ -73,11 +73,7 @@
         return Math.floor(delta / 86400) + ' days ago';
     }
 
-    /* ------------------------------------------------------------------
-       formatUtc — ISO 8601 to "YYYY-MM-DD HH:MM UTC".
-       Always rendered in UTC to match the ledger's bucket semantics and
-       avoid client-timezone ambiguity.
-    ------------------------------------------------------------------ */
+    // ISO 8601 -> "YYYY-MM-DD HH:MM UTC" (always UTC; ledger semantics).
     function formatUtc(isoStr) {
         if (!isoStr) return '—';
         var dt = new Date(isoStr);
@@ -87,31 +83,55 @@
              + ' ' + p(dt.getUTCHours()) + ':' + p(dt.getUTCMinutes()) + ' UTC';
     }
 
-    /* ------------------------------------------------------------------
-       DOM helpers
-    ------------------------------------------------------------------ */
+    // A bucket_utc is "YYYY-MM-DD" (daily) or "YYYY-MM-DDTHH:MM:SSZ" (hourly).
+    function parseBucketStart(bucketUtc) {
+        if (!bucketUtc) return new Date(NaN);
+        return new Date(bucketUtc.length <= 10 ? (bucketUtc + 'T00:00:00Z') : bucketUtc);
+    }
+
+    function bucketLabel(bucketUtc, granularity) {
+        if (granularity === 'day') return bucketUtc + ' UTC';
+        return formatUtc(bucketUtc);
+    }
+
+    /* ===================== DOM helpers ===================== */
+
     function el(id) { return document.getElementById(id); }
     function setText(id, text) { var e = el(id); if (e) e.textContent = text; }
 
-    // The four mutually-exclusive state regions inside #traffic-history-card.
-    var STATES = ['loading', 'error', 'empty', 'body'];
-
-    function showState(name) {
-        STATES.forEach(function (s) {
+    // Card-level states (TC-1).
+    var CARD_STATES = ['loading', 'error', 'empty', 'body'];
+    function showCardState(name) {
+        CARD_STATES.forEach(function (s) {
             var e = el('traffic-history-' + s);
             if (e) e.hidden = (s !== name);
         });
     }
 
-    // Render a {bytes_up, bytes_down} window as "X sent · Y received".
+    // Chart sub-states (TC-2a), inside the body.
+    var CHART_STATES = ['loading', 'error', 'empty', 'data'];
+    function showChartState(name) {
+        CHART_STATES.forEach(function (s) {
+            var e = el('th-chart-' + s);
+            if (e) e.hidden = (s !== name);
+        });
+    }
+
     function pair(w) {
         if (!w) return '—';
         return formatBytes(w.bytes_up) + ' sent · ' + formatBytes(w.bytes_down) + ' received';
     }
 
-    /* ------------------------------------------------------------------
-       renderPopulated — collector is recording (lifetime may be zero).
-    ------------------------------------------------------------------ */
+    /* ===================== module state ===================== */
+
+    var currentRange      = '24h';   // active range (default 24h)
+    var isRecording       = false;   // mirrors summary: body (recording) visible
+    var lastRecordingSince = null;   // ISO from summary; used for the partial note
+    var seriesReqSeq      = 0;       // monotonic token for the race guard
+    var seriesLoadedRange = null;    // range whose series is currently rendered
+
+    /* ===================== summary (TC-1) ===================== */
+
     function renderPopulated(d) {
         var lt  = d.lifetime || { bytes_up: 0, bytes_down: 0 };
         var win = d.windows || {};
@@ -121,17 +141,19 @@
         setText('th-7d',      pair(win.last_7d));
         setText('th-since',   formatUtc(d.recording_since));
         setText('th-updated', relativeTime(d.last_ok_ts_utc));
-        showState('body');
+
+        isRecording        = true;
+        lastRecordingSince = d.recording_since || null;
+        showCardState('body');
+        ensureSeriesLoaded();
     }
 
-    /* ------------------------------------------------------------------
-       fetchSummaryPoll — raw fetch() to bypass apiFetch's toast-on-error.
-         401          -> redirect to /login (session expired).
-         other !ok    -> error state (silent).
-         200          -> recording_since null  => not-recording (empty)
-                         otherwise              => populated
-         network err  -> error state (silent).
-    ------------------------------------------------------------------ */
+    function setNotRecording(cardState) {
+        isRecording        = false;
+        seriesLoadedRange  = null;
+        showCardState(cardState);
+    }
+
     function fetchSummaryPoll() {
         return fetch('/api/traffic/summary', {
             method: 'GET',
@@ -146,36 +168,156 @@
                 window.location.href = '/login?next=' + next;
                 return null;
             }
-            if (!response.ok) {
-                showState('error');
-                return null;
-            }
+            if (!response.ok) { setNotRecording('error'); return null; }
             return response.json();
         })
         .then(function (data) {
             if (!data) return;
-            // /summary returns 200 even when disabled: distinguish
-            // "not recording" (ship-dark default) from populated.
             if (data.recording_since == null || data.lifetime == null) {
-                showState('empty');
+                setNotRecording('empty');   // ship-dark / never recorded
             } else {
                 renderPopulated(data);
             }
         })
         .catch(function () {
-            // Network-level failure (offline, DNS, TLS).
-            showState('error');
+            setNotRecording('error');
         });
     }
 
-    /* ------------------------------------------------------------------
-       Initialise — 60-second polling, registered in window.CCC.pollers so
-       the logout handler stops it cleanly. No-op if the card is absent.
-    ------------------------------------------------------------------ */
+    /* ===================== series chart (TC-2a) ===================== */
+
+    function renderTable(buckets, granularity) {
+        var table = el('th-chart-table');
+        var tbody = table ? table.querySelector('tbody') : null;
+        if (!tbody) return;
+        tbody.textContent = '';   // clear (textContent only — no innerHTML)
+        buckets.forEach(function (b) {
+            var tr = document.createElement('tr');
+            var tdP = document.createElement('td');
+            tdP.textContent = bucketLabel(b.bucket_utc, granularity);
+            var tdU = document.createElement('td');
+            tdU.textContent = formatBytes(b.bytes_up);
+            var tdD = document.createElement('td');
+            tdD.textContent = formatBytes(b.bytes_down);
+            tr.appendChild(tdP);
+            tr.appendChild(tdU);
+            tr.appendChild(tdD);
+            tbody.appendChild(tr);
+        });
+    }
+
+    function updatePartialNote(buckets) {
+        var note = el('th-chart-partial');
+        if (!note) return;
+        if (lastRecordingSince && buckets.length) {
+            var rs = new Date(lastRecordingSince);
+            var first = parseBucketStart(buckets[0].bucket_utc);
+            if (!isNaN(rs.getTime()) && !isNaN(first.getTime()) && rs > first) {
+                note.textContent =
+                    'Recording began ' + formatUtc(lastRecordingSince) +
+                    ' — earlier periods show zero.';
+                note.hidden = false;
+                return;
+            }
+        }
+        note.hidden = true;
+    }
+
+    function renderSeries(data) {
+        var buckets = data.buckets || [];
+        var total = 0;
+        buckets.forEach(function (b) {
+            total += (b.bytes_up || 0) + (b.bytes_down || 0);
+        });
+        if (total === 0) {
+            showChartState('empty');     // recording, but no traffic in range
+            return;
+        }
+        renderTable(buckets, data.granularity);
+        updatePartialNote(buckets);
+        showChartState('data');
+    }
+
+    /**
+     * Fetch /series for a range. showLoading=true for user-initiated loads
+     * (first load / range change); false for the silent 24h timed refresh.
+     * Race guard: stale responses (a newer request started) are discarded.
+     */
+    function fetchSeries(range, showLoading) {
+        var token = ++seriesReqSeq;
+        if (showLoading) showChartState('loading');
+        return fetch('/api/traffic/series?range=' + encodeURIComponent(range), {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin',
+        })
+        .then(function (response) {
+            if (token !== seriesReqSeq) return null;      // stale
+            if (response.status === 401) {
+                var next = encodeURIComponent(
+                    window.location.pathname + window.location.search
+                );
+                window.location.href = '/login?next=' + next;
+                return null;
+            }
+            if (!response.ok) { showChartState('error'); return null; }
+            return response.json();
+        })
+        .then(function (data) {
+            if (!data || token !== seriesReqSeq) return;  // stale
+            seriesLoadedRange = range;
+            renderSeries(data);
+        })
+        .catch(function () {
+            if (token !== seriesReqSeq) return;           // stale
+            showChartState('error');
+        });
+    }
+
+    // Load the active range's series once the body (recording) is visible.
+    function ensureSeriesLoaded() {
+        if (isRecording && seriesLoadedRange !== currentRange) {
+            fetchSeries(currentRange, true);
+        }
+    }
+
+    function setRange(range) {
+        if (range === currentRange) return;
+        currentRange = range;
+        ['24h', '7d', '30d'].forEach(function (x) {
+            var b = el('th-range-' + x);
+            if (b) b.setAttribute('aria-pressed', x === range ? 'true' : 'false');
+        });
+        if (isRecording) fetchSeries(range, true);
+    }
+
+    // Timed refresh tick (registered at 60 s). Range-aware + visible-only:
+    // only 24h refreshes, only while recording and the Dashboard is visible.
+    function seriesTick() {
+        if (!isRecording) return;
+        var dash = el('section-dashboard');
+        if (dash && dash.hidden) return;
+        if (currentRange !== '24h') return;
+        fetchSeries('24h', false);
+    }
+
+    /* ===================== init ===================== */
+
     onReady(function () {
         if (!el('traffic-history-card')) return;
-        var handle = startPolling(fetchSummaryPoll, 60000);
-        window.CCC.pollers.push(handle);
+
+        // Range selector buttons (native buttons: Tab + Enter/Space operable).
+        ['24h', '7d', '30d'].forEach(function (x) {
+            var b = el('th-range-' + x);
+            if (b) b.addEventListener('click', function () { setRange(x); });
+        });
+
+        // Summary poll (TC-1): 60 s, drives card state. Registered for logout.
+        window.CCC.pollers.push(startPolling(fetchSummaryPoll, 60000));
+
+        // Series refresh poll (TC-2a): 60 s; guards inside seriesTick implement
+        // the range-aware, visible-only cadence. Registered for logout.
+        window.CCC.pollers.push(startPolling(seriesTick, 60000));
     });
 
 })();
