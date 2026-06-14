@@ -239,6 +239,10 @@
 
             </div><!-- /#node-status-card -->
 
+            <!-- ── Group: Traffic (Current Run + Lifetime & history — TC-1) ── -->
+            <div class="group">
+                <h2 class="group__heading">Traffic</h2>
+
             <!--
               Traffic Counter Widget — Issue #29
               ------------------------------------
@@ -305,6 +309,98 @@
                    aria-live="polite"></p>
 
             </div><!-- /#traffic-card -->
+
+            <!--
+              Lifetime & History Card — TC-1 (scaffold; chart added in TC-2)
+              --------------------------------------------------------------
+              JS: frontend/static/js/traffic_history.js
+              API: GET /api/traffic/summary (polled every 60 s via startPolling)
+                   (GET /api/traffic/series is wired in TC-2 — chart not built yet.)
+
+              Persistent, aggregate traffic recorded by the P0 collector. Distinct
+              from the Current Run card above (per-session, /api/metrics/traffic):
+              sibling cards under the Traffic group, but they never share data.
+
+              Four states (IA-1 classes), toggled by traffic_history.js via .hidden:
+                #traffic-history-loading  — .is-loading   (initial; before first response)
+                #traffic-history-error    — .panel-error  (fetch failure / non-2xx; no toast)
+                #traffic-history-empty    — .empty-state  ("Not recording"; ship-dark default)
+                #traffic-history-body     — populated (lifetime totals + recent windows)
+
+              DOM IDs consumed by traffic_history.js:
+                th-lifetime-up, th-lifetime-down, th-24h, th-7d, th-since, th-updated
+            -->
+            <div class="card mt-4" id="traffic-history-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Lifetime &amp; history</h2>
+                        <p class="card__subtitle">Persistent traffic since recording began</p>
+                    </div>
+                </div>
+
+                <!-- loading: shown until the first /summary response resolves -->
+                <p id="traffic-history-loading" class="is-loading">Loading…</p>
+
+                <!-- error: fetch failure / non-2xx (no toast) -->
+                <p id="traffic-history-error"
+                   class="panel-error"
+                   role="status"
+                   aria-live="polite"
+                   hidden>Traffic history unavailable.</p>
+
+                <!-- empty / disabled: collector not recording (ship-dark default) -->
+                <div id="traffic-history-empty"
+                     class="empty-state"
+                     role="status"
+                     aria-live="polite"
+                     hidden>
+                    Not recording
+                    <p class="empty-state__hint">
+                        Persistent traffic totals appear here once the collector is
+                        enabled (traffic_collector_enabled).
+                    </p>
+                </div>
+
+                <!-- populated: lifetime totals + recent windows -->
+                <div id="traffic-history-body" hidden>
+                    <dl class="status-meta" aria-label="Lifetime traffic totals">
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Total sent</dt>
+                            <dd class="status-meta__val"
+                                id="th-lifetime-up"
+                                aria-live="polite"
+                                aria-atomic="true">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Total received</dt>
+                            <dd class="status-meta__val"
+                                id="th-lifetime-down"
+                                aria-live="polite"
+                                aria-atomic="true">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Last 24 hours</dt>
+                            <dd class="status-meta__val" id="th-24h">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Last 7 days</dt>
+                            <dd class="status-meta__val" id="th-7d">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Recording since</dt>
+                            <dd class="status-meta__val" id="th-since">—</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Last updated</dt>
+                            <dd class="status-meta__val" id="th-updated">—</dd>
+                        </div>
+                    </dl>
+                    <!-- Chart slot reserved for TC-2 (series). Not rendered in TC-1. -->
+                </div>
+
+            </div><!-- /#traffic-history-card -->
+            </div><!-- /group: Traffic -->
 
         </div><!-- /#section-dashboard -->
 
@@ -767,8 +863,11 @@
 <!-- Issue #28: system health panel -->
 <script src="/static/js/metrics.js"></script>
 
-<!-- Issue #29: traffic counter widget -->
+<!-- Issue #29: traffic counter widget (current run) -->
 <script src="/static/js/traffic.js"></script>
+
+<!-- TC-1: lifetime & history card (persistent traffic) -->
+<script src="/static/js/traffic_history.js"></script>
 
 <!-- Issue #30: log viewer panel -->
 <script src="/static/js/logs.js"></script>
