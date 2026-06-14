@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.2  
+**Revision:** 1.3  
 **Date:** 2026-06-10  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
@@ -177,6 +177,8 @@ These maintenance items are included in the v0.1.0 first public release. No new 
 ## 5. D1 — UX/UI Design Milestone (Gate for v0.2.0)
 
 > **Gate:** No v0.2.0 implementation begins until the D1 design deliverables are approved. The dashboard must be designed by, or to the standard of, a professional frontend/UX designer before a single line of implementation code is written.
+
+> **Status: ✅ Completed (2026-06-14).** D1.0–D1.3 accepted and implemented as the M-IA dashboard restructure (Dashboard / System / Settings).
 
 The dashboard must not be a raw metrics dump. Every screen must be something a non-technical volunteer operator — someone who set up a Raspberry Pi for the first time — can understand and act on without reading documentation.
 
@@ -375,6 +377,8 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
+> **Status: Not yet started.** v0.2.0 remains the next planned *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone; the interactive control features below — configuration, live operations, regional analytics, scheduling, themes — are outstanding.
+
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
 ### 6.1 Conduit Configuration
@@ -456,7 +460,7 @@ Light / Dark / System themes implemented per Section 5.10. Theme preference pers
 
 | Feature | Description |
 |---|---|
-| Historical charts | Time-series charts for connected clients, bytes transferred, bandwidth utilisation. SQLite storage with configurable retention (default 30 days). |
+| Historical charts | Time-series charts for connected clients, bytes transferred, bandwidth utilisation. SQLite storage with configurable retention (default 30 days). **✅ Delivered early** — the persistent traffic collector (SQLite, configurable retention) and the "Lifetime & history" card with an SVG time-series chart shipped during the v0.1.x → v0.2 cycle. |
 | Health score | Composite score derived from uptime %, broker live %, average client count, and bandwidth headroom. Displayed on Overview screen. |
 | Smart Assistant — Automatic mode | Adjusts `max_common_clients` within operator-defined bounds. Requires audit log infrastructure from this release. |
 | Backup & restore | Export CCC configuration (not Conduit key) to encrypted archive. Restore from archive. |
@@ -503,6 +507,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.0 | 2026-06-10 | CCC Development Team | Initial draft. R1 capability audit complete. |
 | 1.1 | 2026-06-10 | CCC Development Team | Added Section 5: D1 — UX/UI Design Milestone as formal gate for v0.2.0. Sections 5–9 renumbered to 6–10. Smart Assistant Automatic mode deferred to v0.3.0. Theme persistence changed from localStorage to server-side cookie. |
 | 1.2 | 2026-06-10 | CCC Development Team | Section 4 corrected: retitled to v0.1.0 Maintenance Items (folded into first public release); replaced collision issue numbers #3–#6 with descriptive names; removed inaccurate "open GitHub issues" claim. |
+| 1.3 | 2026-06-14 | CCC Development Team | Reconciliation: marked D1 complete; noted historical traffic charts delivered early (§7); added v0.2.0 status note; reconciled CHANGELOG with the v0.1.1 tag (0.1.0 MVP + separate 0.1.1 maintenance). No milestone renumbering. |
 
 ---
 

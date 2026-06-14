@@ -52,3 +52,36 @@ class CounterReading:
     uptime_seconds: float
     build_rev: str | None = None
     is_live: bool | None = None
+
+
+@dataclass(frozen=True)
+class NodeRuntime:
+    """
+    One forgiving read of Conduit's aggregate runtime gauges, for the
+    Contribution Advisor (A1). Returned by
+    ``backend.conduit.adapter.get_node_runtime()``.
+
+    Unlike ``CounterReading`` (strict — raises on missing required counters),
+    this is advisory/forgiving: any individually missing or unparseable gauge
+    is ``None``. The adapter returns ``None`` (not this object) when the metrics
+    endpoint is unreachable, so a populated object always means "endpoint was
+    reachable; these are the gauges that were present."
+
+    Aggregate-only by construction: each value comes from the unlabelled
+    ``conduit_<name>`` scalar. Labelled/per-scope series
+    (e.g. ``conduit_connected_clients{scope="common"}``) and per-region series
+    (``conduit_region_*``) are never read, so no region/scope data is exposed.
+
+    Fields
+    ------
+    connected_clients : int | None
+        ``conduit_connected_clients`` — clients currently connected.
+    idle_seconds : int | None
+        ``conduit_idle_seconds`` — seconds since the last client activity.
+    max_common_clients : int | None
+        ``conduit_max_common_clients`` — the configured common-client limit.
+    """
+
+    connected_clients: int | None = None
+    idle_seconds: int | None = None
+    max_common_clients: int | None = None

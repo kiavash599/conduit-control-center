@@ -119,7 +119,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from backend.config import get_app_config
-from backend.traffic.models import CounterReading
+from backend.traffic.models import CounterReading, NodeRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -908,6 +908,14 @@ _METRIC_UPTIME_SECONDS = "conduit_uptime_seconds"
 _METRIC_BUILD_INFO     = "conduit_build_info"
 _METRIC_IS_LIVE        = "conduit_is_live"
 
+# Aggregate runtime gauges for the Contribution Advisor (A1.1). Read only as
+# unlabelled scalars (via _extract_gauge_raw), so labelled per-scope series
+# (e.g. conduit_connected_clients{scope="common"}) and per-region series
+# (conduit_region_*) are never parsed — aggregate-only by construction.
+_METRIC_CONNECTED_CLIENTS  = "conduit_connected_clients"
+_METRIC_IDLE_SECONDS       = "conduit_idle_seconds"
+_METRIC_MAX_COMMON_CLIENTS = "conduit_max_common_clients"
+
 # build_rev is a label on the conduit_build_info gauge:
 #   conduit_build_info{build_repo="...",build_rev="8531118",...} 1
 _BUILD_REV_PATTERN: re.Pattern[str] = re.compile(r'build_rev="([^"]*)"')
@@ -1039,4 +1047,77 @@ async def read_counters() -> CounterReading:
         uptime_seconds=uptime_seconds,
         build_rev=build_rev,
         is_live=is_live,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API -- forgiving runtime-gauge reader for the Contribution Advisor (A1.1)
+# ---------------------------------------------------------------------------
+#
+# get_node_runtime() is the read-only, forgiving counterpart to read_counters().
+# It scrapes the same Conduit Prometheus endpoint and extracts three aggregate
+# runtime gauges. Unlike read_counters() it never raises: a missing/unparseable
+# gauge becomes None on that field, and an unreachable endpoint returns None for
+# the whole call (so the advisor can distinguish "Conduit not running" from
+# "running, gauge absent"). Aggregate-only -- no region/scope/per-client data.
+
+def _optional_int(text: str, metric_name: str) -> int | None:
+    """Parse an unlabelled integer gauge; return None if absent/unparseable.
+
+    Uses the same matching rule as _extract_gauge_raw (``"<name> <value>"``,
+    skipping labelled ``<name>{...}`` and ``#`` comment lines), so labelled
+    per-scope/per-region series are never matched. ``int(float(raw))`` tolerates
+    values emitted as floats (e.g. ``"0.0"``). Never raises.
+    """
+    raw = _extract_gauge_raw(text, metric_name)
+    if raw is None:
+        return None
+    try:
+        return int(float(raw))
+    except (ValueError, OverflowError):
+        return None
+
+
+async def get_node_runtime() -> NodeRuntime | None:
+    """
+    Forgiving, read-only read of Conduit's aggregate runtime gauges.
+
+    Scrapes ``http://localhost:{conduit_metrics_port}/metrics`` and extracts:
+      - ``conduit_connected_clients``   -> connected_clients
+      - ``conduit_idle_seconds``        -> idle_seconds
+      - ``conduit_max_common_clients``  -> max_common_clients
+
+    Returns
+    -------
+    NodeRuntime | None
+        ``None`` when the metrics endpoint is unreachable (Conduit stopped or
+        ``--metrics-addr`` not configured). Otherwise a ``NodeRuntime`` whose
+        fields are ``None`` individually for any gauge that is missing or
+        unparseable. Aggregate-only: only the unlabelled scalars are read, so
+        labelled per-scope and per-region series are never exposed.
+
+    Raises
+    ------
+    Never. All transport and parse errors are handled internally.
+    """
+    port = get_app_config().conduit_metrics_port
+    url = f"http://localhost:{port}/metrics"
+
+    try:
+        text = await asyncio.to_thread(_fetch_metrics_text, url)
+    except (urllib.error.URLError, OSError) as exc:
+        logger.debug("get_node_runtime: metrics endpoint %r unreachable (%s)", url, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "get_node_runtime: unexpected error fetching %r (type=%s) -- returning None",
+            url,
+            type(exc).__name__,
+        )
+        return None
+
+    return NodeRuntime(
+        connected_clients=_optional_int(text, _METRIC_CONNECTED_CLIENTS),
+        idle_seconds=_optional_int(text, _METRIC_IDLE_SECONDS),
+        max_common_clients=_optional_int(text, _METRIC_MAX_COMMON_CLIENTS),
     )

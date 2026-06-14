@@ -9,7 +9,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added (v0.2 — Issue #45)
+### Added — Traffic history and dashboard information architecture
+
+- Persistent traffic collector — aggregate-only byte ledger in SQLite with
+  hourly/daily rollups, lifetime checkpoints, and configurable retention
+  (default 30 days). Ship-dark: disabled by default (`traffic_collector_enabled`).
+- Traffic Read API — `GET /api/traffic/summary` and `GET /api/traffic/series`
+  (24h / 7d / 30d), read-only and aggregate-only.
+- Dashboard information architecture (M-IA) — sections restructured to
+  Dashboard / System / Settings with hash migration (`#overview`→`#dashboard`,
+  `#logs`→`#system`) and additive pattern/state CSS conventions.
+- "Lifetime & history" traffic card — persistent totals, recent-window figures,
+  and a hand-built SVG grouped-bar time-series chart (CSP-safe; accessible
+  data-table fallback).
+- Static asset cache-busting — `static_url()` appends a per-file mtime query
+  token so frontend deploys no longer require a manual CDN purge.
+
+### Added — Psiphon Conduit end-to-end deployment (Issue #45)
 
 **Psiphon Conduit end-to-end deployment**
 
@@ -34,11 +50,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `docs/pre-install.md` — Step 1a: Conduit binary options (download, local
   copy, PATH); post-install UFW firewall discovery procedure
 
+### Fixed — deployment and access (post-0.1.1)
+
+- Grant `journalctl` access so the Logs page can read the Conduit journal
+- Drop `NoNewPrivileges`-implying hardening so sudo-based Conduit controls work
+- Document the v0.1.1 control-hardening trade-off
+
 ---
 
-## [0.1.0-dev] — In development (not yet tagged)
+## [0.1.1] — 2026-06-11
 
-All items listed below are committed to the repository and were validated
+Maintenance release. Contains only the changes included in the `v0.1.1` tag.
+
+### Security
+- Upgrade Starlette to >= 1.0.1 (PYSEC-2026-161)
+
+### Fixed
+- Resolve shellcheck warnings in the install / update / uninstall scripts
+- Render ANSI colours with `%b` after SC2059 cleanup
+
+---
+
+## [0.1.0] — MVP
+
+> 0.1.0 was not separately tagged and first shipped within the v0.1.1 release.
+
+All items listed below were committed to the repository and validated
 end-to-end on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) in Issue #38.
 
 ### Added
@@ -99,7 +136,7 @@ end-to-end on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) in Issue #38.
 
 ### Known Limitations
 
-- No time-series metrics charts (planned for v1.0)
+- Historical traffic charts were not part of the original 0.1.0 MVP scope
 - No email or webhook alerting (planned for v1.1)
 - Conduit configuration is read-only — no editor (planned for v1.1)
 - No two-factor authentication / TOTP (planned for v1.3)
@@ -112,5 +149,5 @@ end-to-end on a Raspberry Pi 4 (Ubuntu 22.04 ARM64) in Issue #38.
 
 | Version | Theme | Target |
 |---------|-------|--------|
-| **0.1.0** | MVP | 🔧 In development |
+| **0.1.1** | MVP + maintenance | ✅ Released 2026-06-11 |
 | 1.0.0 | S
