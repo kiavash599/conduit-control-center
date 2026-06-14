@@ -79,6 +79,32 @@ _PROJECT_ROOT = _BACKEND_DIR.parent
 _STATIC_DIR = _PROJECT_ROOT / "frontend" / "static"
 _TEMPLATES_DIR = _PROJECT_ROOT / "frontend" / "templates"
 
+
+# ---------------------------------------------------------------------------
+# Static asset cache-busting
+# ---------------------------------------------------------------------------
+# static_url("css/base.css") -> "/static/css/base.css?v=<mtime>"
+#
+# The query token is the file's modification time, so the URL changes only when
+# the file changes. A new URL is a fresh cache key at the browser and at
+# Cloudflare (Standard caching keys the full query string), so frontend deploys
+# no longer require a manual CDN purge. Registered as a Jinja2 global and used in
+# templates via {{ static_url('js/app.js') }}.
+#
+# Uncached on purpose: a stat() per asset (~10/page) is negligible on a Pi and
+# guarantees the token reflects the on-disk file even if only static files
+# changed without a service restart. Falls back to APP_VERSION if the file is
+# missing (e.g. a mistyped path) so the page still renders.
+
+def static_url(path: str) -> str:
+    """Return a cache-busting URL for a file under /static."""
+    rel = path.lstrip("/")
+    try:
+        token = str(int((_STATIC_DIR / rel).stat().st_mtime))
+    except OSError:
+        token = APP_VERSION
+    return f"/static/{rel}?v={token}"
+
 # ---------------------------------------------------------------------------
 # Traffic persistence collector wiring (P0 Step 3c)
 # ---------------------------------------------------------------------------
@@ -262,6 +288,8 @@ else:
 
 if _TEMPLATES_DIR.exists():
     app.state.templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    # Expose the cache-busting helper to all templates: {{ static_url('...') }}
+    app.state.templates.env.globals["static_url"] = static_url
     logger.debug("Templates loaded from %s", _TEMPLATES_DIR)
 else:
     app.state.templates = None

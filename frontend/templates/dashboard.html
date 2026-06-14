@@ -926,26 +926,26 @@
     9. ddns.js      — DDNS status panel                          (Issue #43)
 -->
 <!-- Issue #26 / Issue #44: dashboard shell — navigation and logout -->
-<script src="/static/js/dashboard.js"></script>
+<script src="{{ static_url('js/dashboard.js') }}"></script>
 
 <!-- Issue #27: node status and control panel -->
-<script src="/static/js/status.js"></script>
+<script src="{{ static_url('js/status.js') }}"></script>
 
 <!-- Issue #28: system health panel -->
-<script src="/static/js/metrics.js"></script>
+<script src="{{ static_url('js/metrics.js') }}"></script>
 
 <!-- Issue #29: traffic counter widget (current run) -->
-<script src="/static/js/traffic.js"></script>
+<script src="{{ static_url('js/traffic.js') }}"></script>
 
 <!-- TC-1: lifetime & history card (persistent traffic) -->
-<script src="/static/js/traffic_history.js"></script>
+<script src="{{ static_url('js/traffic_history.js') }}"></script>
 
 <!-- Issue #30: log viewer panel -->
-<script src="/static/js/logs.js"></script>
+<script src="{{ static_url('js/logs.js') }}"></script>
 
 <!-- Issue #31: settings / change password -->
-<script src="/static/js/settings.js"></script>
+<script src="{{ static_url('js/settings.js') }}"></script>
 
 <!-- Issue #43: DDNS status panel -->
-<script src="/static/js/ddns.js"></script>
+<script src="{{ static_url('js/ddns.js') }}"></script>
 {% endblock %}
