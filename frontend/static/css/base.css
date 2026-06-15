@@ -1135,3 +1135,96 @@ a:hover {
     font-size: 11px;
     font-family: var(--font-family);
 }
+
+
+/* ============================================================================
+   CONTRIBUTION ADVISOR  (A1.4a)
+   ----------------------------------------------------------------------------
+   Static structure + severity styling for #advisor-card. advisor.js (A1.4b)
+   toggles #advisor-loading / #advisor-error / #advisor-body, sets the status
+   chip (badge--*), the headline, and builds <li.advisor-item> nodes.
+
+   Severity is conveyed by BOTH a text label (.advisor-item__severity) AND a
+   colour (left border + label colour) — never colour alone (a11y). Four
+   distinct hues mapped to existing tokens:
+     warning            -> danger  (red)    "Warning"
+     strong_suggestion  -> warning (amber)  "Recommended"
+     suggestion         -> accent  (indigo) "Suggestion"
+     info               -> neutral (grey)   "Info"
+   All colours/spacing come from tokens; no inline styles (CSP style-src 'self').
+   ============================================================================ */
+
+/* One-line health summary; slightly muted vs. body text, never overwhelming. */
+.advisor-headline {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+}
+
+/* Recommendation list — hidden by advisor.js when there are no items
+   (slim-when-healthy). Reset list chrome; vertical stack with gaps. */
+.advisor-items {
+    list-style: none;
+    margin: var(--space-4) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.advisor-item {
+    border-left: 3px solid var(--color-neutral);
+    padding-left: var(--space-3);
+}
+.advisor-item--warning    { border-left-color: var(--color-danger); }
+.advisor-item--strong     { border-left-color: var(--color-warning); }
+.advisor-item--suggestion { border-left-color: var(--color-accent); }
+.advisor-item--info       { border-left-color: var(--color-neutral); }
+
+/* Severity label — uppercase chip-style text; colour matches the border. */
+.advisor-item__severity {
+    display: inline-block;
+    font-size: var(--text-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-neutral);
+}
+.advisor-item--warning    .advisor-item__severity { color: var(--color-danger); }
+.advisor-item--strong     .advisor-item__severity { color: var(--color-warning); }
+.advisor-item--suggestion .advisor-item__severity { color: var(--color-accent); }
+.advisor-item--info       .advisor-item__severity { color: var(--color-text-muted); }
+
+.advisor-item__title {
+    margin: var(--space-1) 0 0;
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+}
+.advisor-item__message {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-primary);
+}
+/* Rationale: compact and dim so it informs without overwhelming. */
+.advisor-item__rationale {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-dim);
+    font-size: var(--text-sm);
+}
+
+/* apply_hint lives in <details> (collapsed by default; native keyboard a11y). */
+.advisor-item__hint {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+}
+.advisor-item__hint > summary {
+    cursor: pointer;
+    color: var(--color-text-muted);
+}
+.advisor-item__hint > summary:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+}
+.advisor-item__hint p {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-muted);
+}

@@ -148,6 +148,58 @@
         <div id="section-dashboard" class="section" aria-labelledby="page-title">
 
             <!--
+              Contribution Advisor card — A1.4a (static structure only).
+              ----------------------------------------------------------------
+              Placement: first card in the Dashboard section (advice → controls →
+              data), per the accepted A1.4 design. Behaviour (fetch/render/poll)
+              is wired by advisor.js in A1.4b; this step ships the static DOM and
+              CSS classes only — no script, no API call.
+
+              Slim-when-healthy: advisor.js will show only the headline + status
+              chip and keep #advisor-items empty/hidden when there are no
+              recommendations. Aggregate-only; will consume GET /api/advisor.
+
+              DOM contract consumed by advisor.js (A1.4b):
+                #advisor-status-chip — summary status badge (badge--* swapped per status)
+                #advisor-loading / #advisor-error / #advisor-body — mutually-exclusive states
+                #advisor-headline    — one-line health summary (textContent)
+                #advisor-items       — <ul>; recommendation <li> built via DOM nodes
+            -->
+            <div class="card" id="advisor-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Contribution Advisor</h2>
+                        <p class="card__subtitle">Guidance for your station&rsquo;s contribution</p>
+                    </div>
+                    <span class="badge badge--unknown"
+                          id="advisor-status-chip"
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true">&mdash;</span>
+                </div>
+
+                <!-- loading: shown until the first /api/advisor response (A1.4b) -->
+                <p id="advisor-loading" class="is-loading">Loading advice&hellip;</p>
+
+                <!-- error: fetch failure / non-2xx, no toast (A1.4b) -->
+                <p id="advisor-error"
+                   class="panel-error"
+                   role="status"
+                   aria-live="polite"
+                   hidden>Advice unavailable.</p>
+
+                <!-- populated: one-line headline + (optional) recommendations -->
+                <div id="advisor-body" hidden>
+                    <p id="advisor-headline" class="advisor-headline">&mdash;</p>
+                    <ul id="advisor-items"
+                        class="advisor-items"
+                        aria-label="Contribution recommendations"></ul>
+                </div>
+
+            </div><!-- /#advisor-card -->
+
+            <!--
               Node Status and Control Panel — Issue #27
               ------------------------------------------
               JS: frontend/static/js/status.js (loaded at bottom of the scripts block)
