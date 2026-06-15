@@ -234,6 +234,28 @@ class AppConfig:
             "hourly_retention_days", 180
         )
 
+        # -- Contribution Advisor (A1) ---------------------------------------
+        # Read-only advisory inputs/gating. A missing "advisor" section yields
+        # the defaults below, so there is no behaviour change on upgrade.
+        # NOTE: engine threshold bands (CPU/RAM/temp/demand/step) live in
+        # backend.advisor.models.AdvisorPolicy, not here -- these are only the
+        # API-side sampling/warm-up knobs.
+        advisor = data.get("advisor", {})
+        self.advisor_sample_window_seconds: int = advisor.get(
+            "sample_window_seconds", 900
+        )
+        self.advisor_sample_throttle_seconds: int = advisor.get(
+            "sample_throttle_seconds", 45
+        )
+        self.advisor_growth_min_samples: int = advisor.get("growth_min_samples", 10)
+        self.advisor_growth_min_span_seconds: int = advisor.get(
+            "growth_min_span_seconds", 600
+        )
+        self.advisor_growth_sample_pass_fraction: float = advisor.get(
+            "growth_sample_pass_fraction", 0.80
+        )
+        self.advisor_hourly_history_hours: int = advisor.get("hourly_history_hours", 168)
+
 
 @lru_cache(maxsize=1)
 def get_app_config() -> AppConfig:
