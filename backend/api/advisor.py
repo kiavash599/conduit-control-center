@@ -328,9 +328,12 @@ def _serialize(result, now: datetime) -> AdvisorResponse:
 
 
 # ---------------------------------------------------------------------------
-# app.state lifecycle -- defensive lazy-init (the lifespan also inits in C3)
+# app.state lifecycle -- shared init used by BOTH the lifespan (eager) and the
+# endpoint (defensive). Creating the asyncio.Lock here means it is bound to the
+# running event loop. In-memory + per-process: valid only under --workers 1
+# (the traffic collector shares this single-worker invariant).
 # ---------------------------------------------------------------------------
-def _ensure_state(app) -> None:
+def ensure_advisor_state(app) -> None:
     st = app.state
     if not hasattr(st, "advisor_state") or st.advisor_state is None:
         st.advisor_state = AdvisorState()
@@ -363,7 +366,7 @@ async def get_advisor(
     """
     response.headers["Cache-Control"] = "no-store"
     app = request.app
-    _ensure_state(app)
+    ensure_advisor_state(app)
     cfg = get_app_config()
     now = _now()
     now_ts = _iso(now)

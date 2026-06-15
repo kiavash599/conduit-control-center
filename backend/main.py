@@ -46,6 +46,7 @@ from backend.dependencies import AuthRedirect
 from backend.pages import router as pages_router
 from backend.traffic.collector import TrafficCollector
 from backend.api import (
+    advisor_router,
     auth_router,
     conduit_router,
     ddns_router,
@@ -56,6 +57,7 @@ from backend.api import (
     status_router,
     traffic_router,
 )
+from backend.api.advisor import ensure_advisor_state
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -188,6 +190,12 @@ async def lifespan(app: FastAPI):
     # Start the traffic collector (no-op unless explicitly enabled)
     _maybe_start_traffic_collector(app)
 
+    # Initialise Contribution Advisor in-memory state (the asyncio.Lock is bound
+    # to this running loop). In-memory + per-process -- valid under --workers 1,
+    # the same single-worker invariant the collector relies on. The endpoint also
+    # calls ensure_advisor_state() defensively.
+    ensure_advisor_state(app)
+
     app.state.started_at = time.time()
     logger.info(
         "Startup complete -- listening on port %d",
@@ -267,6 +275,7 @@ app.include_router(logs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api/settings")
 app.include_router(ddns_router, prefix="/api/ddns")
 app.include_router(traffic_router, prefix="/api/traffic")
+app.include_router(advisor_router, prefix="/api/advisor")
 
 # ---------------------------------------------------------------------------
 # Static files

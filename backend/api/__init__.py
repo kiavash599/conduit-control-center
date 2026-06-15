@@ -13,6 +13,8 @@ metrics_router   -> /api/metrics
 logs_router      -> /api/logs
 settings_router  -> /api/settings
 ddns_router      -> /api/ddns
+traffic_router   -> /api/traffic
+advisor_router   -> /api/advisor
 """
 
 from backend.api.health import router as health_router
@@ -24,6 +26,7 @@ from backend.api.logs import router as logs_router
 from backend.api.settings import router as settings_router
 from backend.api.ddns import router as ddns_router
 from backend.api.traffic import router as traffic_router
+from backend.api.advisor import router as advisor_router
 
 __all__ = [
     "health_router",
@@ -35,4 +38,5 @@ __all__ = [
     "settings_router",
     "ddns_router",
     "traffic_router",
+    "advisor_router",
 ]
