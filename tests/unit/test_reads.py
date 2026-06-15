@@ -163,3 +163,48 @@ class TestSeries:
     async def test_invalid_range_raises(self, db):
         with pytest.raises(ValueError):
             await reads.get_series(db, range_key="bogus", now_ts=NOW)
+
+
+# ---------------------------------------------------------------------------
+# get_hourly_series (A1.3b — advisor-internal multi-day hourly history)
+# ---------------------------------------------------------------------------
+
+
+class TestHourlySeries:
+    async def test_dense_zero_filled_24(self, db):
+        await _hourly(db, "2026-06-13T10:00:00Z", 5, 6)
+        await _hourly(db, "2026-06-13T12:00:00Z", 7, 8)   # current hour
+        await db.commit()
+        s = await reads.get_hourly_series(db, hours=24, now_ts=NOW)
+        assert len(s) == 24
+        assert s[0]["bucket_utc"] == "2026-06-12T13:00:00Z"   # oldest
+        assert s[-1]["bucket_utc"] == "2026-06-13T12:00:00Z"  # current hour
+        m = {b["bucket_utc"]: (b["bytes_up"], b["bytes_down"]) for b in s}
+        assert m["2026-06-13T10:00:00Z"] == (5, 6)
+        assert m["2026-06-13T12:00:00Z"] == (7, 8)
+        assert m["2026-06-13T09:00:00Z"] == (0, 0)            # zero-filled gap
+
+    async def test_default_168_buckets(self, db):
+        s = await reads.get_hourly_series(db, now_ts=NOW)     # default hours=168 (7 days)
+        assert len(s) == 168
+        assert s[-1]["bucket_utc"] == "2026-06-13T12:00:00Z"
+        assert s[0]["bucket_utc"] == "2026-06-06T13:00:00Z"   # 167 h before current hour
+        assert all(b["bytes_up"] == 0 and b["bytes_down"] == 0 for b in s)  # empty db
+
+    async def test_excludes_buckets_outside_window(self, db):
+        await _hourly(db, "2026-06-13T12:00:00Z", 1, 1)       # in window
+        await _hourly(db, "2026-06-12T08:00:00Z", 99, 99)     # before the 24 h cutoff
+        await db.commit()
+        s = await reads.get_hourly_series(db, hours=24, now_ts=NOW)
+        m = {b["bucket_utc"]: (b["bytes_up"], b["bytes_down"]) for b in s}
+        assert m["2026-06-13T12:00:00Z"] == (1, 1)
+        assert "2026-06-12T08:00:00Z" not in m
+        assert all(v != (99, 99) for v in m.values())
+
+    async def test_bucket_shape_aggregate_only(self, db):
+        s = await reads.get_hourly_series(db, hours=3, now_ts=NOW)
+        assert all(set(b) == {"bucket_utc", "bytes_up", "bytes_down"} for b in s)
+
+    async def test_invalid_hours_raises(self, db):
+        with pytest.raises(ValueError):
+            await reads.get_hourly_series(db, hours=0, now_ts=NOW)

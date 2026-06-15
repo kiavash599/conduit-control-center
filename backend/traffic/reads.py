@@ -14,11 +14,13 @@ type hint and exposes its SQL as constants, so it can be imported and
 unit-tested without the aiosqlite runtime. All timestamps/buckets are UTC;
 display-timezone conversion is the client's concern.
 
-Two surfaces:
+Read surfaces:
   - get_summary(db, now_ts) -> headline (status, recording_since, lifetime,
     last_24h / last_7d windows)
   - get_series(db, range_key, now_ts) -> dense, zero-filled time buckets for the
     chart (range_key in {"24h","7d","30d"})
+  - get_hourly_series(db, hours, now_ts) -> dense, zero-filled hourly buckets over
+    a multi-day window (advisor-internal; default 168 h = 7 days)
 """
 
 from __future__ import annotations
@@ -163,3 +165,36 @@ async def get_series(db: "aiosqlite.Connection", *, range_key: str, now_ts: str)
         for k in keys
     ]
     return {"range": range_key, "granularity": granularity, "buckets": buckets}
+
+
+async def get_hourly_series(
+    db: "aiosqlite.Connection", *, hours: int = 168, now_ts: str
+) -> list[dict]:
+    """
+    Dense, zero-filled hourly buckets for the last ``hours`` hours (oldest -> newest).
+
+    Advisor-internal (A1.3): supplies the multi-day hourly history the Contribution
+    Advisor needs for its reduced-mode and decline analysis (default 168 h = 7 days).
+    The public ``/api/traffic/series`` range enum is intentionally left unchanged.
+
+    Read-only and aggregate-only: each bucket is ``{bucket_utc, bytes_up, bytes_down}``
+    from ``traffic_rollup_hourly`` (no per-region / per-scope data). Missing hours
+    are zero-filled so the caller gets a continuous, fixed-length series. Raises
+    ``ValueError`` on a non-positive ``hours``.
+    """
+    if hours <= 0:
+        raise ValueError(f"hours must be positive: {hours!r}")
+    keys = _hour_keys(now_ts, hours)
+    cur = await db.execute(SQL_HOURLY_RANGE, (keys[0], keys[-1]))
+    found = {
+        row["bucket_utc"]: (row["bytes_up"], row["bytes_down"])
+        for row in await cur.fetchall()
+    }
+    return [
+        {
+            "bucket_utc": k,
+            "bytes_up": found.get(k, (0, 0))[0],
+            "bytes_down": found.get(k, (0, 0))[1],
+        }
+        for k in keys
+    ]
