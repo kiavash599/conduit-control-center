@@ -113,12 +113,14 @@ import asyncio
 import logging
 import pathlib
 import re
+import shlex
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from typing import Literal
 
 from backend.config import get_app_config
+from backend.conduit.models import ConduitConfigView, ConfigField
 from backend.traffic.models import CounterReading, NodeRuntime
 
 logger = logging.getLogger(__name__)
@@ -1120,4 +1122,130 @@ async def get_node_runtime() -> NodeRuntime | None:
         connected_clients=_optional_int(text, _METRIC_CONNECTED_CLIENTS),
         idle_seconds=_optional_int(text, _METRIC_IDLE_SECONDS),
         max_common_clients=_optional_int(text, _METRIC_MAX_COMMON_CLIENTS),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API -- read-only Conduit configuration view (M1, §6.1)
+# ---------------------------------------------------------------------------
+#
+# get_conduit_config_view() reports the two operator-tunable knobs in both their
+# *configured* form (resolved from the unit ExecStart via `systemctl show`, no
+# sudo) and their *effective* form (Conduit Prometheus gauges). Read-only and
+# forgiving: every field degrades to None on miss; never raises. Introduces NO
+# write, restart, or privileged operation.
+
+_METRIC_BANDWIDTH_LIMIT = "conduit_bandwidth_limit_bytes_per_second"
+
+# 1 Mbps (decimal) = 125_000 bytes/sec -- matches Conduit's --bandwidth flag.
+_BYTES_PER_MBPS = 125_000
+
+
+def _bps_to_mbps(bps: int | None) -> int | None:
+    """Convert bytes/sec to integer decimal Mbps; None passes through."""
+    if bps is None:
+        return None
+    return round(bps / _BYTES_PER_MBPS)
+
+
+def _argv_from_execstart(blob: str | None) -> list[str]:
+    """Tokenise the last ``argv[]=`` vector from `systemctl show -p ExecStart`.
+
+    The structured output looks like::
+
+        { path=/opt/conduit/conduit ; argv[]=/opt/conduit/conduit start \
+          --max-common-clients 50 --bandwidth 40 ; ignore_errors=no ; ... }
+
+    The last ``argv[]`` is used so a future drop-in that resets+redefines
+    ExecStart (M2) is honoured. Tokenised with shlex (argv parsing), not a
+    regex over the raw text. Never raises.
+    """
+    if not blob:
+        return []
+    marker = "argv[]="
+    idx = blob.rfind(marker)
+    if idx == -1:
+        return []
+    seg = blob[idx + len(marker):]
+    end = seg.find(" ; ")          # argv[] ends at the next structured field
+    if end != -1:
+        seg = seg[:end]
+    try:
+        return shlex.split(seg)
+    except ValueError:
+        return seg.split()
+
+
+def _flag_int(argv: list[str], flag: str) -> int | None:
+    """Return the int value following ``flag`` in argv (``--f V`` or ``--f=V``).
+
+    None if the flag is absent or its value is not an integer.
+    """
+    for i, tok in enumerate(argv):
+        if tok == flag:
+            if i + 1 < len(argv):
+                try:
+                    return int(argv[i + 1])
+                except ValueError:
+                    return None
+            return None
+        if tok.startswith(flag + "="):
+            try:
+                return int(tok.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
+
+
+async def _read_configured_execstart() -> str | None:
+    """Resolved ExecStart for the conduit unit, or None. Read-only; no sudo.
+
+    `systemctl show -p ExecStart` returns the base unit merged with any
+    drop-ins, so this stays correct once M2 adds conduit.service.d/ccc.conf.
+    Never raises.
+    """
+    svc = get_app_config().conduit_service_name
+    try:
+        rc, out, _err = await _run(["systemctl", "show", svc, "--property=ExecStart"])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("config view: systemctl show failed (%s)", exc)
+        return None
+    return out if rc == 0 else None
+
+
+async def get_conduit_config_view() -> ConduitConfigView:
+    """Read-only configured+effective view of max-common-clients and bandwidth.
+
+    Never raises. Effective values come from Conduit metrics (absent when the
+    endpoint is unreachable). Configured values come from the resolved unit
+    ExecStart (argv-parsed). No privileged/write/restart operation is performed.
+    """
+    port = get_app_config().conduit_metrics_port
+    url = f"http://localhost:{port}/metrics"
+    try:
+        text: str | None = await asyncio.to_thread(_fetch_metrics_text, url)
+    except Exception:  # noqa: BLE001
+        text = None
+
+    eff_mcc = _optional_int(text, _METRIC_MAX_COMMON_CLIENTS) if text else None
+    eff_bw_bps = _optional_int(text, _METRIC_BANDWIDTH_LIMIT) if text else None
+
+    argv = _argv_from_execstart(await _read_configured_execstart())
+    cfg_mcc = _flag_int(argv, "--max-common-clients")
+    cfg_bw = _flag_int(argv, "--bandwidth")
+
+    try:
+        service_status: str = await get_status()
+    except Exception:  # noqa: BLE001
+        service_status = "unknown"
+
+    return ConduitConfigView(
+        service_status=service_status,
+        max_common_clients=ConfigField(configured=cfg_mcc, effective=eff_mcc),
+        bandwidth_mbps=ConfigField(
+            configured=cfg_bw,
+            effective=_bps_to_mbps(eff_bw_bps),
+            unlimited_configured=(cfg_bw == -1),
+            unlimited_effective=(eff_bw_bps == 0),
+        ),
     )

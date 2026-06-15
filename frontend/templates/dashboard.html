@@ -957,6 +957,44 @@
 
             </div><!-- /#settings-card -->
 
+            <!--
+              Conduit Configuration (read-only) — M1 (§6.1).
+              Shows configured (next-start) vs effective (running) values + drift.
+              NO edit controls, NO apply button (write path is a later milestone).
+              JS: conduit_config.js; API: GET /api/conduit/config (refresh-on-view,
+              no polling). DOM consumed by conduit_config.js:
+                #conduit-config-{loading,error,body}
+                #cc-mcc-{configured,effective,drift}, #cc-bw-{configured,effective,drift}
+            -->
+            <div class="card" id="conduit-config-card">
+                <div class="card__header">
+                    <h2 class="card__title">Conduit Configuration</h2>
+                </div>
+                <p class="card__subtitle">Configured = applied at next start · Effective = currently running</p>
+
+                <p id="conduit-config-loading" class="is-loading">Loading configuration&hellip;</p>
+                <p id="conduit-config-error" class="panel-error" role="status" hidden>Configuration unavailable.</p>
+
+                <dl id="conduit-config-body" class="status-meta status-meta--divided" hidden>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Max common clients</dt>
+                        <dd class="status-meta__val">
+                            <span id="cc-mcc-configured">&mdash;</span>
+                            <span class="text-dim text-sm"> (effective: <span id="cc-mcc-effective">&mdash;</span>)</span>
+                            <span id="cc-mcc-drift" class="badge badge--neutral" hidden></span>
+                        </dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Global bandwidth</dt>
+                        <dd class="status-meta__val">
+                            <span id="cc-bw-configured">&mdash;</span>
+                            <span class="text-dim text-sm"> (effective: <span id="cc-bw-effective">&mdash;</span>)</span>
+                            <span id="cc-bw-drift" class="badge badge--neutral" hidden></span>
+                        </dd>
+                    </div>
+                </dl>
+            </div><!-- /#conduit-config-card -->
+
         </div>
 
     </main><!-- /.main-content -->
@@ -1000,6 +1038,9 @@
 
 <!-- Issue #31: settings / change password -->
 <script src="{{ static_url('js/settings.js') }}"></script>
+
+<!-- M1 (§6.1): read-only Conduit configuration view (Settings; refresh-on-view) -->
+<script src="{{ static_url('js/conduit_config.js') }}"></script>
 
 <!-- Issue #43: DDNS status panel -->
 <script src="{{ static_url('js/ddns.js') }}"></script>

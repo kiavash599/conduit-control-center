@@ -65,6 +65,7 @@ from backend.conduit.adapter import (
     ConduitAdapterError,
     ConduitPermissionError,
     ConduitStatus,
+    get_conduit_config_view,
     get_status,
     restart,
     start,
@@ -80,6 +81,54 @@ from backend.dependencies import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["conduit"])
+
+
+# ---------------------------------------------------------------------------
+# Read-only configuration view (M1, §6.1)
+# ---------------------------------------------------------------------------
+# Reports the two operator-tunable knobs as configured (next-start) vs effective
+# (running) values plus a drift flag. Read-only and aggregate-only: no write,
+# restart, or privileged operation. Degrades to nulls; never 5xx on read miss.
+
+class ConfigFieldOut(BaseModel):
+    configured: int | None = None
+    effective: int | None = None
+    drift: bool | None = None
+    unlimited_configured: bool = False
+    unlimited_effective: bool = False
+
+
+class ConduitConfigResponse(BaseModel):
+    service_status: str
+    drift: bool | None = None
+    max_common_clients: ConfigFieldOut
+    bandwidth_mbps: ConfigFieldOut
+
+
+@router.get(
+    "/config",
+    response_model=ConduitConfigResponse,
+    summary="Read-only Conduit configuration (configured vs effective)",
+    responses={401: {"description": "Not authenticated"}},
+)
+async def get_conduit_config(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> ConduitConfigResponse:
+    """Aggregate-only, read-only view. No write/restart/privileged operation."""
+    view = await get_conduit_config_view()
+    mcc, bw = view.max_common_clients, view.bandwidth_mbps
+    return ConduitConfigResponse(
+        service_status=view.service_status,
+        drift=view.drift,
+        max_common_clients=ConfigFieldOut(
+            configured=mcc.configured, effective=mcc.effective, drift=mcc.drift,
+        ),
+        bandwidth_mbps=ConfigFieldOut(
+            configured=bw.configured, effective=bw.effective, drift=bw.drift,
+            unlimited_configured=bw.unlimited_configured,
+            unlimited_effective=bw.unlimited_effective,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
