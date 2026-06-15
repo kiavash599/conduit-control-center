@@ -129,6 +129,13 @@ def _capacity(
             state,
         )
 
+    # Growth is skipped entirely when the caller (A1.3 API, Option Z) has not yet
+    # confirmed sustained headroom -> policy.growth_enabled is False. Back-off above
+    # and _track_max (cooldown reset on config change) still run; crucially, no
+    # growth cooldown is stamped here, so nothing needs to be rolled back.
+    if not policy.growth_enabled:
+        return None, state
+
     # Growth (SUGGESTION/STRONG): live + demand + headroom + temp gate (skip if None) + cooldown.
     if node is None or cur is None or node.connected_clients is None or cur <= 0:
         return None, state

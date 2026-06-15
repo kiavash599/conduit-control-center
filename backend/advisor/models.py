@@ -171,6 +171,7 @@ class AdvisorPolicy:
     growth_step_max: int = 100
     max_limit_ceiling: int = 1000
     growth_cooldown_hours: float = 24.0
+    growth_enabled: bool = True      # A1.3 (Option Z): API sets False until sustained headroom is confirmed
 
     # Reduced-mode quiet window
     reduced_min_history_days: int = 7

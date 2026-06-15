@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from backend.advisor.engine import evaluate
 from backend.advisor.models import (
     AdvisorInput,
+    AdvisorPolicy,
     AdvisorState,
     BytesPair,
     ConduitState,
@@ -228,3 +229,57 @@ def test_deterministic_same_inputs():
     b = evaluate(inp, now=NOW)
     assert _domains(a.items) == _domains(b.items)
     assert a.summary == b.summary
+
+
+# --- A1.3 Option Z: growth_enabled flag -------------------------------------
+def test_growth_enabled_default_true_keeps_behavior():
+    r = evaluate(_growth_input(), now=NOW, policy=AdvisorPolicy())
+    assert _domains(r.items) == [(Domain.CAPACITY, Severity.STRONG_SUGGESTION)]
+
+
+def test_growth_disabled_suppresses_growth():
+    r = evaluate(_growth_input(), now=NOW, policy=AdvisorPolicy(growth_enabled=False))
+    assert r.items == []
+    assert r.summary.status == "live"
+
+
+def test_growth_disabled_backoff_still_works():
+    inp = AdvisorInput(_sys(75, 90, 72), _node(180, 0, 200), ConduitState(True, 10 * DAY), LIFETIME)
+    r = evaluate(inp, now=NOW, policy=AdvisorPolicy(growth_enabled=False))
+    assert _domains(r.items) == [(Domain.CAPACITY, Severity.WARNING)]
+
+
+def test_growth_disabled_reduced_mode_still_works():
+    traffic = TrafficSnapshot(lifetime=BytesPair(1, 0), series_hourly=_quiet_series(7), history_days=7)
+    inp = AdvisorInput(_sys(30, 50, 60), _node(10, 0, 50), ConduitState(True, 10 * DAY), traffic)
+    r = evaluate(inp, now=NOW, policy=AdvisorPolicy(growth_enabled=False))
+    assert _domains(r.items) == [(Domain.REDUCED_MODE, Severity.STRONG_SUGGESTION)]
+
+
+def test_growth_disabled_health_still_works():
+    inp = AdvisorInput(_sys(30, 50, 60), _node(0, 0, 50), ConduitState(False, 10 * DAY), LIFETIME)
+    r = evaluate(inp, now=NOW, policy=AdvisorPolicy(growth_enabled=False))
+    assert _domains(r.items) == [(Domain.HEALTH, Severity.WARNING)]
+    assert r.items[0].title == "Broker disconnected"
+
+
+def test_growth_disabled_summary_present():
+    r = evaluate(_growth_input(), now=NOW, policy=AdvisorPolicy(growth_enabled=False))
+    assert r.summary.status == "live"
+    assert "Healthy" in r.summary.headline
+
+
+def test_no_cooldown_stamped_when_growth_disabled():
+    # Growth-eligible inputs, but growth disabled -> no growth cooldown recorded,
+    # while _track_max still tracks the current limit. (No engine-internal keys referenced.)
+    r = evaluate(_growth_input(), now=NOW, state=AdvisorState(), policy=AdvisorPolicy(growth_enabled=False))
+    assert r.items == []
+    assert r.state.last_emitted_at == {}
+    assert r.state.last_max_common_clients == 50
+
+
+def test_cooldown_stamped_when_growth_enabled():
+    r = evaluate(_growth_input(), now=NOW, state=AdvisorState(), policy=AdvisorPolicy(growth_enabled=True))
+    assert _domains(r.items) == [(Domain.CAPACITY, Severity.STRONG_SUGGESTION)]
+    assert r.state.last_emitted_at != {}
+    assert r.state.last_max_common_clients == 50
