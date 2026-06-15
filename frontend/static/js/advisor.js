@@ -69,10 +69,21 @@
         unknown:      { cls: 'badge--unknown', label: 'Unknown' }
     };
 
+    // Last resolved status key actually rendered to the chip. Used to suppress
+    // no-op DOM writes: rewriting textContent every poll mutates the node even
+    // when the value is unchanged, which makes the aria-live="polite" chip
+    // re-announce the identical status (e.g. "Live") each cycle (R1). Guarding
+    // here preserves the first paint and real transitions while keeping the
+    // aria-live markup intact.
+    var lastChipStatus = null;
+
     function setChip(status) {
         var chip = el('advisor-status-chip');
         if (!chip) return;
-        var map = STATUS_BADGE[status] || STATUS_BADGE.unknown;
+        var key = STATUS_BADGE[status] ? status : 'unknown';
+        if (key === lastChipStatus) return;   // unchanged -> no mutation, no re-announce
+        lastChipStatus = key;
+        var map = STATUS_BADGE[key];
         chip.className = 'badge ' + map.cls;
         chip.textContent = map.label;
     }
