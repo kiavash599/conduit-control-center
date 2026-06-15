@@ -44,9 +44,14 @@ WorkingDirectory=/opt/conduit-cc
 # Read configuration from .env.  EnvironmentFile is processed before ExecStart.
 EnvironmentFile=/etc/conduit-cc/.env
 
+# Single worker is REQUIRED: the metrics, DDNS, and adapter in-memory caches and
+# the Contribution Advisor's in-memory state assume one process, and the traffic
+# collector is a single-writer (file-locked) background task. Do not increase
+# --workers; multiple workers would fragment in-memory state.
 ExecStart=/opt/conduit-cc/venv/bin/uvicorn backend.main:app \
     --host 127.0.0.1 \
-    --port 8000
+    --port 8000 \
+    --workers 1
 
 # Restart the service if it exits unexpectedly (crash, OOM kill, etc.).
 # Does NOT restart on a clean exit (exit code 0) or a deliberate stop.

@@ -9,6 +9,18 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Contribution Advisor
+
+- Contribution Advisor — read-only, aggregate-only guidance card at the top of
+  the Dashboard. Surfaces Health, Capacity, and Reduced-mode recommendations
+  plus a contribution health summary (Live/Offline status chip + headline).
+- Advisor API — `GET /api/advisor` (auth-required, `Cache-Control: no-store`);
+  deterministic engine with cooldown and a growth warm-up gate; degrades
+  gracefully (never 5xx) when inputs are unavailable.
+- Configurable via the `advisor` block in `config.json` (sampling/warm-up
+  knobs; see `config.example.json`). Defaults are safe; aggregate-only — no
+  per-client or per-region data.
+
 ### Added — Traffic history and dashboard information architecture
 
 - Persistent traffic collector — aggregate-only byte ledger in SQLite with

@@ -87,6 +87,19 @@ Sources examined: `cli/cmd/start.go`, `cli/cmd/ryve.go`, `cli/internal/config/co
 
 The table below captures every capability assessed. "CCC Candidate" describes the proposed CCC surface for that capability.
 
+> **Contribution Advisor (delivered).** CCC ships a read-only, aggregate-only
+> *advisory* surface — Health / Capacity / Reduced-mode guidance at
+> `GET /api/advisor`. This is distinct from the *control* capabilities in the
+> matrix below: **B1** `--max-common-clients` and **C1** `--bandwidth`
+> (Read+Write, planned v0.2.0). The Advisor *recommends*; it does not *set*.
+> Recommended-bandwidth and recommended-max-clients *calculations* are deferred
+> to a future planning milestone that builds on the v0.2.0 control work.
+>
+> Naming note: the engineering epic was internally labelled "A1 Contribution
+> Advisor". This is unrelated to capability-matrix row **A1 (Enable personal
+> clients)** below; the "A1" shorthand should not be used for the Advisor in
+> roadmap docs.
+
 | # | Capability | Android App | Linux CLI | CCC Current | CCC Candidate |
 |---|---|:---:|:---:|:---:|---|
 | **A — Personal Mode** |||||

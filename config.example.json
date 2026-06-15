@@ -48,5 +48,15 @@
     "snapshot_retention_days": 7,
     "delta_retention_days": 90,
     "hourly_retention_days": 180
+  },
+
+  "advisor": {
+    "_comment": "Contribution Advisor warm-up and sampling knobs. Read-only, aggregate-only guidance; safe to leave at defaults. sample_throttle_seconds should be <= the dashboard poll interval (60s) so the warm-up buffer fills while the Dashboard is open. Growth suggestions require growth_min_samples taken over at least growth_min_span_seconds, with growth_sample_pass_fraction of them inside resource headroom.",
+    "sample_window_seconds": 900,
+    "sample_throttle_seconds": 45,
+    "growth_min_samples": 10,
+    "growth_min_span_seconds": 600,
+    "growth_sample_pass_fraction": 0.8,
+    "hourly_history_hours": 168
   }
 }

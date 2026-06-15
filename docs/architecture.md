@@ -70,6 +70,26 @@ It contains three tables:
 The database holds no Conduit secrets. Conduit's keypair, pairing links, and
 API tokens are never written to it.
 
+## Runtime model
+
+CCC runs as a **single** uvicorn worker. The metrics, DDNS, and adapter caches
+and the Contribution Advisor's sample buffer and evaluation state are kept in
+process memory and assume exactly one process; running multiple workers would
+fragment that state. The traffic collector is more defensive — it is a
+single-writer background task guarded by a file lock, so additional processes
+would contend for the lock rather than double-write — but the in-memory state
+above would still split across workers. Multiple workers are therefore not
+supported; `deployment/conduit-cc.service` pins `--workers 1` to enforce this.
+
+The **Contribution Advisor** is a read-only advisory layer in the Backend API
+that combines system resource samples, Conduit runtime metrics, and traffic
+history into Health, Capacity, and Reduced-mode guidance (`GET /api/advisor`).
+It keeps a short in-memory sample buffer to smooth noisy readings; "scale up"
+(growth) suggestions appear only after a warm-up period (~10 minutes of
+continuous Dashboard viewing) and reset on service restart. The buffer advances
+only while the Dashboard is open, so the Advisor is best-effort guidance, not a
+background monitor. Aggregate-only: no per-client or per-region data.
+
 ## Security model
 
 - **Loopback-only application.** FastAPI listens on `127.0.0.1` only; all
