@@ -19,16 +19,23 @@ caller-owned state, and this layer never reaches into engine internals.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import psutil
+from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel
 
+from backend.advisor.engine import evaluate
 from backend.advisor.models import (
+    AdvisorInput,
     AdvisorPolicy,
+    AdvisorState,
     BytesPair,
     ConduitState,
     SeriesBucket,
@@ -41,6 +48,9 @@ from backend.conduit.adapter import (
     get_node_runtime,
     read_counters,
 )
+from backend.config import get_app_config
+from backend.database import get_db
+from backend.dependencies import AuthenticatedUser, get_current_user
 from backend.traffic import reads
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -260,3 +270,132 @@ def _growth_allowed(buffer, policy: AdvisorPolicy, cfg: "AppConfig") -> bool:
     if avg is None or avg.cpu_percent is None or avg.ram_percent is None:
         return False
     return avg.cpu_percent < policy.cpu_grow_suggest and avg.ram_percent < policy.ram_grow_suggest
+
+
+# ---------------------------------------------------------------------------
+# Response models (aggregate-only; never expose AdvisorState/buffer/region/scope)
+# ---------------------------------------------------------------------------
+class AdvisorItemOut(BaseModel):
+    severity: str   # "warning" | "strong_suggestion" | "suggestion" | "info"
+    domain: str     # "capacity" | "reduced_mode" | "health"
+    title: str
+    message: str
+    rationale: str
+    apply_hint: str | None = None
+
+
+class AdvisorSummaryOut(BaseModel):
+    status: str
+    headline: str
+    is_live: bool | None = None
+    connected_clients: int | None = None
+    lifetime_up: int | None = None
+    lifetime_down: int | None = None
+    recording_since: str | None = None
+
+
+class AdvisorResponse(BaseModel):
+    summary: AdvisorSummaryOut
+    items: list[AdvisorItemOut]
+    generated_at: str
+
+
+def _serialize(result, now: datetime) -> AdvisorResponse:
+    s = result.summary
+    return AdvisorResponse(
+        summary=AdvisorSummaryOut(
+            status=s.status,
+            headline=s.headline,
+            is_live=s.is_live,
+            connected_clients=s.connected_clients,
+            lifetime_up=s.lifetime_up,
+            lifetime_down=s.lifetime_down,
+            recording_since=s.recording_since,
+        ),
+        items=[
+            AdvisorItemOut(
+                severity=it.severity.name.lower(),
+                domain=it.domain.value,
+                title=it.title,
+                message=it.message,
+                rationale=it.rationale,
+                apply_hint=it.apply_hint,
+            )
+            for it in result.items
+        ],
+        generated_at=_iso(now),
+    )
+
+
+# ---------------------------------------------------------------------------
+# app.state lifecycle -- defensive lazy-init (the lifespan also inits in C3)
+# ---------------------------------------------------------------------------
+def _ensure_state(app) -> None:
+    st = app.state
+    if not hasattr(st, "advisor_state") or st.advisor_state is None:
+        st.advisor_state = AdvisorState()
+    if not hasattr(st, "advisor_samples"):
+        st.advisor_samples = deque()
+    if not hasattr(st, "advisor_lock"):
+        st.advisor_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+router = APIRouter(tags=["advisor"])
+
+
+@router.get(
+    "",
+    response_model=AdvisorResponse,
+    summary="Contribution Advisor recommendations + health summary",
+    responses={401: {"description": "Not authenticated"}},
+)
+async def get_advisor(
+    request: Request,
+    response: Response,
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> AdvisorResponse:
+    """
+    Read-only, aggregate-only advisory output. Degrades gracefully: any missing
+    input yields fewer items + an honest summary; never 5xx on input issues.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    app = request.app
+    _ensure_state(app)
+    cfg = get_app_config()
+    now = _now()
+    now_ts = _iso(now)
+
+    # --- gather inputs OUTSIDE the lock (I/O); each degrades to None ---
+    sys_now = _gather_system()
+    node = await _gather_node()
+    conduit = await _gather_conduit()
+    traffic = None
+    try:
+        async with get_db() as db:
+            traffic = await _gather_traffic(db, now_ts=now_ts, cfg=cfg)
+    except (sqlite3.Error, OSError):
+        logger.warning("advisor: database unavailable", exc_info=True)
+
+    base_policy = AdvisorPolicy()
+
+    # --- critical section (await-free): buffer + warm-up + evaluate + persist ---
+    async with app.state.advisor_lock:
+        buf = app.state.advisor_samples
+        _append_sample(
+            buf,
+            now,
+            sys_now,
+            throttle_seconds=cfg.advisor_sample_throttle_seconds,
+            window_seconds=cfg.advisor_sample_window_seconds,
+        )
+        sys_avg = _window_average(buf)
+        growth_allowed = _growth_allowed(buf, base_policy, cfg)
+        policy = replace(base_policy, growth_enabled=growth_allowed)
+        inp = AdvisorInput(system=sys_avg, node=node, conduit=conduit, traffic=traffic)
+        result = evaluate(inp, now=now, state=app.state.advisor_state, policy=policy)
+        app.state.advisor_state = result.state
+
+    return _serialize(result, now)
