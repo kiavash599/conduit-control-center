@@ -51,3 +51,18 @@ class ConduitConfigView:
         if any(d is None for d in drifts):
             return None
         return False
+
+
+@dataclass(frozen=True)
+class RegionStat:
+    """One row of the Regional Analytics table (aggregate-only, scope=common).
+
+    region        ISO 3166-1 alpha-2 code (e.g. "SA").
+    traffic_bytes uploaded + downloaded bytes for that region.
+    clients       connected clients for that region.
+    No IP, session, or per-client data is represented or derivable.
+    """
+
+    region: str
+    traffic_bytes: int
+    clients: int

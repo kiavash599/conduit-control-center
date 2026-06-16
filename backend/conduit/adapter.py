@@ -122,7 +122,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from backend.config import get_app_config
-from backend.conduit.models import ConduitConfigView, ConfigField
+from backend.conduit.models import ConduitConfigView, ConfigField, RegionStat
 from backend.traffic.models import CounterReading, NodeRuntime
 
 logger = logging.getLogger(__name__)
@@ -1447,3 +1447,84 @@ def _health_reason(
     elif bw.effective != expected_bw_mbps:
         return f"bandwidth read-back mismatch (got {bw.effective}, want {expected_bw_mbps})"
     return None
+
+
+# ---------------------------------------------------------------------------
+# Public API -- Regional Analytics (RA-1): aggregate-only top regions by traffic
+# ---------------------------------------------------------------------------
+# Reads the LABELLED per-region gauges (the only place CCC reads labelled series).
+# Aggregate-only by construction: only {scope,region} aggregates are read --
+# there is no IP, session, or per-client data in the source. Read-only and
+# forgiving: returns [] when metrics are unreachable; never raises.
+
+_METRIC_REGION_BYTES_UP = "conduit_region_bytes_uploaded"
+_METRIC_REGION_BYTES_DOWN = "conduit_region_bytes_downloaded"
+_METRIC_REGION_CONNECTED = "conduit_region_connected_clients"
+
+# Matches `name{label="v",...} <value>`; labels parsed order-independently below.
+_REGION_LABEL_RE: re.Pattern[str] = re.compile(r'(\w+)="([^"]*)"')
+
+
+def _parse_region_series(text: str, metric_name: str, *, scope: str = "common") -> dict[str, int]:
+    """Return {region_code: summed_value} for a labelled region gauge.
+
+    Order-independent label parsing (`scope`/`region` may appear in any order).
+    A line whose scope label is absent is treated as "common" (the contribution
+    default) -- so it is counted for a common query and excluded from a personal
+    query. Lines for other scopes, unlabelled aggregates, or malformed values are
+    skipped. Never raises.
+    """
+    out: dict[str, int] = {}
+    prefix = metric_name + "{"
+    for line in text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        rbrace = line.find("}")
+        if rbrace == -1:
+            continue
+        labels = dict(_REGION_LABEL_RE.findall(line[len(metric_name) + 1:rbrace]))
+        region = labels.get("region")
+        if not region:
+            continue
+        if labels.get("scope", "common") != scope:
+            continue
+        raw = line[rbrace + 1:].strip()
+        try:
+            value = int(float(raw))
+        except (ValueError, OverflowError):
+            continue
+        out[region] = out.get(region, 0) + value
+    return out
+
+
+async def get_regions(*, scope: str = "common", limit: int = 10) -> list[RegionStat]:
+    """Aggregate-only top regions by traffic (uploaded + downloaded), scope-filtered.
+
+    Per region: traffic_bytes = bytes_up + bytes_down; clients = connected_clients.
+    Regions with zero traffic AND zero clients are excluded. Sorted by
+    traffic_bytes DESC (region code as a stable tiebreak), capped to ``limit``.
+
+    Read-only and forgiving: returns [] when the metrics endpoint is unreachable
+    or unparseable. Never raises. Reads ONLY {scope,region} aggregates.
+    """
+    port = get_app_config().conduit_metrics_port
+    url = f"http://localhost:{port}/metrics"
+    try:
+        text = await asyncio.to_thread(_fetch_metrics_text, url)
+    except Exception:  # noqa: BLE001
+        return []
+
+    up = _parse_region_series(text, _METRIC_REGION_BYTES_UP, scope=scope)
+    down = _parse_region_series(text, _METRIC_REGION_BYTES_DOWN, scope=scope)
+    connected = _parse_region_series(text, _METRIC_REGION_CONNECTED, scope=scope)
+
+    rows: list[RegionStat] = []
+    for region in set(up) | set(down) | set(connected):
+        traffic = up.get(region, 0) + down.get(region, 0)
+        clients = connected.get(region, 0)
+        if traffic == 0 and clients == 0:
+            continue
+        rows.append(RegionStat(region=region, traffic_bytes=traffic, clients=clients))
+
+    rows.sort(key=lambda s: (-s.traffic_bytes, s.region))  # traffic DESC, stable
+    return rows[:limit]

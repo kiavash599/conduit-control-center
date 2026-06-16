@@ -70,6 +70,7 @@ from backend.conduit.adapter import (
     ConduitStatus,
     apply_conduit_config,
     get_conduit_config_view,
+    get_regions,
     get_status,
     helper_is_safe,
     rollback_conduit_config,
@@ -139,6 +140,40 @@ async def get_conduit_config(
             unlimited_configured=bw.unlimited_configured,
             unlimited_effective=bw.unlimited_effective,
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regional Analytics (RA-1) -- read-only, aggregate-only top regions by traffic
+# ---------------------------------------------------------------------------
+
+class RegionOut(BaseModel):
+    region: str          # ISO 3166-1 alpha-2
+    traffic_bytes: int   # uploaded + downloaded (scope=common)
+    clients: int         # connected clients (scope=common)
+
+
+class RegionsResponse(BaseModel):
+    regions: list[RegionOut]
+
+
+@router.get(
+    "/regions",
+    response_model=RegionsResponse,
+    summary="Top regions by traffic (aggregate-only; scope=common, Top 10)",
+    responses={401: {"description": "Not authenticated"}},
+)
+async def get_conduit_regions(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> RegionsResponse:
+    """Aggregate-only: returns only {region, traffic_bytes, clients}. No IPs,
+    sessions, or per-client data. Degrades to an empty list; never 5xx."""
+    rows = await get_regions(scope="common", limit=10)
+    return RegionsResponse(
+        regions=[
+            RegionOut(region=r.region, traffic_bytes=r.traffic_bytes, clients=r.clients)
+            for r in rows
+        ]
     )
 
 
