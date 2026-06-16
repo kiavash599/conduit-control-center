@@ -122,4 +122,22 @@ ProtectHome=yes
 #   - RestrictNamespaces=
 #   - LockPersonality=
 #   - PrivateDevices=
-# An explicit "NoNewPrivileges=no" does NOT ove
+# An explicit "NoNewPrivileges=no" does NOT override the above: the kernel
+# cannot install an unprivileged seccomp filter without no_new_privs, so
+# systemd forces it on whenever any of these directives is present.
+#
+# Retained hardening (above) does NOT imply NoNewPrivileges:
+#   ProtectSystem=strict, ReadWritePaths=, UMask=0077, PrivateTmp=yes,
+#   ProtectHome=yes.
+#
+# Residual risk: a compromised conduit-cc process could invoke sudo, but only
+# the three systemctl commands allowed by /etc/sudoers.d/conduit-cc.
+#
+# TODO (v1.x): replace sudo with polkit + systemd D-Bus control. systemctl
+# over D-Bus needs no setuid, so it is compatible with NoNewPrivileges=yes,
+# allowing the omitted SystemCallFilter / Restrict* / Private* directives to
+# be restored. Touches backend/conduit/adapter.py and the install.sh sudoers
+# rule.
+
+[Install]
+WantedBy=multi-user.target

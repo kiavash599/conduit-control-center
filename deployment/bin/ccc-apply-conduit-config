@@ -216,4 +216,17 @@ def main(argv: list[str] | None = None) -> int:
     p_apply.add_argument("--max-common-clients", type=int, required=True)
     p_apply.add_argument("--bandwidth-mbps", type=int, required=True)
     sub.add_parser("rollback")
-    # argparse rejects unknown args/subc
+    # argparse rejects unknown args/subcommands -> exit 2 (usage).
+    args = parser.parse_args(argv)
+
+    if args.cmd == "apply":
+        mcc = _validate_mcc(args.max_common_clients)
+        bw = _validate_bw(args.bandwidth_mbps)
+        cmd_apply(mcc, bw)
+    elif args.cmd == "rollback":
+        cmd_rollback()
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
