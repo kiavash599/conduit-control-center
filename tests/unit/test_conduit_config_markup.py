@@ -13,6 +13,7 @@ import pathlib
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _DASH = _ROOT / "frontend" / "templates" / "dashboard.html"
 _CSS = _ROOT / "frontend" / "static" / "css" / "base.css"
+_JS = _ROOT / "frontend" / "static" / "js" / "conduit_config.js"
 
 
 def _card() -> str:
@@ -75,3 +76,32 @@ def test_no_inline_script_or_style_in_card():
 
 def test_css_group_class_present():
     assert ".cc-reduced-group" in _CSS.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+#  BS3.2 — conduit_config.js wiring guards (static)                            #
+# --------------------------------------------------------------------------- #
+
+def test_js_no_innerhtml():
+    assert "innerHTML" not in _JS.read_text(encoding="utf-8")
+
+
+def test_js_clients_not_users():
+    assert "Users" not in _JS.read_text(encoding="utf-8")
+
+
+def test_js_required_confirm_sentence():
+    js = _JS.read_text(encoding="utf-8")
+    assert "evaluated automatically by Conduit" in js
+    assert "No restart occurs at the configured start or end time" in js
+
+
+def test_js_references_reduced_hooks():
+    js = _JS.read_text(encoding="utf-8")
+    for token in ("cc-reduced-summary", "cc-reduced-local", "cc-in-reduced-enabled",
+                  "cc-in-reduced-start", "cc-in-reduced-end", "cc-in-reduced-max",
+                  "cc-in-reduced-bw", "cc-confirm-summary",
+                  "/api/conduit/config/validate", "/api/conduit/config/apply"):
+        assert token in js, token
+    # full-state: the apply body carries a reduced object
+    assert "reduced: pending.reduced" in js
