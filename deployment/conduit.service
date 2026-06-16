@@ -38,11 +38,19 @@ Type=simple
 User=conduit
 Group=conduit
 WorkingDirectory=/var/lib/conduit
+# CCC-managed configuration knobs (M2). Defaults live here; CCC overrides them by
+# writing ONLY Environment= lines to the drop-in
+# /etc/systemd/system/conduit.service.d/ccc.conf (via the root helper
+# ccc-apply-conduit-config). ExecStart references the BRACED form ${VAR} so each
+# value is substituted as exactly one argument, with no shell. Do not change the
+# braced form to $VAR (that would whitespace-split the value).
+Environment=CCC_MAX_COMMON_CLIENTS=50
+Environment=CCC_BANDWIDTH_MBPS=40
 ExecStart=/opt/conduit/conduit start \
     --data-dir /var/lib/conduit/data \
     --metrics-addr 127.0.0.1:9090 \
-    --max-common-clients 50 \
-    --bandwidth 40
+    --max-common-clients ${CCC_MAX_COMMON_CLIENTS} \
+    --bandwidth ${CCC_BANDWIDTH_MBPS}
 Restart=on-failure
 RestartSec=10s
 ProtectSystem=strict

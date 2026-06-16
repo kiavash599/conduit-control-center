@@ -58,6 +58,8 @@ from backend.api import (
     traffic_router,
 )
 from backend.api.advisor import ensure_advisor_state
+from backend.api.conduit import ensure_conduit_apply_lock
+from backend.conduit.adapter import helper_is_safe as conduit_helper_is_safe
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -195,6 +197,16 @@ async def lifespan(app: FastAPI):
     # the same single-worker invariant the collector relies on. The endpoint also
     # calls ensure_advisor_state() defensively.
     ensure_advisor_state(app)
+
+    # M2 config write: per-process apply-lock (bound to this loop). The apply
+    # endpoint also ensures it defensively. Log whether the privileged config
+    # helper is present + safe; the apply endpoint refuses to run if it is not.
+    ensure_conduit_apply_lock(app)
+    if not conduit_helper_is_safe():
+        logger.warning(
+            "Conduit config write helper missing or unsafe -- config writes are "
+            "disabled (the apply endpoint will return 503)."
+        )
 
     app.state.started_at = time.time()
     logger.info(

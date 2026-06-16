@@ -111,9 +111,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import re
 import shlex
+import stat
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -1200,17 +1202,69 @@ def _flag_int(argv: list[str], flag: str) -> int | None:
 async def _read_configured_execstart() -> str | None:
     """Resolved ExecStart for the conduit unit, or None. Read-only; no sudo.
 
-    `systemctl show -p ExecStart` returns the base unit merged with any
-    drop-ins, so this stays correct once M2 adds conduit.service.d/ccc.conf.
-    Never raises.
+    Backward-compat source for pre-M2 units that passed literal integer flags in
+    ExecStart. Post-M2 the unit uses ``${CCC_*}`` braced vars, which
+    ``systemctl show -p ExecStart`` prints *literally* (substitution happens at
+    exec time), so configured values are read from the Environment instead (see
+    _read_configured_environment). Never raises.
     """
     svc = get_app_config().conduit_service_name
     try:
         rc, out, _err = await _run(["systemctl", "show", svc, "--property=ExecStart"])
     except Exception as exc:  # noqa: BLE001
-        logger.debug("config view: systemctl show failed (%s)", exc)
+        logger.debug("config view: systemctl show ExecStart failed (%s)", exc)
         return None
     return out if rc == 0 else None
+
+
+async def _read_configured_environment() -> str | None:
+    """Resolved Environment for the conduit unit, or None. Read-only; no sudo.
+
+    `systemctl show -p Environment` returns the base unit's Environment= merged
+    with any drop-in overrides (M2 writes CCC_MAX_COMMON_CLIENTS /
+    CCC_BANDWIDTH_MBPS to conduit.service.d/ccc.conf). This is the authoritative
+    *configured* (next-start) source post-M2. Never raises.
+    """
+    svc = get_app_config().conduit_service_name
+    try:
+        rc, out, _err = await _run(["systemctl", "show", svc, "--property=Environment"])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("config view: systemctl show Environment failed (%s)", exc)
+        return None
+    return out if rc == 0 else None
+
+
+def _parse_environment(blob: str | None) -> dict[str, str]:
+    """Parse `Environment=KEY=VAL KEY2=VAL2` (systemctl show output) into a dict.
+
+    Values may be shell-quoted by systemd; shlex handles that. Never raises.
+    """
+    if not blob:
+        return {}
+    line = blob.strip()
+    if line.startswith("Environment="):
+        line = line[len("Environment="):]
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        tokens = line.split()
+    env: dict[str, str] = {}
+    for tok in tokens:
+        if "=" in tok:
+            k, v = tok.split("=", 1)
+            env[k] = v
+    return env
+
+
+def _env_int(env: dict[str, str], key: str) -> int | None:
+    """Return env[key] as int, or None if absent/unparseable."""
+    raw = env.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 async def get_conduit_config_view() -> ConduitConfigView:
@@ -1230,9 +1284,17 @@ async def get_conduit_config_view() -> ConduitConfigView:
     eff_mcc = _optional_int(text, _METRIC_MAX_COMMON_CLIENTS) if text else None
     eff_bw_bps = _optional_int(text, _METRIC_BANDWIDTH_LIMIT) if text else None
 
-    argv = _argv_from_execstart(await _read_configured_execstart())
-    cfg_mcc = _flag_int(argv, "--max-common-clients")
-    cfg_bw = _flag_int(argv, "--bandwidth")
+    # Configured values: Environment is authoritative post-M2 (ExecStart prints
+    # the literal ${VAR}). Fall back to ExecStart argv only for pre-M2 units.
+    env = _parse_environment(await _read_configured_environment())
+    cfg_mcc = _env_int(env, "CCC_MAX_COMMON_CLIENTS")
+    cfg_bw = _env_int(env, "CCC_BANDWIDTH_MBPS")
+    if cfg_mcc is None or cfg_bw is None:
+        argv = _argv_from_execstart(await _read_configured_execstart())
+        if cfg_mcc is None:
+            cfg_mcc = _flag_int(argv, "--max-common-clients")
+        if cfg_bw is None:
+            cfg_bw = _flag_int(argv, "--bandwidth")
 
     try:
         service_status: str = await get_status()
@@ -1249,3 +1311,112 @@ async def get_conduit_config_view() -> ConduitConfigView:
             unlimited_effective=(eff_bw_bps == 0),
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Privileged config write (M2) -- invokes the hardened root helper via sudo.
+# ---------------------------------------------------------------------------
+# CCC NEVER writes /etc/systemd/** or runs daemon-reload/restart directly. The
+# only new privilege is one sudoers line for this exact helper, which validates
+# its own input and writes only Environment= lines. argv-only; no shell.
+
+_HELPER_PATH = "/opt/conduit-cc/bin/ccc-apply-conduit-config"
+
+
+def helper_is_safe() -> bool:
+    """True iff the root helper is a regular, root-owned file that is not group/
+    other-writable (i.e. the app user cannot tamper with it). Read-only check.
+
+    CCC startup / the apply endpoint use this to refuse to operate with a
+    tampered or missing helper.
+    """
+    try:
+        st = os.stat(_HELPER_PATH)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid != 0:
+        return False
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return False
+    return True
+
+
+async def _run_helper(*args: str) -> tuple[int, str]:
+    """Run `sudo <helper> <args>` argv-only (no shell). Returns (rc, stderr).
+
+    Never raises on subprocess failure: returns rc=-1 + a message instead.
+    """
+    cmd = ["sudo", _HELPER_PATH, *args]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _out, err = await proc.communicate()
+        rc = proc.returncode if proc.returncode is not None else -1
+        return rc, err.decode("utf-8", errors="replace").strip()
+    except OSError as exc:
+        return -1, f"helper not runnable: {exc}"
+
+
+async def apply_conduit_config(max_common_clients: int, bandwidth_mbps: int) -> tuple[int, str]:
+    """Invoke the helper `apply` (write drop-in + daemon-reload + restart)."""
+    return await _run_helper(
+        "apply",
+        "--max-common-clients", str(int(max_common_clients)),
+        "--bandwidth-mbps", str(int(bandwidth_mbps)),
+    )
+
+
+async def rollback_conduit_config() -> tuple[int, str]:
+    """Invoke the helper `rollback` (restore .bak or unlink + reload + restart)."""
+    return await _run_helper("rollback")
+
+
+async def verify_conduit_config_health(
+    expected_mcc: int,
+    expected_bw_mbps: int,
+    *,
+    timeout_s: float = 30.0,
+    interval_s: float = 2.0,
+) -> tuple[bool, str | None]:
+    """Bounded poll of post-restart health. Required gates: service active,
+    metrics reachable, and read-back of both knobs == requested. conduit_is_live
+    is advisory and is intentionally NOT a gate (broker reconnect is slow).
+
+    Returns (True, None) on success, else (False, last_failure_reason).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    reason = "verification did not start"
+    while True:
+        view = await get_conduit_config_view()
+        reason = _health_reason(view, expected_mcc, expected_bw_mbps)
+        if reason is None:
+            return True, None
+        if loop.time() >= deadline:
+            return False, reason
+        await asyncio.sleep(interval_s)
+
+
+def _health_reason(
+    view: ConduitConfigView, expected_mcc: int, expected_bw_mbps: int
+) -> str | None:
+    """None if healthy; otherwise the first failing required gate (pure)."""
+    if view.service_status != "running":
+        return f"service not active (status={view.service_status})"
+    eff_mcc = view.max_common_clients.effective
+    if eff_mcc is None:
+        return "metrics endpoint unreachable after restart"
+    if eff_mcc != expected_mcc:
+        return f"max_common_clients read-back mismatch (got {eff_mcc}, want {expected_mcc})"
+    bw = view.bandwidth_mbps
+    if expected_bw_mbps == -1:
+        if not bw.unlimited_effective:
+            return "bandwidth read-back mismatch (expected unlimited)"
+    elif bw.effective != expected_bw_mbps:
+        return f"bandwidth read-back mismatch (got {bw.effective}, want {expected_bw_mbps})"
+    return None

@@ -993,6 +993,46 @@
                         </dd>
                     </div>
                 </dl>
+
+                <!-- M2 write controls. Read-only by default; "Edit" reveals the
+                     form. Apply requires an explicit restart confirmation. -->
+                <div id="cc-actions" class="mt-4" hidden>
+                    <button type="button" id="cc-edit-btn" class="btn btn--secondary">Edit configuration</button>
+                </div>
+
+                <form id="cc-form" class="mt-4" hidden>
+                    <div class="form-group">
+                        <label class="form-label" for="cc-in-mcc">Max common clients (1–1000)</label>
+                        <input class="form-input" type="number" id="cc-in-mcc" min="1" max="1000" step="1" inputmode="numeric">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cc-in-bw">Global bandwidth (Mbps)</label>
+                        <input class="form-input" type="number" id="cc-in-bw" min="1" step="1" inputmode="numeric">
+                        <label class="form-label mt-2">
+                            <input type="checkbox" id="cc-in-unlimited"> Unlimited bandwidth
+                        </label>
+                    </div>
+                    <p id="cc-form-error" class="text-danger text-sm" role="alert" hidden></p>
+                    <div class="mt-4">
+                        <button type="submit" id="cc-apply-btn" class="btn btn--primary">Apply…</button>
+                        <button type="button" id="cc-cancel-btn" class="btn btn--secondary">Cancel</button>
+                    </div>
+                </form>
+
+                <!-- Restart confirmation (no auto-apply). -->
+                <div id="cc-confirm" class="mt-4" hidden>
+                    <p class="text-warning text-sm">
+                        Applying this change restarts Conduit. Your node may go offline briefly
+                        and may take time to reconnect to the broker.
+                    </p>
+                    <div class="mt-2">
+                        <button type="button" id="cc-confirm-btn" class="btn btn--primary">Confirm &amp; restart</button>
+                        <button type="button" id="cc-confirm-cancel" class="btn btn--secondary">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Apply / verify / result status (textContent set by JS). -->
+                <p id="cc-status" class="text-sm mt-4" role="status" aria-live="polite" hidden></p>
             </div><!-- /#conduit-config-card -->
 
         </div>

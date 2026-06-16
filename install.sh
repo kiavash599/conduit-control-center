@@ -627,8 +627,26 @@ RATELIMIT_EOF
     systemctl daemon-reload
     info "${SYSTEMD_UNIT} installed"
 
+    # ---- 2l-pre  Conduit config write helper (M2) ------------------------- #
+    # Hardened root helper for the config write path. CCC invokes it via the
+    # single sudoers line below; the helper validates its own input and writes
+    # ONLY Environment= lines to the drop-in. Must be root-owned and NOT
+    # writable by ${APP_USER}.
+    step "2l — Installing Conduit config helper (M2)"
+    install -d -o root -g root -m 0755 /opt/conduit-cc/bin
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-apply-conduit-config" \
+        /opt/conduit-cc/bin/ccc-apply-conduit-config
+    # Drop-in dir for CCC-managed Conduit config (Environment overrides only).
+    install -d -o root -g root -m 0755 /etc/systemd/system/conduit.service.d
+    helper_meta="$(stat -c '%U:%a' /opt/conduit-cc/bin/ccc-apply-conduit-config)"
+    [ "${helper_meta}" = "root:755" ] || die \
+        "Config helper ownership/perms wrong (${helper_meta}); expected root:755"
+    info "Config helper installed (root:root 0755)"
+
     # ---- 2l  sudoers rule for Conduit controls ----------------------------- #
-    # adapter.py calls "sudo systemctl start|stop|restart conduit".
+    # adapter.py calls "sudo systemctl start|stop|restart conduit" and, for the
+    # M2 config write path, "sudo /opt/conduit-cc/bin/ccc-apply-conduit-config".
     # NoNewPrivileges is omitted from conduit-cc.service (see service file
     # header) to allow sudo's setuid bit to work.
     step "2l — Creating sudoers rule"
@@ -638,6 +656,7 @@ RATELIMIT_EOF
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl start conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl stop conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart conduit
+${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-apply-conduit-config
 EOF
     chmod 440 "${SUDOERS_FILE}"
     visudo -cf "${SUDOERS_FILE}" || die \

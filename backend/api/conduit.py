@@ -54,22 +54,33 @@ HTTP 500  -- unexpected error (caught by global handler in main.py)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from backend.config import get_app_config
 from backend.conduit.adapter import (
     ConduitAdapterError,
     ConduitPermissionError,
     ConduitStatus,
+    apply_conduit_config,
     get_conduit_config_view,
     get_status,
-    restart,
+    helper_is_safe,
+    rollback_conduit_config,
     start,
     stop,
+    restart,
+    verify_conduit_config_health,
+)
+from backend.conduit.config_validation import (
+    validate_bandwidth_mbps,
+    validate_max_common_clients,
 )
 from backend.dependencies import (
     AuthenticatedUser,
@@ -129,6 +140,225 @@ async def get_conduit_config(
             unlimited_effective=bw.unlimited_effective,
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Configuration write (M2) -- validate + apply, with restart + rollback.
+# ---------------------------------------------------------------------------
+# Privilege boundary is the root helper (adapter.apply/rollback). This layer
+# validates (independently of the helper), serializes via an apply-lock, does
+# optimistic-concurrency + no-op checks, verifies health, and audits every
+# outcome. is_live is advisory -- never a rollback gate.
+
+class ConfigWriteRequest(BaseModel):
+    max_common_clients: int
+    bandwidth_mbps: int
+
+
+class ExpectedEffective(BaseModel):
+    max_common_clients: int | None = None
+    bandwidth_mbps: int | None = None
+
+
+class ConfigApplyRequest(ConfigWriteRequest):
+    expected_effective: ExpectedEffective | None = None
+
+
+def ensure_conduit_apply_lock(app) -> None:
+    """Create the per-process apply-lock if absent (single-worker invariant)."""
+    if not hasattr(app.state, "conduit_apply_lock"):
+        app.state.conduit_apply_lock = asyncio.Lock()
+
+
+def _validate_payload(mcc: object, bw: object) -> tuple[dict | None, list[dict]]:
+    bw_max = getattr(get_app_config(), "conduit_bandwidth_max_mbps", 1000)
+    errors: list[dict] = []
+    nmcc, e1 = validate_max_common_clients(mcc)
+    if e1:
+        errors.append({"field": "max_common_clients", "message": e1})
+    nbw, e2 = validate_bandwidth_mbps(bw, max_mbps=bw_max)
+    if e2:
+        errors.append({"field": "bandwidth_mbps", "message": e2})
+    if errors:
+        return None, errors
+    return {"max_common_clients": nmcc, "bandwidth_mbps": nbw}, []
+
+
+def _effective_dict(view) -> dict:
+    bw = view.bandwidth_mbps
+    return {
+        "max_common_clients": view.max_common_clients.effective,
+        "bandwidth_mbps": (-1 if bw.unlimited_effective else bw.effective),
+    }
+
+
+def _configured_dict(view) -> dict:
+    bw = view.bandwidth_mbps
+    return {
+        "max_common_clients": view.max_common_clients.configured,
+        "bandwidth_mbps": (-1 if bw.unlimited_configured else bw.configured),
+    }
+
+
+async def _write_config_audit(
+    result: str, username: str, *, old, requested, effective, reason=None
+) -> int | None:
+    """Audit a config write outcome. Failures are logged + swallowed."""
+    detail = (
+        f"result={result} old={old} requested={requested} "
+        f"effective={effective} reason={reason!r}"
+    )
+    try:
+        async with get_db() as db:
+            cur = await db.execute(
+                "INSERT INTO audit_log (timestamp, event_type, username, detail) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "CONDUIT_CONFIG",
+                    username,
+                    detail,
+                ),
+            )
+            await db.commit()
+            return cur.lastrowid
+    except Exception:  # noqa: BLE001
+        logger.error("Failed to write config audit (result=%r) -- continuing", result)
+        return None
+
+
+@router.post(
+    "/config/validate",
+    summary="Validate proposed Conduit configuration (no write)",
+    responses={401: {"description": "Not authenticated"}, 403: {"description": "CSRF"},
+               422: {"description": "Validation errors"}},
+)
+async def validate_config(
+    payload: ConfigWriteRequest,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+):
+    normalized, errors = _validate_payload(payload.max_common_clients, payload.bandwidth_mbps)
+    if errors:
+        return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
+    view = await get_conduit_config_view()
+    changed = _configured_dict(view) != normalized
+    return {
+        "valid": True,
+        "errors": [],
+        "normalized": normalized,
+        "changed": changed,
+        "restart_required": True,
+    }
+
+
+@router.post(
+    "/config/apply",
+    summary="Apply Conduit configuration (restart + verify + rollback)",
+    responses={401: {"description": "Not authenticated"}, 403: {"description": "CSRF"},
+               409: {"description": "Conflict"}, 422: {"description": "Validation errors"},
+               500: {"description": "Rollback failed"}, 503: {"description": "Helper unavailable"}},
+)
+async def apply_config(
+    request: Request,
+    payload: ConfigApplyRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+):
+    username = user.user_id
+    requested = {"max_common_clients": payload.max_common_clients,
+                 "bandwidth_mbps": payload.bandwidth_mbps}
+
+    normalized, errors = _validate_payload(payload.max_common_clients, payload.bandwidth_mbps)
+    if errors:
+        await _write_config_audit("rejected", username, old=None, requested=requested,
+                                  effective=None, reason="validation")
+        return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
+    nmcc, nbw = normalized["max_common_clients"], normalized["bandwidth_mbps"]
+
+    if not helper_is_safe():
+        await _write_config_audit("rejected", username, old=None, requested=normalized,
+                                  effective=None, reason="helper_unsafe")
+        return JSONResponse(status_code=503,
+                            content={"status": "unavailable",
+                                     "reason": "config helper missing or unsafe"})
+
+    app = request.app
+    ensure_conduit_apply_lock(app)
+    lock = app.state.conduit_apply_lock
+    if lock.locked():
+        aid = await _write_config_audit("conflict", username, old=None, requested=normalized,
+                                        effective=None, reason="apply_in_progress")
+        return JSONResponse(status_code=409,
+                            content={"status": "conflict", "reason": "apply_in_progress",
+                                     "audit_id": aid})
+
+    async with lock:
+        view = await get_conduit_config_view()
+        old = _configured_dict(view)
+
+        if payload.expected_effective is not None:
+            cur_eff = _effective_dict(view)
+            exp = payload.expected_effective
+            if (exp.max_common_clients is not None
+                    and exp.max_common_clients != cur_eff["max_common_clients"]) or \
+               (exp.bandwidth_mbps is not None
+                    and exp.bandwidth_mbps != cur_eff["bandwidth_mbps"]):
+                aid = await _write_config_audit("conflict", username, old=old,
+                                                requested=normalized, effective=cur_eff,
+                                                reason="drift")
+                return JSONResponse(status_code=409,
+                                    content={"status": "conflict", "reason": "drift",
+                                             "audit_id": aid})
+
+        if old == normalized:  # no-op: do not restart
+            cur_eff = _effective_dict(view)
+            aid = await _write_config_audit("no-op", username, old=old, requested=normalized,
+                                            effective=cur_eff)
+            return JSONResponse(status_code=200,
+                                content={"status": "applied", "effective": cur_eff,
+                                         "audit_id": aid})
+
+        rc, err = await apply_conduit_config(nmcc, nbw)
+        if rc != 0:
+            rb_rc, rb_err = await rollback_conduit_config()
+            eff = _effective_dict(await get_conduit_config_view())
+            if rb_rc != 0:
+                aid = await _write_config_audit(
+                    "rollback_failed", username, old=old, requested=normalized, effective=eff,
+                    reason=f"apply rc={rc}: {err}; rollback rc={rb_rc}: {rb_err}")
+                return JSONResponse(status_code=500,
+                                    content={"status": "rollback_failed", "audit_id": aid})
+            aid = await _write_config_audit(
+                "rolled_back", username, old=old, requested=normalized, effective=eff,
+                reason=f"apply failed: {err}")
+            return JSONResponse(status_code=200,
+                                content={"status": "rolled_back",
+                                         "reason": f"apply failed: {err}",
+                                         "effective": eff, "audit_id": aid})
+
+        ok, reason = await verify_conduit_config_health(nmcc, nbw)
+        if ok:
+            eff = _effective_dict(await get_conduit_config_view())
+            aid = await _write_config_audit("applied", username, old=old, requested=normalized,
+                                            effective=eff)
+            return JSONResponse(status_code=200,
+                                content={"status": "applied", "effective": eff,
+                                         "audit_id": aid})
+
+        rb_rc, rb_err = await rollback_conduit_config()
+        eff = _effective_dict(await get_conduit_config_view())
+        if rb_rc != 0:
+            aid = await _write_config_audit(
+                "rollback_failed", username, old=old, requested=normalized, effective=eff,
+                reason=f"health: {reason}; rollback rc={rb_rc}: {rb_err}")
+            return JSONResponse(status_code=500,
+                                content={"status": "rollback_failed", "audit_id": aid})
+        aid = await _write_config_audit("rolled_back", username, old=old, requested=normalized,
+                                        effective=eff, reason=reason)
+        return JSONResponse(status_code=200,
+                            content={"status": "rolled_back", "reason": reason,
+                                     "effective": eff, "audit_id": aid})
 
 
 # ---------------------------------------------------------------------------

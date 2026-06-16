@@ -986,6 +986,74 @@ phase6_summary() {
 }
 
 # --------------------------------------------------------------------------- #
+#  Phase M2 - Configuration write artifacts (ALWAYS runs)                      #
+# --------------------------------------------------------------------------- #
+#  Deploys/re-asserts the M2 config-write artifacts on EVERY update, decoupled #
+#  from the Conduit binary update (phase2b_conduit_update can early-return when #
+#  Conduit is absent or already at the target version). The literal->Environment#
+#  unit migration is value-preserving, so this runs daemon-reload only when the #
+#  unit actually changed and NEVER restarts/stops Conduit (no downtime).       #
+phase_m2_config_write_artifacts() {
+    section "Phase M2 - Config write artifacts"
+
+    local _helper_src="${SOURCE_DIR}/deployment/bin/ccc-apply-conduit-config"
+    local _helper_dst="/opt/conduit-cc/bin/ccc-apply-conduit-config"
+    local _unit_src="${SOURCE_DIR}/deployment/conduit.service"
+    local _unit_dst="/etc/systemd/system/conduit.service"
+    local _sudoers="/etc/sudoers.d/conduit-cc"
+    local _app_user="${APP_USER:-conduit-cc}"
+
+    # (1-4) Helper + drop-in dir + ownership/perms. Always; harmless if Conduit
+    # is not installed (CCC-owned artifacts).
+    if [[ -f "${_helper_src}" ]]; then
+        step "M2-a — Installing config helper"
+        install -d -o root -g root -m 0755 /opt/conduit-cc/bin
+        install -o root -g root -m 0755 "${_helper_src}" "${_helper_dst}"
+        install -d -o root -g root -m 0755 /etc/systemd/system/conduit.service.d
+        local _hm
+        _hm="$(stat -c '%U:%G:%a' "${_helper_dst}")"
+        [[ "${_hm}" == "root:root:755" ]] || die \
+            "Config helper ownership/perms wrong (${_hm}); expected root:root:755"
+        info "Config helper installed (root:root 0755, not writable by ${_app_user})"
+    else
+        warn "config helper not in source (${_helper_src}) — skipping helper install"
+    fi
+
+    # (5-6) Exact sudoers helper grant; append-if-missing; 0440; visudo -c.
+    if [[ -f "${_sudoers}" ]]; then
+        if ! grep -qF "${_helper_dst}" "${_sudoers}"; then
+            step "M2-b — Adding sudoers helper grant"
+            printf '%s\n' "${_app_user} ALL=(root) NOPASSWD: ${_helper_dst}" >> "${_sudoers}"
+            chown root:root "${_sudoers}"
+            chmod 440 "${_sudoers}"
+            visudo -cf "${_sudoers}" || die "sudoers syntax check failed after adding helper grant"
+            info "sudoers helper grant added + validated"
+        else
+            info "sudoers helper grant already present"
+        fi
+    else
+        warn "${_sudoers} missing — run install.sh; skipping sudoers grant"
+    fi
+
+    # (7) Parameterized conduit.service: deploy only if Conduit is managed here,
+    # and daemon-reload ONLY when the unit changed. Value-preserving: NO restart.
+    if [[ -f "${_unit_dst}" && -f "${_unit_src}" ]]; then
+        if ! cmp -s "${_unit_src}" "${_unit_dst}"; then
+            step "M2-c — Updating parameterized conduit.service (value-preserving)"
+            cp "${_unit_src}" "${_unit_dst}"
+            chown root:root "${_unit_dst}"
+            chmod 644 "${_unit_dst}"
+            systemctl daemon-reload
+            info "conduit.service updated + daemon-reload (no restart)"
+        else
+            info "conduit.service already current — no daemon-reload needed"
+        fi
+    else
+        info "Conduit unit not installed here — skipping unit update (install.sh handles fresh installs)"
+    fi
+}
+
+# --------------------------------------------------------------------------- #
 #  Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -995,5 +1063,6 @@ phase1_backup
 phase2_preinstall
 phase2b_conduit_update
 phase3_deploy
+phase_m2_config_write_artifacts
 phase4_verify
 phase6_summary

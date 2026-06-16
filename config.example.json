@@ -13,7 +13,9 @@
     "service_name": "conduit",
     "action_timeout_seconds": 10,
     "_comment_metrics_port": "metrics_port must match --metrics-addr in /etc/systemd/system/conduit.service. Default: 127.0.0.1:9090 (loopback only). Change both together or metrics will not work.",
-    "metrics_port": 9090
+    "metrics_port": 9090,
+    "_comment_bandwidth_max_mbps": "M2 config write: soft upper bound for the editable bandwidth value (Mbps). Must match BW_MAX in deployment/bin/ccc-apply-conduit-config. -1 = unlimited; default 1000.",
+    "bandwidth_max_mbps": 1000
   },
 
   "metrics": {

@@ -1,0 +1,228 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-apply-conduit-config -- M2 privileged helper (runs as root via one sudoers
+line). The SOLE trust boundary for writing Conduit's CCC-managed config.
+
+Security contract (do not weaken):
+  * argv-only; NEVER a shell (no os.system / shell=True / eval).
+  * Subcommands: only `apply` and `rollback`.
+  * apply accepts ONLY --max-common-clients N and --bandwidth-mbps M (ints).
+  * Hardcoded drop-in path and unit name; NEVER takes a path or unit argument.
+  * Writes ONLY Environment= lines to the drop-in; NEVER ExecStart or any other
+    directive; values emitted as %d (integers), never raw strings.
+  * Re-validates ranges independently of the API (defense in depth).
+  * Atomic write: mkstemp in the same root-owned dir, fsync, os.replace.
+  * Symlink/TOCTOU defense: verify the drop-in dir is a real, root-owned,
+    non-symlink directory; backup read with O_NOFOLLOW.
+  * Serialized with an flock on a root-owned lock file.
+  * Structured journal/syslog logging; no secrets (none exist here).
+
+Exit codes: 0 success; 2 validation/usage error; 3 filesystem/safety error;
+4 systemctl (daemon-reload/restart) error.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import logging.handlers
+import os
+import sys
+import tempfile
+
+try:
+    import fcntl
+except ImportError:  # non-Linux (e.g. Windows CI loading the module for tests)
+    fcntl = None  # production runs on Linux; _acquire_lock requires fcntl there
+
+# --- Hardcoded, non-overridable constants (no path/unit ever comes from argv) ---
+DROPIN_DIR = "/etc/systemd/system/conduit.service.d"
+DROPIN_PATH = DROPIN_DIR + "/ccc.conf"
+BAK_PATH = DROPIN_DIR + "/ccc.conf.bak"
+LOCK_PATH = DROPIN_DIR + "/.ccc-apply.lock"
+UNIT = "conduit"
+SYSTEMCTL = "/usr/bin/systemctl"
+
+# Ranges -- MUST match backend/conduit/config_validation.py.
+MCC_MIN, MCC_MAX = 1, 1000
+BW_UNLIMITED, BW_MIN, BW_MAX = -1, 1, 1000
+
+EXIT_OK, EXIT_USAGE, EXIT_FS, EXIT_SYSTEMCTL = 0, 2, 3, 4
+
+
+def _make_logger() -> logging.Logger:
+    # Never let a logging-handler hiccup (e.g. /dev/log unavailable) raise or
+    # spam stderr; logging is best-effort here.
+    logging.raiseExceptions = False
+    log = logging.getLogger("ccc-apply-conduit-config")
+    log.setLevel(logging.INFO)
+    # Linux production: journald via /dev/log (AF_UNIX). Other platforms (e.g.
+    # Windows CI importing this module for tests) lack AF_UNIX/dev/log, so the
+    # syslog handler is Linux-only; stderr logging is always present.
+    if sys.platform == "linux":
+        try:
+            h = logging.handlers.SysLogHandler(address="/dev/log")
+            h.setFormatter(logging.Formatter("ccc-apply-conduit-config: %(message)s"))
+            log.addHandler(h)
+        except OSError:
+            pass
+    log.addHandler(logging.StreamHandler(sys.stderr))
+    return log
+
+
+LOG = _make_logger()
+
+
+def _validate_mcc(value: int) -> int:
+    if value < MCC_MIN or value > MCC_MAX:
+        _fail(EXIT_USAGE, f"max-common-clients out of range ({MCC_MIN}..{MCC_MAX}): {value}")
+    return value
+
+
+def _validate_bw(value: int) -> int:
+    if value == BW_UNLIMITED:
+        return value
+    if value < BW_MIN or value > BW_MAX:
+        _fail(EXIT_USAGE, f"bandwidth-mbps must be -1 or {BW_MIN}..{BW_MAX}: {value}")
+    return value
+
+
+def _fail(code: int, msg: str) -> None:
+    LOG.error(msg)
+    sys.exit(code)
+
+
+def _assert_safe_dir() -> None:
+    """Drop-in dir must be a real directory, root-owned, not a symlink."""
+    try:
+        st = os.lstat(DROPIN_DIR)
+    except OSError as exc:
+        _fail(EXIT_FS, f"drop-in dir missing: {exc}")
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        _fail(EXIT_FS, "drop-in dir is a symlink -- refusing")
+    if not _stat.S_ISDIR(st.st_mode):
+        _fail(EXIT_FS, "drop-in path is not a directory")
+    if st.st_uid != 0:
+        _fail(EXIT_FS, "drop-in dir is not root-owned -- refusing")
+
+
+def _acquire_lock() -> int:
+    if fcntl is None:  # Linux-only; never reached in production (runs on the Pi)
+        _fail(EXIT_FS, "file locking unavailable (fcntl missing) -- Linux required")
+    fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _backup_existing() -> bool:
+    """Snapshot the current drop-in to .bak. Return True if a drop-in existed."""
+    try:
+        fd = os.open(DROPIN_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        # No previous drop-in; clear any stale .bak so rollback unlinks.
+        try:
+            os.unlink(BAK_PATH)
+        except FileNotFoundError:
+            pass
+        return False
+    except OSError as exc:
+        _fail(EXIT_FS, f"cannot open existing drop-in: {exc}")
+    with os.fdopen(fd, "rb") as src:
+        data = src.read()
+    _atomic_write(BAK_PATH, data)
+    return True
+
+
+def _atomic_write(path: str, data: bytes) -> None:
+    """Write data to path atomically within the (root-owned) drop-in dir."""
+    fd, tmp = tempfile.mkstemp(dir=DROPIN_DIR, prefix=".ccc-tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)  # atomic on the same filesystem
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        _fail(EXIT_FS, f"atomic write failed: {exc}")
+
+
+def _render(mcc: int, bw: int) -> bytes:
+    # Integers only, via %d -- no raw string interpolation, no other directives.
+    return (
+        "[Service]\n"
+        "Environment=CCC_MAX_COMMON_CLIENTS=%d\n"
+        "Environment=CCC_BANDWIDTH_MBPS=%d\n" % (mcc, bw)
+    ).encode("ascii")
+
+
+def _systemctl(*args: str) -> None:
+    import subprocess
+    try:
+        subprocess.run([SYSTEMCTL, *args], check=True, shell=False)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        _fail(EXIT_SYSTEMCTL, f"systemctl {' '.join(args)} failed (rc={exc.returncode})")
+    except OSError as exc:
+        _fail(EXIT_SYSTEMCTL, f"systemctl {' '.join(args)} not runnable: {exc}")
+
+
+def cmd_apply(mcc: int, bw: int) -> None:
+    _assert_safe_dir()
+    lock = _acquire_lock()
+    try:
+        _backup_existing()
+        _atomic_write(DROPIN_PATH, _render(mcc, bw))
+        _systemctl("daemon-reload")
+        _systemctl("restart", UNIT)
+        LOG.info("apply ok: CCC_MAX_COMMON_CLIENTS=%d CCC_BANDWIDTH_MBPS=%d", mcc, bw)
+    finally:
+        os.close(lock)
+
+
+def cmd_rollback() -> None:
+    _assert_safe_dir()
+    lock = _acquire_lock()
+    try:
+        if os.path.exists(BAK_PATH):
+            with os.fdopen(os.open(BAK_PATH, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:
+                data = f.read()
+            _atomic_write(DROPIN_PATH, data)
+            LOG.info("rollback ok: restored previous drop-in")
+        else:
+            try:
+                os.unlink(DROPIN_PATH)
+                LOG.info("rollback ok: removed drop-in (no previous config)")
+            except FileNotFoundError:
+                LOG.info("rollback ok: no drop-in present")
+        _systemctl("daemon-reload")
+        _systemctl("restart", UNIT)
+    finally:
+        os.close(lock)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="ccc-apply-conduit-config", add_help=True)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p_apply = sub.add_parser("apply")
+    p_apply.add_argument("--max-common-clients", type=int, required=True)
+    p_apply.add_argument("--bandwidth-mbps", type=int, required=True)
+    sub.add_parser("rollback")
+    # argparse rejects unknown args/subcommands -> exit 2 (usage).
+    args = parser.parse_args(argv)
+
+    if args.cmd == "apply":
+        mcc = _validate_mcc(args.max_common_clients)
+        bw = _validate_bw(args.bandwidth_mbps)
+        cmd_apply(mcc, bw)
+    elif args.cmd == "rollback":
+        cmd_rollback()
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

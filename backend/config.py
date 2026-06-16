@@ -183,6 +183,10 @@ class AppConfig:
             "action_timeout_seconds", 10
         )
         self.conduit_metrics_port: int = conduit.get("metrics_port", 9090)
+        # M2 config write: soft upper bound for the editable bandwidth value
+        # (Mbps). Must match the BW_MAX hardcoded in the root helper
+        # (ccc-apply-conduit-config). Catches fat-finger input; -1 = unlimited.
+        self.conduit_bandwidth_max_mbps: int = conduit.get("bandwidth_max_mbps", 1000)
 
         metrics = data.get("metrics", {})
         self.metrics_cache_ttl_seconds: int = metrics.get("cache_ttl_seconds", 5)
