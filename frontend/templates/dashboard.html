@@ -1041,6 +1041,16 @@
                             <span id="cc-bw-drift" class="badge badge--neutral" hidden></span>
                         </dd>
                     </div>
+                    <!-- BS3: reduced-mode window (configured-only; filled by conduit_config.js
+                         in BS3.2). cc-reduced-summary = "Off" or "HH:MM–HH:MM UTC · max N
+                         clients · M Mbps"; cc-reduced-local = "(HH:MM–HH:MM <tz>)". -->
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Reduced window</dt>
+                        <dd class="status-meta__val">
+                            <span id="cc-reduced-summary">&mdash;</span>
+                            <span id="cc-reduced-local" class="text-dim text-sm"></span>
+                        </dd>
+                    </div>
                 </dl>
 
                 <!-- M2 write controls. Read-only by default; "Edit" reveals the
@@ -1061,6 +1071,48 @@
                             <input type="checkbox" id="cc-in-unlimited"> Unlimited bandwidth
                         </label>
                     </div>
+
+                    <!-- BS3: reduced-mode window. Times are HH:MM, 24-hour, UTC. The
+                         enable toggle reveals #cc-reduced-fields (wired in BS3.2); the
+                         -local hints are filled by JS. Validation reuses #cc-form-error. -->
+                    <div class="form-group">
+                        <label class="form-label">
+                            <input type="checkbox" id="cc-in-reduced-enabled"
+                                   aria-controls="cc-reduced-fields" aria-expanded="false">
+                            Enable reduced-mode window
+                        </label>
+                        <p class="form-hint">A daily lower-capacity window (UTC). Conduit applies it
+                           automatically at the start/end times — no extra restarts.</p>
+                    </div>
+                    <div id="cc-reduced-fields" class="cc-reduced-group" hidden>
+                        <div class="form-group">
+                            <label class="form-label" for="cc-in-reduced-start">Start time (UTC)</label>
+                            <input class="form-input" type="text" id="cc-in-reduced-start"
+                                   inputmode="numeric" maxlength="5" placeholder="HH:MM"
+                                   pattern="^([01]\d|2[0-3]):[0-5]\d$"
+                                   aria-describedby="cc-in-reduced-start-local">
+                            <p class="form-hint" id="cc-in-reduced-start-local"></p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="cc-in-reduced-end">End time (UTC)</label>
+                            <input class="form-input" type="text" id="cc-in-reduced-end"
+                                   inputmode="numeric" maxlength="5" placeholder="HH:MM"
+                                   pattern="^([01]\d|2[0-3]):[0-5]\d$"
+                                   aria-describedby="cc-in-reduced-end-local">
+                            <p class="form-hint" id="cc-in-reduced-end-local"></p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="cc-in-reduced-max">Reduced max common clients (1–1000)</label>
+                            <input class="form-input" type="number" id="cc-in-reduced-max"
+                                   min="1" max="1000" step="1" inputmode="numeric">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="cc-in-reduced-bw">Reduced bandwidth (Mbps, 1–1000)</label>
+                            <input class="form-input" type="number" id="cc-in-reduced-bw"
+                                   min="1" max="1000" step="1" inputmode="numeric">
+                        </div>
+                    </div>
+
                     <p id="cc-form-error" class="text-danger text-sm" role="alert" hidden></p>
                     <div class="mt-4">
                         <button type="submit" id="cc-apply-btn" class="btn btn--primary">Apply…</button>
@@ -1070,6 +1122,9 @@
 
                 <!-- Restart confirmation (no auto-apply). -->
                 <div id="cc-confirm" class="mt-4" hidden>
+                    <!-- BS3: change summary (normal + reduced diff, UTC + local) set by
+                         conduit_config.js in BS3.2. -->
+                    <p id="cc-confirm-summary" class="text-sm" hidden></p>
                     <p class="text-warning text-sm">
                         Applying this change restarts Conduit. Your node may go offline briefly
                         and may take time to reconnect to the broker.

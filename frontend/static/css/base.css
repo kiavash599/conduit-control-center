@@ -1267,3 +1267,17 @@ a:hover {
     width: 2rem;
     text-align: center;
 }
+
+/* ============================================================================
+   BANDWIDTH SCHEDULING — reduced-mode field group (BS3.1)
+   ----------------------------------------------------------------------------
+   Visually groups the reduced-window sub-fields under the enable toggle inside
+   the Conduit Configuration form (#cc-reduced-fields). conduit_config.js (BS3.2)
+   toggles the [hidden] attribute to show/hide this group. Additive only; reuses
+   existing spacing/border tokens; no media query needed (indent is mobile-safe).
+   ============================================================================ */
+.cc-reduced-group {
+    margin-top: var(--space-2);
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--color-border);
+}
