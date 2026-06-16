@@ -471,9 +471,17 @@ Light / Dark / System themes implemented per Section 5.10. Theme preference pers
 
 ## 7. v0.3.0 — Historical Analytics & Operations
 
+> **Status: ✅ Traffic UI CLOSED — shipped early (v0.1.x → v0.2 cycle, in production).**
+> The persistent traffic collector (SQLite, configurable retention) and the
+> "Lifetime & History" dashboard card — Current Run, Lifetime totals, 24h/7d
+> windows, SVG time-series chart, and recording/empty/error states — backed by
+> `GET /api/traffic/summary` and `GET /api/traffic/series`, are delivered and
+> production-validated. Recorded here for history; this is **not** a remaining
+> v0.3.0 deliverable and **not** a future candidate epic. The rows below are the
+> remaining v0.3.0 items.
+
 | Feature | Description |
 |---|---|
-| Historical charts | Time-series charts for connected clients, bytes transferred, bandwidth utilisation. SQLite storage with configurable retention (default 30 days). **✅ Delivered early** — the persistent traffic collector (SQLite, configurable retention) and the "Lifetime & history" card with an SVG time-series chart shipped during the v0.1.x → v0.2 cycle. |
 | Health score | Composite score derived from uptime %, broker live %, average client count, and bandwidth headroom. Displayed on Overview screen. |
 | Smart Assistant — Automatic mode | Adjusts `max_common_clients` within operator-defined bounds. Requires audit log infrastructure from this release. |
 | Backup & restore | Export CCC configuration (not Conduit key) to encrypted archive. Restore from archive. |
@@ -521,6 +529,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.1 | 2026-06-10 | CCC Development Team | Added Section 5: D1 — UX/UI Design Milestone as formal gate for v0.2.0. Sections 5–9 renumbered to 6–10. Smart Assistant Automatic mode deferred to v0.3.0. Theme persistence changed from localStorage to server-side cookie. |
 | 1.2 | 2026-06-10 | CCC Development Team | Section 4 corrected: retitled to v0.1.0 Maintenance Items (folded into first public release); replaced collision issue numbers #3–#6 with descriptive names; removed inaccurate "open GitHub issues" claim. |
 | 1.3 | 2026-06-14 | CCC Development Team | Reconciliation: marked D1 complete; noted historical traffic charts delivered early (§7); added v0.2.0 status note; reconciled CHANGELOG with the v0.1.1 tag (0.1.0 MVP + separate 0.1.1 maintenance). No milestone renumbering. |
+| 1.4 | 2026-06-16 | CCC Development Team | §7: marked Traffic UI CLOSED (persistent collector + Lifetime & History card with SVG chart, backed by `/api/traffic/summary` & `/api/traffic/series`) and removed the "Historical charts" row from the v0.3.0 candidate table — recorded as shipped, no longer a future candidate. No other sections changed. |
 
 ---
 
