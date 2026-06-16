@@ -9,6 +9,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Bandwidth Scheduling (reduced-mode window)
+
+- Operator-configurable **daily reduced-mode window** for Conduit, set through the
+  existing Settings → Conduit Configuration workflow (validate → confirm →
+  restart → verify, with rollback).
+- **UTC reduced window** — Start and End as `HH:MM` (24-hour, UTC), with a
+  browser-local preview in the UI.
+- **Reduced max common clients** and **reduced bandwidth (Mbps)** applied during
+  the window; normal limits apply outside it.
+- **Restart-on-apply, no boundary restarts** — Conduit restarts once when the
+  schedule values change; psiphon-tunnel-core then performs the daily
+  normal⇄reduced transition internally with no restart at the start/end times and
+  no disconnect of already-connected clients. CCC runs no scheduler (no cron, no
+  APScheduler, no systemd timers).
+- API — `GET /api/conduit/config` reports the configured reduced window
+  (configured-only; no effective metric exists); `POST /config/validate` and
+  `POST /config/apply` accept the reduced fields. Aggregate-only: no per-client,
+  session, IP, or identity data. The privilege boundary stays integer-only (the
+  root helper formats `HH:MM` from validated minutes), preserving the M2 security
+  model. `update.sh`/`install.sh` migrate and guard the reduced-capable helper +
+  unit. Validated end-to-end on a Raspberry Pi 4 (Conduit 2.0.0); see
+  `docs/closure/bandwidth-scheduling-closure.md`.
+
 ### Added — Regional Analytics
 
 - Regions dashboard card — aggregate-only, top 10 active regions by traffic,

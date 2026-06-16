@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.5  
+**Revision:** 1.6  
 **Date:** 2026-06-16  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
@@ -124,9 +124,9 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | C3 | Separate upstream/downstream limits | ✅ | ✅ via JSON config only (`InproxyLimit*BytesPerSecond`) | ❌ | Out of scope for v0.2.0; consider v0.3.0 |
 | C4 | Unlimited bandwidth (`-1`) | ✅ | ✅ | ❌ | Toggle in UI (v0.2.0) |
 | C5 | Runtime bandwidth update | — | ✅ `SetConfig(…, bandwidthBytesPerSecond)` | ❌ | Apply via service restart (v0.2.0) |
-| C6 | Reduced-mode bandwidth scheduling | — | ✅ `InproxyReducedStartTime / EndTime / Limit*` via `--set` | ❌ | Scheduling UI (v0.2.0) |
-| C7 | Reduced common clients during schedule | — | ✅ `InproxyReducedMaxCommonClients` via `--set` | ❌ | Scheduling UI (v0.2.0) |
-| C8 | Minimum throttle protection | — | ✅ 100 GB / 7 days enforced by `conduit-monitor` | — | Document in UI tooltip (v0.2.0) |
+| C6 | Reduced-mode bandwidth scheduling | — | ✅ `InproxyReducedStartTime / EndTime / Limit*` via `--set` — HH:MM UTC; runtime, no boundary restart (B0/B0.1) | ✅ | Bandwidth Scheduling — delivered 2026-06-16 (`f838ff4`) |
+| C7 | Reduced common clients during schedule | — | ✅ `InproxyReducedMaxCommonClients` via `--set` | ✅ | Bandwidth Scheduling — delivered 2026-06-16 (`f838ff4`) |
+| C8 | Minimum throttle protection (100 GB / 7 days) | — | ✅ enforced by `conduit-monitor` — a **separate** quota supervisor (restart-based), distinct from `InproxyReduced*` | — | Not deployed by CCC; unrelated to Bandwidth Scheduling |
 | **D — Metrics** |||||
 | D1 | `conduit_announcing` | — | ✅ | ✅ | Already exposed |
 | D2 | `conduit_connecting_clients` | — | ✅ | ✅ | Already exposed |
@@ -315,12 +315,19 @@ The Configuration section manages all parameters that affect Conduit's behaviour
 6. On success: a green toast notification. Fields reset to the new current values.
 7. On failure: a red toast with the error. No changes are retained in the running service.
 
-**Bandwidth schedule UX:**
-- Displayed as a visual timeline (24h bar) with the scheduled reduced-bandwidth window highlighted.
-- Fields: start time, end time, reduced bandwidth (Mbps), reduced max clients (optional).
-- Schedule type selector: Weekdays / Weekends / Every day / Custom (day checkboxes).
-- A tooltip explains: "During this window, Conduit will use reduced settings. Values below 100 GB / 7 days are overridden by the Conduit traffic monitor."
-- Changes to the schedule follow the same diff + confirm + restart workflow as other configuration changes.
+**Bandwidth schedule UX (delivered — see §6.5):**
+- A single **daily** reduced-mode window. Fields: start time and end time
+  (`HH:MM`, 24-hour, **UTC**, with a browser-local preview), reduced max common
+  clients (required when enabled, ≤ max common clients), reduced bandwidth (Mbps).
+- **No day-of-week selection** — Conduit's reduced window is a daily time-of-day
+  window only; there is no weekday/weekend/per-day capability.
+- The window is evaluated by psiphon-tunnel-core at runtime: the normal⇄reduced
+  transition is automatic, with **no restart at the start/end times** and no
+  disconnect of already-connected clients.
+- Changes to the schedule *values* follow the same diff + confirm + restart
+  workflow as other configuration changes (one restart when the values change).
+- The 100 GB / 7-day floor is the separate `conduit-monitor` quota supervisor
+  (not deployed by CCC) and is unrelated to this window.
 
 ### 5.8 Warnings, Confirmations, and Errors
 
@@ -390,7 +397,7 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
-> **Status: In progress.** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone. **Regional Analytics (§6.3) was delivered and production-validated (2026-06-16).** The remaining interactive control features below — configuration, live operations, scheduling, themes — are outstanding.
+> **Status: In progress.** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone. **Regional Analytics (§6.3) was delivered and production-validated (2026-06-16). Bandwidth Scheduling (§6.5) was delivered and production-validated (2026-06-16).** The remaining interactive control features below — configuration, live operations, themes — are outstanding.
 
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
@@ -483,6 +490,36 @@ Three modes as defined in Section 5.7. Automatic mode deferred to v0.3.0 (see re
 
 ### 6.5 Bandwidth Scheduling
 
+> **Status: ✅ DELIVERED — 2026-06-16.** Shipped and production-validated on the
+> Raspberry Pi (final commit `f838ff4`; CI #109–#113 green). Full closure record:
+> `docs/closure/bandwidth-scheduling-closure.md`.
+>
+> **Reduced Mode is CONFIRMED** (B0/B0.1): the `InproxyReduced*` keys are allowlisted
+> by Conduit and forwarded to psiphon-tunnel-core, which evaluates the window at
+> runtime.
+>
+> **Delivered model:**
+> - A single **daily** reduced-mode window. `InproxyReducedStartTime` /
+>   `InproxyReducedEndTime` use **`HH:MM`, 24-hour, UTC**.
+> - Fields: enable, start (UTC), end (UTC), reduced max common clients (required
+>   when enabled, must be ≤ max common clients), reduced bandwidth (single Mbps,
+>   written to both `InproxyReducedLimitUpstream/DownstreamBytesPerSecond`).
+> - **tunnel-core performs the runtime switching internally.** CCC runs **no
+>   scheduler** — no cron, no APScheduler, no systemd timers, **no boundary
+>   restarts**. A restart occurs **only when the schedule values change**;
+>   already-connected clients are not disconnected at the boundary.
+> - Set via the existing config write path (`--set` from the drop-in; the privilege
+>   boundary stays **integer-only** — the root helper formats `HH:MM` from validated
+>   minutes), with the same diff + confirm + restart + rollback workflow.
+>
+> **Deferred (not in MVP):** separate upstream/downstream reduced limits; multiple
+> windows; an ACTIVE/INACTIVE badge; an Advisor "use recommendation" pre-fill
+> button. **No day-of-week** scheduling (unsupported by Conduit's reduced window).
+> The `conduit-monitor` 100 GB/7-day quota throttle is a **separate** mechanism,
+> not deployed by CCC and unrelated to this feature.
+>
+> The original specification below is retained for historical context.
+
 Time-based bandwidth profiles using Conduit's built-in reduced-mode mechanism (`InproxyReduced*` via `--set`), presented as the visual timeline defined in Section 5.7.
 
 Fields written to the service unit drop-in: `InproxyReducedStartTime`, `InproxyReducedEndTime`, `InproxyReducedLimitUpstreamBytesPerSecond`, `InproxyReducedLimitDownstreamBytesPerSecond`, `InproxyReducedMaxCommonClients` (optional).
@@ -561,6 +598,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.3 | 2026-06-14 | CCC Development Team | Reconciliation: marked D1 complete; noted historical traffic charts delivered early (§7); added v0.2.0 status note; reconciled CHANGELOG with the v0.1.1 tag (0.1.0 MVP + separate 0.1.1 maintenance). No milestone renumbering. |
 | 1.4 | 2026-06-16 | CCC Development Team | §7: marked Traffic UI CLOSED (persistent collector + Lifetime & History card with SVG chart, backed by `/api/traffic/summary` & `/api/traffic/series`) and removed the "Historical charts" row from the v0.3.0 candidate table — recorded as shipped, no longer a future candidate. No other sections changed. |
 | 1.5 | 2026-06-16 | CCC Development Team | Regional Analytics closure: §6.3 marked ✅ DELIVERED (MVP) with delivered-vs-spec reconciliation and a deferred remainder; §3.2 matrix D12/D13/D15 → delivered, D14/D17 annotated (connecting-clients and scope filter deferred); §6 v0.2.0 status updated (RA removed from outstanding). Closure record added at `docs/closure/regional-analytics-closure.md`. No milestone renumbering. |
+| 1.6 | 2026-06-16 | CCC Development Team | Bandwidth Scheduling closure: §6.5 marked ✅ DELIVERED (commit `f838ff4`; CI #109–#113) with the confirmed reduced-mode model (HH:MM UTC, runtime switching in tunnel-core, no CCC scheduler, no boundary restarts, restart only on value change); §3.2 C6/C7 → delivered and C8 de-conflated (`conduit-monitor` quota throttle separated from `InproxyReduced*`, noted not deployed by CCC); §5.7 day-of-week selector removed and the 100 GB/7-day tooltip corrected; §6 v0.2.0 status updated (scheduling removed from outstanding). Closure record at `docs/closure/bandwidth-scheduling-closure.md`. No milestone renumbering. |
 
 ---
 
