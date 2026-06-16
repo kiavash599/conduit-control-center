@@ -4,22 +4,34 @@ Integration tests for POST /api/conduit/config/{validate,apply} (M2).
 
 The privileged adapter calls (apply/rollback/verify/helper_is_safe) and the view
 reader are monkeypatched, and the audit writer is stubbed, so the apply-pipeline
-logic (validation, no-op, optimistic concurrency, health gate, rollback, status
-codes) is exercised without systemd, sudo, or a database.
+logic is exercised without systemd, sudo, or a database.
+
+Key invariant under test (production bug fix): HEALTH is the source of truth, not
+the helper's restart exit code. A non-zero apply rc with a healthy result still
+=> applied; rollback_failed is returned only when the service is unhealthy after
+rollback. Plus: _write_config_audit uses the request-scoped DB connection.
 """
 from __future__ import annotations
 
+import sqlite3
+
+import aiosqlite
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.api.conduit as capi
 from backend.conduit.models import ConduitConfigView, ConfigField
-from backend.dependencies import AuthenticatedUser, get_current_user, require_csrf_token
+from backend.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    get_db,
+    require_csrf_token,
+)
 
 
-def _view(mcc_c, mcc_e, bw_c, bw_e, **bw_kw):
+def _view(mcc_c, mcc_e, bw_c, bw_e, *, status="running", **bw_kw):
     return ConduitConfigView(
-        service_status="running",
+        service_status=status,
         max_common_clients=ConfigField(mcc_c, mcc_e),
         bandwidth_mbps=ConfigField(bw_c, bw_e, **bw_kw),
     )
@@ -49,6 +61,7 @@ def _client(monkeypatch, *, view, apply_rc=(0, ""), rollback_rc=(0, ""),
     app.include_router(capi.router, prefix="/api/conduit")
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="admin")
     app.dependency_overrides[require_csrf_token] = lambda: None
+    app.dependency_overrides[get_db] = lambda: None   # audit is stubbed; db unused
     if locked:
         # The endpoint returns 409 on lock.locked()==True before entering the
         # context manager, so a stub avoids needing a running event loop here
@@ -61,6 +74,7 @@ def _client(monkeypatch, *, view, apply_rc=(0, ""), rollback_rc=(0, ""),
     return TestClient(app)
 
 
+# --------------------------- validate ---------------------------
 def test_validate_ok(monkeypatch):
     c = _client(monkeypatch, view=_view(50, 50, 40, 40))
     r = c.post("/api/conduit/config/validate",
@@ -79,6 +93,7 @@ def test_validate_422(monkeypatch):
     assert r.json()["valid"] is False
 
 
+# --------------------------- apply ---------------------------
 def test_apply_happy(monkeypatch):
     c = _client(monkeypatch, view=_view(50, 50, 40, 40))
     r = c.post("/api/conduit/config/apply",
@@ -108,24 +123,30 @@ def test_apply_lock_conflict(monkeypatch):
     assert r.status_code == 409 and r.json()["reason"] == "apply_in_progress"
 
 
-def test_apply_wrapper_failure_rolls_back(monkeypatch):
-    c = _client(monkeypatch, view=_view(50, 50, 40, 40), apply_rc=(4, "restart failed"))
+def test_apply_rc_nonzero_but_healthy_applies(monkeypatch):
+    # Production bug: a transient non-zero restart rc must NOT cause a rollback
+    # when Conduit is actually healthy with the requested values.
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40),
+                apply_rc=(4, "restart reported non-zero"), health=(True, None))
+    r = c.post("/api/conduit/config/apply",
+               json={"max_common_clients": 200, "bandwidth_mbps": 80})
+    assert r.status_code == 200 and r.json()["status"] == "applied"
+
+
+def test_apply_health_fail_rollback_healthy_is_rolled_back(monkeypatch):
+    # Health fails, but the service is healthy after rollback -> rolled_back, NOT
+    # rollback_failed (even if the rollback command reported non-zero).
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40),
+                health=(False, "read-back mismatch"), rollback_rc=(4, "restart non-zero"))
     r = c.post("/api/conduit/config/apply",
                json={"max_common_clients": 200, "bandwidth_mbps": 80})
     assert r.status_code == 200 and r.json()["status"] == "rolled_back"
 
 
-def test_apply_health_fail_rolls_back(monkeypatch):
-    c = _client(monkeypatch, view=_view(50, 50, 40, 40),
-                health=(False, "max_common_clients read-back mismatch"))
-    r = c.post("/api/conduit/config/apply",
-               json={"max_common_clients": 200, "bandwidth_mbps": 80})
-    assert r.status_code == 200 and r.json()["status"] == "rolled_back"
-
-
-def test_apply_rollback_failure_500(monkeypatch):
-    c = _client(monkeypatch, view=_view(50, 50, 40, 40),
-                health=(False, "metrics unreachable"), rollback_rc=(4, "restart failed"))
+def test_apply_rollback_failed_when_service_unhealthy(monkeypatch):
+    # Health fails AND the service is still unhealthy after rollback -> 500.
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40, status="stopped"),
+                health=(False, "metrics unreachable"))
     r = c.post("/api/conduit/config/apply",
                json={"max_common_clients": 200, "bandwidth_mbps": 80})
     assert r.status_code == 500 and r.json()["status"] == "rollback_failed"
@@ -144,3 +165,33 @@ def test_apply_requires_auth(monkeypatch):
     r = c.post("/api/conduit/config/apply",
                json={"max_common_clients": 200, "bandwidth_mbps": 80})
     assert r.status_code == 401
+
+
+# --------------------------- _write_config_audit (real DB pattern) ---------------------------
+async def test_write_config_audit_inserts():
+    async with aiosqlite.connect(":memory:") as db:
+        await db.execute(
+            "CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "timestamp TEXT, event_type TEXT, username TEXT, detail TEXT)"
+        )
+        await db.commit()
+        aid = await capi._write_config_audit(
+            db, "applied", "admin", old={"x": 1}, requested={"x": 2}, effective={"x": 2})
+        assert aid is not None
+        cur = await db.execute(
+            "SELECT event_type, username FROM audit_log WHERE id = ?", (aid,))
+        row = await cur.fetchone()
+        assert row[0] == "CONDUIT_CONFIG" and row[1] == "admin"
+
+
+async def test_write_config_audit_failure_returns_none_without_raising():
+    class _BrokenDB:
+        async def execute(self, *_a, **_k):
+            raise sqlite3.OperationalError("boom")
+
+        async def commit(self):  # pragma: no cover - never reached
+            pass
+
+    aid = await capi._write_config_audit(
+        _BrokenDB(), "rollback_failed", "admin", old=None, requested={}, effective={})
+    assert aid is None   # logged + swallowed; operation status is unaffected
