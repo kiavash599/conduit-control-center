@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.api.conduit as capi
-from backend.conduit.models import ConduitConfigView, ConfigField
+from backend.conduit.models import ConduitConfigView, ConfigField, ReducedConfigView
 from backend.dependencies import (
     AuthenticatedUser,
     get_current_user,
@@ -29,19 +29,22 @@ from backend.dependencies import (
 )
 
 
-def _view(mcc_c, mcc_e, bw_c, bw_e, *, status="running", **bw_kw):
+def _view(mcc_c, mcc_e, bw_c, bw_e, *, status="running", reduced=None, **bw_kw):
     return ConduitConfigView(
         service_status=status,
         max_common_clients=ConfigField(mcc_c, mcc_e),
         bandwidth_mbps=ConfigField(bw_c, bw_e, **bw_kw),
+        reduced=reduced or ReducedConfigView(),
     )
 
 
 def _client(monkeypatch, *, view, apply_rc=(0, ""), rollback_rc=(0, ""),
-            health=(True, None), helper_safe=True, locked=False):
+            health=(True, None), helper_safe=True, locked=False, capture=None):
     async def _get_view():
         return view
-    async def _apply(_m, _b):
+    async def _apply(_m, _b, **kw):
+        if capture is not None:
+            capture.update({"mcc": _m, "bw": _b, **kw})
         return apply_rc
     async def _rollback():
         return rollback_rc
@@ -82,7 +85,11 @@ def test_validate_ok(monkeypatch):
     assert r.status_code == 200
     j = r.json()
     assert j["valid"] is True and j["changed"] is True and j["restart_required"] is True
-    assert j["normalized"] == {"max_common_clients": 200, "bandwidth_mbps": 80}
+    assert j["normalized"] == {
+        "max_common_clients": 200, "bandwidth_mbps": 80,
+        "start_min": -1, "end_min": -1,
+        "reduced_max_common_clients": 0, "reduced_bandwidth_mbps": 0,
+    }
 
 
 def test_validate_422(monkeypatch):
@@ -150,6 +157,66 @@ def test_apply_rollback_failed_when_service_unhealthy(monkeypatch):
     r = c.post("/api/conduit/config/apply",
                json={"max_common_clients": 200, "bandwidth_mbps": 80})
     assert r.status_code == 500 and r.json()["status"] == "rollback_failed"
+
+
+def _enabled_window():
+    return ReducedConfigView(enabled=True, start="02:00", end="06:00",
+                             max_common_clients=10, bandwidth_mbps=15)
+
+
+def test_apply_reduced_enable(monkeypatch):
+    cap: dict = {}
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40), capture=cap)
+    r = c.post("/api/conduit/config/apply", json={
+        "max_common_clients": 50, "bandwidth_mbps": 40,
+        "reduced": {"enabled": True, "start": "02:00", "end": "06:00",
+                    "max_common_clients": 10, "bandwidth_mbps": 15},
+    })
+    assert r.status_code == 200 and r.json()["status"] == "applied"
+    assert cap["reduced_start_min"] == 120 and cap["reduced_end_min"] == 360
+    assert cap["reduced_max_common"] == 10 and cap["reduced_bandwidth_mbps"] == 15
+
+
+def test_apply_reduced_preserved_when_omitted(monkeypatch):
+    # Full-state (BS0 #2): changing only normal config preserves the window.
+    cap: dict = {}
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40, reduced=_enabled_window()),
+                capture=cap)
+    r = c.post("/api/conduit/config/apply",
+               json={"max_common_clients": 200, "bandwidth_mbps": 80})  # no "reduced"
+    assert r.status_code == 200 and r.json()["status"] == "applied"
+    assert cap["reduced_start_min"] == 120 and cap["reduced_max_common"] == 10
+
+
+def test_apply_reduced_disable(monkeypatch):
+    cap: dict = {}
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40, reduced=_enabled_window()),
+                capture=cap)
+    r = c.post("/api/conduit/config/apply", json={
+        "max_common_clients": 50, "bandwidth_mbps": 40, "reduced": {"enabled": False},
+    })
+    assert r.status_code == 200 and r.json()["status"] == "applied"
+    assert cap["reduced_start_min"] == -1 and cap["reduced_max_common"] == 0
+
+
+def test_apply_reduced_invalid_422(monkeypatch):
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40))
+    r = c.post("/api/conduit/config/apply", json={
+        "max_common_clients": 50, "bandwidth_mbps": 40,
+        "reduced": {"enabled": True, "start": "99:00", "end": "06:00",
+                    "max_common_clients": 10, "bandwidth_mbps": 15},
+    })
+    assert r.status_code == 422 and r.json()["valid"] is False
+
+
+def test_apply_reduced_max_exceeds_mcc_422(monkeypatch):
+    c = _client(monkeypatch, view=_view(50, 50, 40, 40))
+    r = c.post("/api/conduit/config/apply", json={
+        "max_common_clients": 50, "bandwidth_mbps": 40,
+        "reduced": {"enabled": True, "start": "02:00", "end": "06:00",
+                    "max_common_clients": 60, "bandwidth_mbps": 15},
+    })
+    assert r.status_code == 422
 
 
 def test_apply_helper_unsafe_503(monkeypatch):

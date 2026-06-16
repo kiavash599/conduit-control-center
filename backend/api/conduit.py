@@ -80,8 +80,11 @@ from backend.conduit.adapter import (
     verify_conduit_config_health,
 )
 from backend.conduit.config_validation import (
+    MCC_MAX,
+    parse_hhmm,
     validate_bandwidth_mbps,
     validate_max_common_clients,
+    validate_reduced,
 )
 from backend.dependencies import (
     AuthenticatedUser,
@@ -110,11 +113,21 @@ class ConfigFieldOut(BaseModel):
     unlimited_effective: bool = False
 
 
+class ReducedConfigOut(BaseModel):
+    # Configured-only (BS1): reduced mode has no runtime/effective metric.
+    enabled: bool = False
+    start: str | None = None              # HH:MM, 24-hour, UTC
+    end: str | None = None
+    max_common_clients: int | None = None
+    bandwidth_mbps: int | None = None
+
+
 class ConduitConfigResponse(BaseModel):
     service_status: str
     drift: bool | None = None
     max_common_clients: ConfigFieldOut
     bandwidth_mbps: ConfigFieldOut
+    reduced: ReducedConfigOut = ReducedConfigOut()
 
 
 @router.get(
@@ -128,7 +141,7 @@ async def get_conduit_config(
 ) -> ConduitConfigResponse:
     """Aggregate-only, read-only view. No write/restart/privileged operation."""
     view = await get_conduit_config_view()
-    mcc, bw = view.max_common_clients, view.bandwidth_mbps
+    mcc, bw, red = view.max_common_clients, view.bandwidth_mbps, view.reduced
     return ConduitConfigResponse(
         service_status=view.service_status,
         drift=view.drift,
@@ -139,6 +152,11 @@ async def get_conduit_config(
             configured=bw.configured, effective=bw.effective, drift=bw.drift,
             unlimited_configured=bw.unlimited_configured,
             unlimited_effective=bw.unlimited_effective,
+        ),
+        reduced=ReducedConfigOut(
+            enabled=red.enabled, start=red.start, end=red.end,
+            max_common_clients=red.max_common_clients,
+            bandwidth_mbps=red.bandwidth_mbps,
         ),
     )
 
@@ -185,9 +203,21 @@ async def get_conduit_regions(
 # optimistic-concurrency + no-op checks, verifies health, and audits every
 # outcome. is_live is advisory -- never a rollback gate.
 
+class ReducedConfigIn(BaseModel):
+    # Optional reduced-mode window. The API accepts HH:MM (UTC) strings and
+    # converts them to integer minutes before the adapter/helper boundary, so no
+    # untrusted string ever reaches the privilege layer (BS0 #1).
+    enabled: bool = False
+    start: str | None = None              # HH:MM, 24-hour, UTC
+    end: str | None = None
+    max_common_clients: int | None = None
+    bandwidth_mbps: int | None = None
+
+
 class ConfigWriteRequest(BaseModel):
     max_common_clients: int
     bandwidth_mbps: int
+    reduced: ReducedConfigIn | None = None
 
 
 class ExpectedEffective(BaseModel):
@@ -205,7 +235,12 @@ def ensure_conduit_apply_lock(app) -> None:
         app.state.conduit_apply_lock = asyncio.Lock()
 
 
-def _validate_payload(mcc: object, bw: object) -> tuple[dict | None, list[dict]]:
+def _validate_payload(
+    mcc: object, bw: object, reduced: "ReducedConfigIn | None" = None
+) -> tuple[dict | None, list[dict]]:
+    """Validate normal + (optional) reduced config. Returns (normalized, []) or
+    (None, errors). ``normalized`` carries the reduced window as integer minutes
+    (start_min/end_min) so only integers cross to the adapter/helper."""
     bw_max = getattr(get_app_config(), "conduit_bandwidth_max_mbps", 1000)
     errors: list[dict] = []
     nmcc, e1 = validate_max_common_clients(mcc)
@@ -214,9 +249,23 @@ def _validate_payload(mcc: object, bw: object) -> tuple[dict | None, list[dict]]
     nbw, e2 = validate_bandwidth_mbps(bw, max_mbps=bw_max)
     if e2:
         errors.append({"field": "bandwidth_mbps", "message": e2})
+
+    # Cross-field uses the new max-common-clients; fall back to the absolute max
+    # when mcc is invalid so we don't emit a spurious second error for the same
+    # root cause (the mcc error is already reported above).
+    cross_mcc = nmcc if nmcc is not None else MCC_MAX
+    if reduced is None:
+        rnorm, rerrs = validate_reduced(False, None, None, 0, 0, cross_mcc)
+    else:
+        rnorm, rerrs = validate_reduced(
+            reduced.enabled, reduced.start, reduced.end,
+            reduced.max_common_clients, reduced.bandwidth_mbps, cross_mcc,
+        )
+    errors.extend(rerrs)
+
     if errors:
         return None, errors
-    return {"max_common_clients": nmcc, "bandwidth_mbps": nbw}, []
+    return {"max_common_clients": nmcc, "bandwidth_mbps": nbw, **rnorm}, []
 
 
 def _effective_dict(view) -> dict:
@@ -227,11 +276,29 @@ def _effective_dict(view) -> dict:
     }
 
 
+def _reduced_dict(view) -> dict:
+    """Configured reduced window in the SAME integer shape as the normalized
+    payload, so no-op/changed comparisons line up. Disabled -> {-1,-1,0,0}."""
+    r = view.reduced
+    if r.enabled and r.start and r.end:
+        smin = parse_hhmm(r.start)[0]
+        emin = parse_hhmm(r.end)[0]
+        return {
+            "start_min": smin if smin is not None else -1,
+            "end_min": emin if emin is not None else -1,
+            "reduced_max_common_clients": r.max_common_clients or 0,
+            "reduced_bandwidth_mbps": r.bandwidth_mbps or 0,
+        }
+    return {"start_min": -1, "end_min": -1,
+            "reduced_max_common_clients": 0, "reduced_bandwidth_mbps": 0}
+
+
 def _configured_dict(view) -> dict:
     bw = view.bandwidth_mbps
     return {
         "max_common_clients": view.max_common_clients.configured,
         "bandwidth_mbps": (-1 if bw.unlimited_configured else bw.configured),
+        **_reduced_dict(view),
     }
 
 
@@ -282,7 +349,9 @@ async def validate_config(
     _user: AuthenticatedUser = Depends(get_current_user),
     _csrf: None = Depends(require_csrf_token),
 ):
-    normalized, errors = _validate_payload(payload.max_common_clients, payload.bandwidth_mbps)
+    normalized, errors = _validate_payload(
+        payload.max_common_clients, payload.bandwidth_mbps, payload.reduced
+    )
     if errors:
         return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
     view = await get_conduit_config_view()
@@ -325,7 +394,9 @@ async def apply_config(
     requested = {"max_common_clients": payload.max_common_clients,
                  "bandwidth_mbps": payload.bandwidth_mbps}
 
-    normalized, errors = _validate_payload(payload.max_common_clients, payload.bandwidth_mbps)
+    normalized, errors = _validate_payload(
+        payload.max_common_clients, payload.bandwidth_mbps, payload.reduced
+    )
     if errors:
         await _write_config_audit(db, "rejected", username, old=None, requested=requested,
                                   effective=None, reason="validation")
@@ -353,6 +424,14 @@ async def apply_config(
         view = await get_conduit_config_view()
         old = _configured_dict(view)
 
+        # Full-state apply (BS0 #2): the drop-in is monolithic, so every apply
+        # writes the COMPLETE state. If the caller did not specify a reduced
+        # window, preserve the current configured one rather than disabling it.
+        if payload.reduced is None:
+            for k in ("start_min", "end_min",
+                      "reduced_max_common_clients", "reduced_bandwidth_mbps"):
+                normalized[k] = old[k]
+
         if payload.expected_effective is not None:
             cur_eff = _effective_dict(view)
             exp = payload.expected_effective
@@ -379,7 +458,16 @@ async def apply_config(
         # helper's restart exit code, which can transiently report non-zero on
         # the Pi while Conduit recovers. If Conduit is healthy with the requested
         # values, the apply succeeded regardless of rc.
-        rc, err = await apply_conduit_config(nmcc, nbw)
+        rc, err = await apply_conduit_config(
+            nmcc, nbw,
+            reduced_start_min=normalized["start_min"],
+            reduced_end_min=normalized["end_min"],
+            reduced_max_common=normalized["reduced_max_common_clients"],
+            reduced_bandwidth_mbps=normalized["reduced_bandwidth_mbps"],
+        )
+        # Reduced values have no effective metric; verification stays normal-only
+        # (approved decision). A bad reduced value fails conduit start -> service
+        # unhealthy -> rollback, so health-as-truth still gates it.
         ok, reason = await verify_conduit_config_health(nmcc, nbw)
         if ok:
             eff = _effective_dict(await get_conduit_config_view())

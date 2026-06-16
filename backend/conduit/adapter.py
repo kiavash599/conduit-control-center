@@ -122,7 +122,12 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from backend.config import get_app_config
-from backend.conduit.models import ConduitConfigView, ConfigField, RegionStat
+from backend.conduit.models import (
+    ConduitConfigView,
+    ConfigField,
+    ReducedConfigView,
+    RegionStat,
+)
 from backend.traffic.models import CounterReading, NodeRuntime
 
 logger = logging.getLogger(__name__)
@@ -1296,6 +1301,23 @@ async def get_conduit_config_view() -> ConduitConfigView:
         if cfg_bw is None:
             cfg_bw = _flag_int(argv, "--bandwidth")
 
+    # Configured-only reduced window (BS1). No effective/runtime metric exists;
+    # read the CCC_REDUCED_* knobs from the same authoritative Environment. The
+    # window is enabled iff a start time is set AND reduced-max > 0 (the helper
+    # writes them all-or-nothing, so both hold together).
+    red_start = env.get("CCC_REDUCED_START") or ""
+    red_end = env.get("CCC_REDUCED_END") or ""
+    red_max = _env_int(env, "CCC_REDUCED_MAXCOMMON")
+    red_up_bps = _env_int(env, "CCC_REDUCED_UP")
+    reduced_enabled = bool(red_start) and (red_max or 0) > 0
+    reduced = ReducedConfigView(
+        enabled=reduced_enabled,
+        start=red_start if reduced_enabled else None,
+        end=(red_end or None) if reduced_enabled else None,
+        max_common_clients=red_max if reduced_enabled else None,
+        bandwidth_mbps=_bps_to_mbps(red_up_bps) if reduced_enabled else None,
+    )
+
     try:
         service_status: str = await get_status()
     except Exception:  # noqa: BLE001
@@ -1310,6 +1332,7 @@ async def get_conduit_config_view() -> ConduitConfigView:
             unlimited_configured=(cfg_bw == -1),
             unlimited_effective=(eff_bw_bps == 0),
         ),
+        reduced=reduced,
     )
 
 
@@ -1389,12 +1412,29 @@ async def _run_helper(*args: str) -> tuple[int, str]:
         return -1, f"helper not runnable: {exc}"
 
 
-async def apply_conduit_config(max_common_clients: int, bandwidth_mbps: int) -> tuple[int, str]:
-    """Invoke the helper `apply` (write drop-in + daemon-reload + restart)."""
+async def apply_conduit_config(
+    max_common_clients: int,
+    bandwidth_mbps: int,
+    *,
+    reduced_start_min: int = -1,
+    reduced_end_min: int = -1,
+    reduced_max_common: int = 0,
+    reduced_bandwidth_mbps: int = 0,
+) -> tuple[int, str]:
+    """Invoke the helper `apply` (write drop-in + daemon-reload + restart).
+
+    Reduced-window args are integers only (the helper formats HH:MM itself) and
+    default to the disabled sentinel, preserving the original two-knob call. The
+    API always passes the full state (BS1 Commit 2).
+    """
     return await _run_helper(
         "apply",
         "--max-common-clients", str(int(max_common_clients)),
         "--bandwidth-mbps", str(int(bandwidth_mbps)),
+        "--reduced-start-min", str(int(reduced_start_min)),
+        "--reduced-end-min", str(int(reduced_end_min)),
+        "--reduced-max-common", str(int(reduced_max_common)),
+        "--reduced-bandwidth-mbps", str(int(reduced_bandwidth_mbps)),
     )
 
 

@@ -10,15 +10,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.api.conduit as capi
-from backend.conduit.models import ConduitConfigView, ConfigField
+from backend.conduit.models import ConduitConfigView, ConfigField, ReducedConfigView
 from backend.dependencies import AuthenticatedUser, get_current_user
 
 
-def _view(mcc_c, mcc_e, bw_c, bw_e, **bw_kw):
+def _view(mcc_c, mcc_e, bw_c, bw_e, *, reduced=None, **bw_kw):
     return ConduitConfigView(
         service_status="running",
         max_common_clients=ConfigField(mcc_c, mcc_e),
         bandwidth_mbps=ConfigField(bw_c, bw_e, **bw_kw),
+        reduced=reduced or ReducedConfigView(),
     )
 
 
@@ -43,12 +44,27 @@ def test_shape_and_in_sync(monkeypatch):
     r = c.get("/api/conduit/config")
     assert r.status_code == 200
     j = r.json()
-    assert set(j) == {"service_status", "drift", "max_common_clients", "bandwidth_mbps"}
+    assert set(j) == {"service_status", "drift", "max_common_clients", "bandwidth_mbps", "reduced"}
     assert j["service_status"] == "running"
     assert j["drift"] is False
     assert j["max_common_clients"] == {
         "configured": 50, "effective": 50, "drift": False,
         "unlimited_configured": False, "unlimited_effective": False,
+    }
+    assert j["reduced"] == {
+        "enabled": False, "start": None, "end": None,
+        "max_common_clients": None, "bandwidth_mbps": None,
+    }
+
+
+def test_reduced_enabled_serialized(monkeypatch):
+    red = ReducedConfigView(enabled=True, start="02:00", end="06:00",
+                            max_common_clients=10, bandwidth_mbps=15)
+    c = _client(monkeypatch, _view(50, 50, 40, 40, reduced=red))
+    j = c.get("/api/conduit/config").json()
+    assert j["reduced"] == {
+        "enabled": True, "start": "02:00", "end": "06:00",
+        "max_common_clients": 10, "bandwidth_mbps": 15,
     }
 
 

@@ -17,7 +17,25 @@ Aggregate-only and read-only: no secrets, no per-client/region data.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class ReducedConfigView:
+    """Configured-only view of the reduced-mode window (BS1).
+
+    Reduced mode has NO effective/runtime metric: tunnel-core applies the daily
+    HH:MM-UTC window internally, and ``conduit_max_common_clients`` is the static
+    startup gauge. So only the *configured* (next-start) values are reported --
+    never an invented effective/drift value. ``enabled`` is False when no window
+    is set (empty start time / zero reduced-max).
+    """
+
+    enabled: bool = False
+    start: str | None = None              # HH:MM, 24-hour, UTC
+    end: str | None = None                # HH:MM, 24-hour, UTC
+    max_common_clients: int | None = None
+    bandwidth_mbps: int | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +60,7 @@ class ConduitConfigView:
     service_status: str  # "running" | "stopped" | "starting" | "stopping" | "error" | "unknown"
     max_common_clients: ConfigField
     bandwidth_mbps: ConfigField
+    reduced: ReducedConfigView = field(default_factory=ReducedConfigView)
 
     @property
     def drift(self) -> bool | None:
