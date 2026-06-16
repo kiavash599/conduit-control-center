@@ -1321,6 +1321,9 @@ async def get_conduit_config_view() -> ConduitConfigView:
 # its own input and writes only Environment= lines. argv-only; no shell.
 
 _HELPER_PATH = "/opt/conduit-cc/bin/ccc-apply-conduit-config"
+# Upper bound for a helper invocation (write + daemon-reload + restart). With
+# `sudo -n` there is no password prompt to hang on; this guards a wedged restart.
+_HELPER_TIMEOUT_S = 60.0
 
 
 def helper_is_safe() -> bool:
@@ -1344,21 +1347,45 @@ def helper_is_safe() -> bool:
 
 
 async def _run_helper(*args: str) -> tuple[int, str]:
-    """Run `sudo <helper> <args>` argv-only (no shell). Returns (rc, stderr).
+    """Run ``sudo -n <helper> <args>`` argv-only (no shell). Returns (rc, message).
 
-    Never raises on subprocess failure: returns rc=-1 + a message instead.
+    ``-n`` (non-interactive) makes sudo fail FAST with a clear stderr when the
+    conduit-cc service account is not granted NOPASSWD for the helper, instead of
+    blocking on a password prompt it can never satisfy (the service has no tty).
+    A common production failure is rc=1 with "sudo: a password is required",
+    which means the sudoers helper grant is missing/ineffective even though the
+    helper runs fine when invoked manually by an operator with full sudo.
+
+    stdout+stderr are captured; on a non-zero/abnormal result the exact rc and
+    output are logged at WARNING so the journal shows the cause. Never raises:
+    returns rc=-1 + a message instead.
     """
-    cmd = ["sudo", _HELPER_PATH, *args]
+    cmd = ["sudo", "-n", _HELPER_PATH, *args]
+    label = " ".join(args) if args else "rollback"
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _out, err = await proc.communicate()
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(), timeout=_HELPER_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            logger.error("config helper '%s' timed out after %ss", label, _HELPER_TIMEOUT_S)
+            return -1, f"helper timed out after {_HELPER_TIMEOUT_S:.0f}s"
         rc = proc.returncode if proc.returncode is not None else -1
-        return rc, err.decode("utf-8", errors="replace").strip()
+        msg = err.decode("utf-8", errors="replace").strip()
+        if not msg:
+            msg = out.decode("utf-8", errors="replace").strip()
+        if rc != 0:
+            logger.warning("config helper '%s' failed rc=%s: %s", label, rc, msg or "(no output)")
+        return rc, msg
     except OSError as exc:
+        logger.error("config helper '%s' not runnable: %s", label, exc)
         return -1, f"helper not runnable: {exc}"
 
 

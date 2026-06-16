@@ -363,14 +363,15 @@ async def apply_config(
         if post_ok:
             aid = await _write_config_audit(
                 db, "rolled_back", username, old=old, requested=normalized, effective=eff,
-                reason=f"verify failed: {reason}; apply_rc={rc}; rollback_rc={rb_rc}")
+                reason=(f"verify failed: {reason}; "
+                        f"apply rc={rc}: {err!r}; rollback rc={rb_rc}: {rb_err!r}"))
             return JSONResponse(status_code=200,
                                 content={"status": "rolled_back", "reason": reason,
                                          "effective": eff, "audit_id": aid})
         aid = await _write_config_audit(
             db, "rollback_failed", username, old=old, requested=normalized, effective=eff,
-            reason=(f"verify failed: {reason}; rollback_rc={rb_rc}: {rb_err}; "
-                    "service unhealthy after rollback"))
+            reason=(f"verify failed: {reason}; apply rc={rc}: {err!r}; "
+                    f"rollback rc={rb_rc}: {rb_err!r}; service unhealthy after rollback"))
         return JSONResponse(status_code=500,
                             content={"status": "rollback_failed", "audit_id": aid})
 
