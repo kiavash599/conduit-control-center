@@ -287,7 +287,7 @@ app.include_router(logs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api/settings")
 app.include_router(ddns_router, prefix="/api/ddns")
 app.include_router(traffic_router, prefix="/api/traffic")
-app.include_router(advisor_router, prefix="/api/advisor")
+app.include_router(advisor_router, prefix="/api")  # route path is "/advisor" -> /api/advisor
 
 # ---------------------------------------------------------------------------
 # Static files

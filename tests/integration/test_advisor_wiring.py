@@ -30,10 +30,10 @@ def test_advisor_wired_and_state_initialized(monkeypatch, tmp_path):
         assert hasattr(app.state, "advisor_samples")
         assert hasattr(app.state, "advisor_lock")
 
-        # 2) route registered at exactly /api/advisor
-        assert any(getattr(r, "path", None) == "/api/advisor" for r in app.routes)
-
-        # 3) unauthenticated -> 401
+        # 2) route is wired and served at /api/advisor -- behavioural check,
+        #    robust across FastAPI/Starlette versions (an unwired route would 404;
+        #    app.routes .path introspection is fragile under Starlette 1.0.x).
+        #    Unauthenticated -> 401 also proves the route exists.
         assert c.get("/api/advisor").status_code == 401
 
         # 4) authenticated -> 200 + Cache-Control: no-store + expected shape

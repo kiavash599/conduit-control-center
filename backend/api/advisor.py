@@ -349,8 +349,12 @@ def ensure_advisor_state(app) -> None:
 router = APIRouter(tags=["advisor"])
 
 
+# Explicit, non-empty route path. Registered in main.py with prefix="/api", this
+# deterministically serves GET /api/advisor across FastAPI/Starlette versions.
+# (An empty-string path "" + prefix="/api/advisor" is fragile: route enumeration
+# changed on Starlette 1.0.x, which broke the wiring test.)
 @router.get(
-    "",
+    "/advisor",
     response_model=AdvisorResponse,
     summary="Contribution Advisor recommendations + health summary",
     responses={401: {"description": "Not authenticated"}},
