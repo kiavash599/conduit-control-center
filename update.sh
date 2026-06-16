@@ -728,9 +728,13 @@ RATELIMIT_EOF
         warn "systemd-journal group not found - Logs page may return HTTP 503"
     fi
 
-    step "3h - Starting ${SERVICE_NAME}"
-    systemctl start "${SERVICE_NAME}"
-    info "${SERVICE_NAME} started"
+    # 3h - ${SERVICE_NAME} is intentionally NOT started here (BS1 Commit 3).
+    # The new CCC code must not serve until the reduced-capable helper and the
+    # updated conduit.service are installed (phase_m2_config_write_artifacts) and
+    # verified (phase_bs1_reduced_guard); otherwise the new backend could invoke
+    # an OLD helper with --reduced-* args. The start is deferred to
+    # phase3b_start_service, which runs after phaseM2 + the guard.
+    info "${SERVICE_NAME} deploy complete; start deferred until M2 artifacts are in place"
 }
 
 # --------------------------------------------------------------------------- #
@@ -1054,6 +1058,63 @@ phase_m2_config_write_artifacts() {
 }
 
 # --------------------------------------------------------------------------- #
+#  Phase BS1 guard - reduced-mode artifacts present after migration           #
+# --------------------------------------------------------------------------- #
+#  Fail-safe: confirm the DEPLOYED helper + unit actually support reduced mode  #
+#  BEFORE the new CCC code is started. A mismatch (stale source, partial copy,  #
+#  old unit) aborts the update; the EXIT trap then runs phase5_rollback to      #
+#  restore the previous working state (old code + old helper). Read-only.       #
+phase_bs1_reduced_guard() {
+    section "Phase BS1 - Reduced-mode artifact guard"
+    local _helper_dst="/opt/conduit-cc/bin/ccc-apply-conduit-config"
+    local _unit_dst="/etc/systemd/system/conduit.service"
+    local _t
+
+    step "BS1-a — Verifying reduced-capable helper"
+    if [[ ! -f "${_helper_dst}" ]] || ! grep -q -- "--reduced-start-min" "${_helper_dst}"; then
+        die "Reduced-mode helper missing or outdated (${_helper_dst} lacks --reduced-start-min)." \
+            "The new backend requires the reduced-capable helper; aborting to roll back."
+    fi
+    info "Helper supports reduced-mode arguments"
+
+    # The unit is only present when Conduit is managed on this host. When absent,
+    # skip the unit guard (the helper guard above still applies).
+    if [[ -f "${_unit_dst}" ]]; then
+        step "BS1-b — Verifying conduit.service reduced tokens"
+        for _t in \
+            "--set InproxyReducedStartTime=\${CCC_REDUCED_START}" \
+            "--set InproxyReducedEndTime=\${CCC_REDUCED_END}" \
+            "--set InproxyReducedMaxCommonClients=\${CCC_REDUCED_MAXCOMMON}" \
+            "--set InproxyReducedLimitUpstreamBytesPerSecond=\${CCC_REDUCED_UP}" \
+            "--set InproxyReducedLimitDownstreamBytesPerSecond=\${CCC_REDUCED_DOWN}"; do
+            grep -qF -- "${_t}" "${_unit_dst}" \
+                || die "conduit.service is missing reduced token: ${_t}" \
+                       "Aborting to roll back to the previous working unit."
+        done
+        for _t in CCC_REDUCED_START CCC_REDUCED_END CCC_REDUCED_MAXCOMMON CCC_REDUCED_UP CCC_REDUCED_DOWN; do
+            grep -qE "^Environment=${_t}=" "${_unit_dst}" \
+                || die "conduit.service is missing default: Environment=${_t}" \
+                       "Aborting to roll back to the previous working unit."
+        done
+        info "conduit.service has all reduced --set tokens + CCC_REDUCED_* defaults"
+    else
+        info "Conduit unit not installed here — skipping unit token guard"
+    fi
+}
+
+# --------------------------------------------------------------------------- #
+#  Phase 3b - Start service (deferred until reduced artifacts are verified)    #
+# --------------------------------------------------------------------------- #
+#  The start moved here from phase3 step 3h (BS1 Commit 3) so the new CCC code  #
+#  never serves before the reduced-capable helper + unit are in place.         #
+phase3b_start_service() {
+    section "Phase 3b - Start ${SERVICE_NAME}"
+    step "3b-1 — Starting ${SERVICE_NAME}"
+    systemctl start "${SERVICE_NAME}"
+    info "${SERVICE_NAME} started"
+}
+
+# --------------------------------------------------------------------------- #
 #  Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 
@@ -1064,5 +1125,7 @@ phase2_preinstall
 phase2b_conduit_update
 phase3_deploy
 phase_m2_config_write_artifacts
+phase_bs1_reduced_guard
+phase3b_start_service
 phase4_verify
 phase6_summary

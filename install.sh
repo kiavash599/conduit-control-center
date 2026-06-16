@@ -822,6 +822,31 @@ EOF
     systemctl daemon-reload
     info "${_conduit_unit} installed"
 
+    # ---- 2x-e2  Reduced-mode artifact guard (BS1) -------------------------- #
+    # Fail-safe before starting Conduit: confirm the installed helper + unit
+    # actually support reduced mode (helper accepts --reduced-* args; the unit
+    # carries the static --set InproxyReduced* tokens + CCC_REDUCED_* defaults).
+    step "2x-e2 — Verifying reduced-mode artifacts"
+    local _ccc_helper="/opt/conduit-cc/bin/ccc-apply-conduit-config"
+    local _t
+    if [[ ! -f "${_ccc_helper}" ]] || ! grep -q -- "--reduced-start-min" "${_ccc_helper}"; then
+        die "Reduced-mode helper missing/outdated (${_ccc_helper} lacks --reduced-start-min)."
+    fi
+    for _t in \
+        "--set InproxyReducedStartTime=\${CCC_REDUCED_START}" \
+        "--set InproxyReducedEndTime=\${CCC_REDUCED_END}" \
+        "--set InproxyReducedMaxCommonClients=\${CCC_REDUCED_MAXCOMMON}" \
+        "--set InproxyReducedLimitUpstreamBytesPerSecond=\${CCC_REDUCED_UP}" \
+        "--set InproxyReducedLimitDownstreamBytesPerSecond=\${CCC_REDUCED_DOWN}"; do
+        grep -qF -- "${_t}" "${_conduit_unit}" \
+            || die "conduit.service missing reduced token: ${_t}"
+    done
+    for _t in CCC_REDUCED_START CCC_REDUCED_END CCC_REDUCED_MAXCOMMON CCC_REDUCED_UP CCC_REDUCED_DOWN; do
+        grep -qE "^Environment=${_t}=" "${_conduit_unit}" \
+            || die "conduit.service missing default: Environment=${_t}"
+    done
+    info "Reduced-mode helper + conduit.service tokens verified"
+
     # ---- 2x-f  Enable and start Conduit ------------------------------------ #
     step "2x-f — Enabling and starting conduit service"
     systemctl enable --now conduit
