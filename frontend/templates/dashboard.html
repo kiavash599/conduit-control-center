@@ -525,6 +525,55 @@
             </div><!-- /#traffic-history-card -->
             </div><!-- /group: Traffic -->
 
+            <!--
+              Regional Analytics card — RA-2a (static structure only).
+              ----------------------------------------------------------------
+              Standalone card at the end of the Dashboard (after the Traffic
+              group), per the frozen design. Read-only, aggregate-only: shows the
+              Top-10 countries by traffic. Behaviour (fetch/render/poll) is wired
+              by regions.js in RA-2b; this step ships the static DOM + CSS only —
+              no script, no API call.
+
+              DOM contract consumed by regions.js (RA-2b):
+                #regions-loading / #regions-error / #regions-empty / #regions-body
+                  — mutually-exclusive states (toggled via [hidden])
+                #regions-tbody — <tbody>; one <tr> per region built via DOM nodes
+              API (RA-2b): GET /api/conduit/regions (scope=common, Top-10, sorted).
+            -->
+            <div class="card mt-4" id="regions-card">
+
+                <div class="card__header">
+                    <h2 class="card__title">Regions</h2>
+                </div>
+                <p class="card__subtitle">Top countries by traffic</p>
+
+                <!-- loading: shown until the first /api/conduit/regions response (RA-2b) -->
+                <p id="regions-loading" class="is-loading">Loading regions&hellip;</p>
+
+                <!-- error: fetch failure / non-2xx, no toast (RA-2b) -->
+                <p id="regions-error" class="panel-error" role="status" hidden>Regions unavailable.</p>
+
+                <!-- empty: response had no regions (no activity yet / metrics unavailable) -->
+                <p id="regions-empty" class="empty-state" hidden>No regional activity yet.</p>
+
+                <!-- populated: Top-10 table (horizontal scroll on narrow viewports) -->
+                <div id="regions-body" class="regions-table-wrap" hidden>
+                    <table class="regions-table" aria-label="Top regions by traffic">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="regions-num">No.</th>
+                                <th scope="col" class="regions-flag"><span class="sr-only">Flag</span></th>
+                                <th scope="col">Country</th>
+                                <th scope="col" class="regions-num">Traffic</th>
+                                <th scope="col" class="regions-num">Clients</th>
+                            </tr>
+                        </thead>
+                        <tbody id="regions-tbody"></tbody>
+                    </table>
+                </div>
+
+            </div><!-- /#regions-card -->
+
         </div><!-- /#section-dashboard -->
 
         <!-- ── Section: System (host health, connectivity, logs) ──────── -->
@@ -1072,6 +1121,9 @@
 
 <!-- A1.4: contribution advisor card (Dashboard-aware polling) -->
 <script src="{{ static_url('js/advisor.js') }}"></script>
+
+<!-- RA-2: regional analytics card (Dashboard-aware polling) -->
+<script src="{{ static_url('js/regions.js') }}"></script>
 
 <!-- Issue #30: log viewer panel -->
 <script src="{{ static_url('js/logs.js') }}"></script>

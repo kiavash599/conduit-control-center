@@ -1228,3 +1228,42 @@ a:hover {
     margin: var(--space-2) 0 0;
     color: var(--color-text-muted);
 }
+
+
+/* ============================================================================
+   REGIONAL ANALYTICS — Regions card table (RA-2a)
+   ----------------------------------------------------------------------------
+   Static structure + table styling for #regions-card. regions.js (RA-2b) fills
+   #regions-tbody and toggles the loading/error/empty/body states. The wrapper
+   scrolls horizontally on narrow viewports so the 5-column table never overflows
+   the card. Additive only; reuses existing tokens and state classes.
+   ============================================================================ */
+.regions-table-wrap {
+    overflow-x: auto;          /* horizontal scroll on narrow viewports (mobile) */
+}
+.regions-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+.regions-table th,
+.regions-table td {
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--color-border);
+}
+.regions-table th {
+    color: var(--color-text-muted);
+    font-weight: var(--font-weight-semibold);
+}
+/* Right-align numeric columns (No., Traffic, Clients); tabular figures align. */
+.regions-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+/* Flag column: narrow, centered (decorative glyph; country name is the label). */
+.regions-flag {
+    width: 2rem;
+    text-align: center;
+}
