@@ -119,3 +119,30 @@ def test_main_rejects_non_integer_and_unknown():
     with pytest.raises(SystemExit):
         mod.main(["apply", "--unit", "evil", "--max-common-clients", "50",
                   "--bandwidth-mbps", "40"])  # no unit/path args accepted
+
+
+def test_lock_path_outside_dropin_dir():
+    # The serialisation lock must NOT live in the systemd drop-in dir (read-only
+    # under ProtectSystem=strict in the conduit-cc namespace); it lives under the
+    # already-writable /etc/conduit-cc.
+    mod = _load()
+    assert mod.DROPIN_DIR not in mod.LOCK_PATH
+    assert mod.LOCK_PATH.startswith("/etc/conduit-cc/")
+    assert mod.LOCK_PATH.endswith(".lock")
+    # Drop-in writes still target the systemd drop-in dir.
+    assert mod.DROPIN_PATH == mod.DROPIN_DIR + "/ccc.conf"
+    assert mod.BAK_PATH == mod.DROPIN_DIR + "/ccc.conf.bak"
+
+
+def test_unit_has_only_narrow_readwritepaths():
+    # conduit-cc.service keeps ProtectSystem=strict and adds ONLY the narrow
+    # drop-in dir to ReadWritePaths (never broad /etc/systemd).
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    unit = (repo / "deployment" / "conduit-cc.service").read_text()
+    assert "ProtectSystem=strict" in unit
+    assert "ReadWritePaths=/etc/systemd/system/conduit.service.d" in unit
+    rwp = [ln.strip() for ln in unit.splitlines() if ln.strip().startswith("ReadWritePaths=")]
+    assert rwp == [
+        "ReadWritePaths=/etc/conduit-cc",
+        "ReadWritePaths=/etc/systemd/system/conduit.service.d",
+    ], rwp

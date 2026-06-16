@@ -69,6 +69,19 @@ RestartSec=5s
 ProtectSystem=strict
 ReadWritePaths=/etc/conduit-cc
 
+# M2 config write: the conduit.service.d drop-in directory is re-granted write
+# access so the privileged helper (ccc-apply-conduit-config, run via sudo and
+# therefore INSIDE this service's mount namespace) can write the Environment-only
+# drop-in ccc.conf (+ its .bak and temp file). This is the NARROWEST possible
+# exception:
+#   - only the single drop-in directory is writable, not /etc/systemd at large;
+#   - ProtectSystem=strict and all other read-only paths are retained;
+#   - the unprivileged conduit-cc web process still CANNOT write here -- the
+#     directory is root-owned 0755, so only the root sudo helper can, and the
+#     helper writes only validated Environment= integer lines (no ExecStart,
+#     no shell, hardcoded path/unit, O_NOFOLLOW + atomic write).
+ReadWritePaths=/etc/systemd/system/conduit.service.d
+
 # UMask=0077 ensures every file the service creates is owner-only (0600) and
 # every directory 0700.  This is the primary guarantee for the SQLite database
 # files — ccc.db and the WAL sidecars ccc.db-wal / ccc.db-shm — which hold
@@ -109,22 +122,4 @@ ProtectHome=yes
 #   - RestrictNamespaces=
 #   - LockPersonality=
 #   - PrivateDevices=
-# An explicit "NoNewPrivileges=no" does NOT override the above: the kernel
-# cannot install an unprivileged seccomp filter without no_new_privs, so
-# systemd forces it on whenever any of these directives is present.
-#
-# Retained hardening (above) does NOT imply NoNewPrivileges:
-#   ProtectSystem=strict, ReadWritePaths=, UMask=0077, PrivateTmp=yes,
-#   ProtectHome=yes.
-#
-# Residual risk: a compromised conduit-cc process could invoke sudo, but only
-# the three systemctl commands allowed by /etc/sudoers.d/conduit-cc.
-#
-# TODO (v1.x): replace sudo with polkit + systemd D-Bus control. systemctl
-# over D-Bus needs no setuid, so it is compatible with NoNewPrivileges=yes,
-# allowing the omitted SystemCallFilter / Restrict* / Private* directives to
-# be restored. Touches backend/conduit/adapter.py and the install.sh sudoers
-# rule.
-
-[Install]
-WantedBy=multi-user.target
+# An explicit "NoNewPrivileges=no" does NOT ove

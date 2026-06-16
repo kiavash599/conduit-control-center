@@ -39,7 +39,11 @@ except ImportError:  # non-Linux (e.g. Windows CI loading the module for tests)
 DROPIN_DIR = "/etc/systemd/system/conduit.service.d"
 DROPIN_PATH = DROPIN_DIR + "/ccc.conf"
 BAK_PATH = DROPIN_DIR + "/ccc.conf.bak"
-LOCK_PATH = DROPIN_DIR + "/.ccc-apply.lock"
+# Lock lives OUTSIDE the drop-in dir: under conduit-cc.service ProtectSystem=strict
+# the helper (run via sudo, inside that namespace) writes the drop-in via a narrow
+# ReadWritePaths grant on DROPIN_DIR, but the serialisation lock belongs in the
+# already-writable, non-systemd /etc/conduit-cc. Opened O_NOFOLLOW; flock only.
+LOCK_PATH = "/etc/conduit-cc/ccc-apply-conduit-config.lock"
 UNIT = "conduit"
 SYSTEMCTL = "/usr/bin/systemctl"
 
@@ -212,17 +216,4 @@ def main(argv: list[str] | None = None) -> int:
     p_apply.add_argument("--max-common-clients", type=int, required=True)
     p_apply.add_argument("--bandwidth-mbps", type=int, required=True)
     sub.add_parser("rollback")
-    # argparse rejects unknown args/subcommands -> exit 2 (usage).
-    args = parser.parse_args(argv)
-
-    if args.cmd == "apply":
-        mcc = _validate_mcc(args.max_common_clients)
-        bw = _validate_bw(args.bandwidth_mbps)
-        cmd_apply(mcc, bw)
-    elif args.cmd == "rollback":
-        cmd_rollback()
-    return EXIT_OK
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    # argparse rejects unknown args/subc
