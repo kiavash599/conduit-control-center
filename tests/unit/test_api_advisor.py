@@ -68,7 +68,7 @@ def _client(
         monkeypatch.setattr(adv, "_now", lambda: now)
 
     app = FastAPI()
-    app.include_router(adv.router, prefix="/api/advisor")
+    app.include_router(adv.router, prefix="/api")
     if seed_samples is not None:
         app.state.advisor_samples = seed_samples
     if authed:
