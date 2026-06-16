@@ -10,8 +10,14 @@ Security contract (do not weaken):
   * apply accepts ONLY --max-common-clients N and --bandwidth-mbps M (ints).
   * Hardcoded drop-in path and unit name; NEVER takes a path or unit argument.
   * Writes ONLY Environment= lines to the drop-in; NEVER ExecStart or any other
-    directive; values emitted as %d (integers), never raw strings.
+    directive; integer values emitted as %d. The only string values are the
+    reduced-window times, which the helper FORMATS ITSELF as HH:MM from
+    validated integer minutes (never a raw argv string) -- so an injected
+    newline or directive is impossible by construction.
   * Re-validates ranges independently of the API (defense in depth).
+  * Reduced-window args (BS1) are OPTIONAL with a disabled default; their
+    absence -- or the disabled sentinel -- renders the window OFF (empty times,
+    zero limits), preserving the original two-argument M2 apply behaviour.
   * Atomic write: mkstemp in the same root-owned dir, fsync, os.replace.
   * Symlink/TOCTOU defense: verify the drop-in dir is a real, root-owned,
     non-symlink directory; backup read with O_NOFOLLOW.
@@ -50,6 +56,13 @@ SYSTEMCTL = "/usr/bin/systemctl"
 # Ranges -- MUST match backend/conduit/config_validation.py.
 MCC_MIN, MCC_MAX = 1, 1000
 BW_UNLIMITED, BW_MIN, BW_MAX = -1, 1, 1000
+# Reduced-window ranges (BS1). Times are minutes-since-midnight, UTC.
+# Disabled sentinel: start=-1, end=-1, reduced-max=0, reduced-bandwidth=0.
+RMIN_MIN, RMIN_MAX = 0, 1439          # 00:00 .. 23:59
+RMC_MIN, RMC_MAX = 1, 1000            # reduced max common clients (also <= MCC)
+RBW_MIN, RBW_MAX = 1, 1000            # reduced bandwidth Mbps (0 only when disabled)
+RDISABLED = (-1, -1, 0, 0)            # (start_min, end_min, reduced_max, reduced_bw)
+REDUCED_OFF = ("", "", 0, 0, 0)      # render-ready disabled tuple
 
 EXIT_OK, EXIT_USAGE, EXIT_FS, EXIT_SYSTEMCTL = 0, 2, 3, 4
 
@@ -89,6 +102,44 @@ def _validate_bw(value: int) -> int:
     if value < BW_MIN or value > BW_MAX:
         _fail(EXIT_USAGE, f"bandwidth-mbps must be -1 or {BW_MIN}..{BW_MAX}: {value}")
     return value
+
+
+def _hhmm(minutes: int) -> str:
+    """Format validated minutes-since-midnight as HH:MM (helper-synthesised)."""
+    hh, mm = divmod(minutes, 60)
+    s = "%02d:%02d" % (hh, mm)
+    # Defense in depth: the only string ever written to the unit must be a
+    # helper-built HH:MM. Refuse anything that is not exactly that shape.
+    if len(s) != 5 or s[2] != ":" or not (s[:2].isdigit() and s[3:].isdigit()):
+        _fail(EXIT_USAGE, "internal: malformed reduced time")
+    return s
+
+
+def _validate_reduced(start_min: int, end_min: int, reduced_max: int,
+                      reduced_bw: int, mcc: int):
+    """Validate the OPTIONAL reduced window.
+
+    Returns a render-ready tuple (start_str, end_str, reduced_max, up_bps,
+    down_bps). The disabled sentinel (and the argparse defaults) render OFF.
+    Partial configurations are rejected: a window is either fully disabled or
+    fully specified.
+    """
+    if (start_min, end_min, reduced_max, reduced_bw) == RDISABLED:
+        return REDUCED_OFF
+    if not (RMIN_MIN <= start_min <= RMIN_MAX):
+        _fail(EXIT_USAGE, f"reduced-start-min out of range ({RMIN_MIN}..{RMIN_MAX}): {start_min}")
+    if not (RMIN_MIN <= end_min <= RMIN_MAX):
+        _fail(EXIT_USAGE, f"reduced-end-min out of range ({RMIN_MIN}..{RMIN_MAX}): {end_min}")
+    if start_min == end_min:
+        _fail(EXIT_USAGE, "reduced-start-min and reduced-end-min must differ")
+    if not (RMC_MIN <= reduced_max <= RMC_MAX):
+        _fail(EXIT_USAGE, f"reduced-max-common out of range ({RMC_MIN}..{RMC_MAX}): {reduced_max}")
+    if reduced_max > mcc:
+        _fail(EXIT_USAGE, f"reduced-max-common ({reduced_max}) exceeds max-common-clients ({mcc})")
+    if not (RBW_MIN <= reduced_bw <= RBW_MAX):
+        _fail(EXIT_USAGE, f"reduced-bandwidth-mbps must be {RBW_MIN}..{RBW_MAX} when enabled: {reduced_bw}")
+    bps = int(reduced_bw * 1000 * 1000 / 8)
+    return (_hhmm(start_min), _hhmm(end_min), reduced_max, bps, bps)
 
 
 def _fail(code: int, msg: str) -> None:
@@ -156,12 +207,22 @@ def _atomic_write(path: str, data: bytes) -> None:
         _fail(EXIT_FS, f"atomic write failed: {exc}")
 
 
-def _render(mcc: int, bw: int) -> bytes:
-    # Integers only, via %d -- no raw string interpolation, no other directives.
+def _render(mcc: int, bw: int, reduced=REDUCED_OFF) -> bytes:
+    # Integers via %d. The only strings are the reduced start/end, which are
+    # either "" or a helper-formatted HH:MM (validated in _hhmm) -- never a raw
+    # argv string -- so no newline/directive injection is possible. Defaulting
+    # `reduced` to OFF keeps the original two-argument M2 apply behaviour.
+    start_str, end_str, rmax, up_bps, down_bps = reduced
     return (
         "[Service]\n"
         "Environment=CCC_MAX_COMMON_CLIENTS=%d\n"
-        "Environment=CCC_BANDWIDTH_MBPS=%d\n" % (mcc, bw)
+        "Environment=CCC_BANDWIDTH_MBPS=%d\n"
+        "Environment=CCC_REDUCED_START=%s\n"
+        "Environment=CCC_REDUCED_END=%s\n"
+        "Environment=CCC_REDUCED_MAXCOMMON=%d\n"
+        "Environment=CCC_REDUCED_UP=%d\n"
+        "Environment=CCC_REDUCED_DOWN=%d\n"
+        % (mcc, bw, start_str, end_str, rmax, up_bps, down_bps)
     ).encode("ascii")
 
 
@@ -175,15 +236,22 @@ def _systemctl(*args: str) -> None:
         _fail(EXIT_SYSTEMCTL, f"systemctl {' '.join(args)} not runnable: {exc}")
 
 
-def cmd_apply(mcc: int, bw: int) -> None:
+def cmd_apply(mcc: int, bw: int, reduced=REDUCED_OFF) -> None:
     _assert_safe_dir()
     lock = _acquire_lock()
     try:
         _backup_existing()
-        _atomic_write(DROPIN_PATH, _render(mcc, bw))
+        _atomic_write(DROPIN_PATH, _render(mcc, bw, reduced))
         _systemctl("daemon-reload")
         _systemctl("restart", UNIT)
-        LOG.info("apply ok: CCC_MAX_COMMON_CLIENTS=%d CCC_BANDWIDTH_MBPS=%d", mcc, bw)
+        start_str, end_str, rmax, up_bps, _down = reduced
+        if start_str:
+            LOG.info(
+                "apply ok: mcc=%d bw=%d reduced=%s-%s UTC max=%d up=down=%d",
+                mcc, bw, start_str, end_str, rmax, up_bps,
+            )
+        else:
+            LOG.info("apply ok: mcc=%d bw=%d reduced=off", mcc, bw)
     finally:
         os.close(lock)
 
@@ -215,6 +283,12 @@ def main(argv: list[str] | None = None) -> int:
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("--max-common-clients", type=int, required=True)
     p_apply.add_argument("--bandwidth-mbps", type=int, required=True)
+    # Reduced-window args are OPTIONAL with a disabled default, so the original
+    # two-argument M2 apply call still works and renders the window OFF.
+    p_apply.add_argument("--reduced-start-min", type=int, default=-1)
+    p_apply.add_argument("--reduced-end-min", type=int, default=-1)
+    p_apply.add_argument("--reduced-max-common", type=int, default=0)
+    p_apply.add_argument("--reduced-bandwidth-mbps", type=int, default=0)
     sub.add_parser("rollback")
     # argparse rejects unknown args/subcommands -> exit 2 (usage).
     args = parser.parse_args(argv)
@@ -222,7 +296,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "apply":
         mcc = _validate_mcc(args.max_common_clients)
         bw = _validate_bw(args.bandwidth_mbps)
-        cmd_apply(mcc, bw)
+        reduced = _validate_reduced(
+            args.reduced_start_min,
+            args.reduced_end_min,
+            args.reduced_max_common,
+            args.reduced_bandwidth_mbps,
+            mcc,
+        )
+        cmd_apply(mcc, bw, reduced)
     elif args.cmd == "rollback":
         cmd_rollback()
     return EXIT_OK

@@ -134,6 +134,141 @@ def test_lock_path_outside_dropin_dir():
     assert mod.BAK_PATH == mod.DROPIN_DIR + "/ccc.conf.bak"
 
 
+# --------------------------------------------------------------------------
+# BS1 Commit 1 -- reduced-window (Bandwidth Scheduling) helper behaviour
+# --------------------------------------------------------------------------
+
+def test_render_reduced_off_by_default():
+    # The original two-argument render must now emit the reduced knobs as OFF.
+    mod = _load()
+    out = mod._render(50, 40).decode()
+    assert "Environment=CCC_REDUCED_START=\n" in out
+    assert "Environment=CCC_REDUCED_END=\n" in out
+    assert "Environment=CCC_REDUCED_MAXCOMMON=0" in out
+    assert "Environment=CCC_REDUCED_UP=0" in out
+    assert "Environment=CCC_REDUCED_DOWN=0" in out
+    assert "ExecStart" not in out
+
+
+def test_validate_reduced_disabled_is_default():
+    mod = _load()
+    assert mod._validate_reduced(-1, -1, 0, 0, 50) == ("", "", 0, 0, 0)
+
+
+def test_validate_reduced_enabled_formats_and_converts():
+    # 02:00-06:00, max 10, 15 Mbps -> 1_875_000 bytes/sec on both directions.
+    mod = _load()
+    assert mod._validate_reduced(120, 360, 10, 15, 50) == (
+        "02:00", "06:00", 10, 1875000, 1875000,
+    )
+
+
+def test_validate_reduced_wraparound_allowed():
+    mod = _load()
+    assert mod._validate_reduced(1320, 360, 10, 15, 50) == (
+        "22:00", "06:00", 10, 1875000, 1875000,
+    )
+
+
+def test_validate_reduced_rejects_invalid():
+    mod = _load()
+    bad = [
+        (120, 120, 10, 15),    # start == end
+        (-5, 360, 10, 15),     # start out of range (not the disabled sentinel)
+        (120, 1440, 10, 15),   # end out of range
+        (120, 360, 0, 15),     # reduced-max 0 while enabled
+        (120, 360, 60, 15),    # reduced-max > max-common (50)
+        (120, 360, 10, 0),     # reduced bandwidth 0 while enabled
+        (120, 360, 10, 1001),  # reduced bandwidth out of range
+        (120, -1, 10, 15),     # partial config (end disabled, start set)
+    ]
+    for s, e, rc, bw in bad:
+        with pytest.raises(SystemExit):
+            mod._validate_reduced(s, e, rc, bw, 50)
+
+
+def test_render_reduced_output_is_directive_allowlisted():
+    # Security: only [Service] + Environment= lines; the sole string values
+    # (reduced times) are empty or a helper-built HH:MM -- never anything that
+    # could inject a systemd directive.
+    import re
+    mod = _load()
+    reduced = mod._validate_reduced(120, 360, 10, 15, 50)
+    out = mod._render(50, 40, reduced).decode()
+    lines = [ln for ln in out.split("\n") if ln]
+    assert lines[0] == "[Service]"
+    for ln in lines[1:]:
+        assert ln.startswith("Environment="), ln
+    assert "ExecStart" not in out
+    for key in ("CCC_REDUCED_START", "CCC_REDUCED_END"):
+        m = re.search(rf"Environment={key}=(.*)", out)
+        assert m is not None
+        assert m.group(1) == "" or re.fullmatch(r"\d\d:\d\d", m.group(1)), m.group(1)
+
+
+def test_main_rejects_bad_reduced():
+    mod = _load()
+    base = ["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40"]
+    # start == end
+    with pytest.raises(SystemExit):
+        mod.main(base + ["--reduced-start-min", "120", "--reduced-end-min", "120",
+                         "--reduced-max-common", "10", "--reduced-bandwidth-mbps", "15"])
+    # reduced-max exceeds max-common
+    with pytest.raises(SystemExit):
+        mod.main(base + ["--reduced-start-min", "120", "--reduced-end-min", "360",
+                         "--reduced-max-common", "60", "--reduced-bandwidth-mbps", "15"])
+    # non-integer reduced arg rejected by argparse
+    with pytest.raises(SystemExit):
+        mod.main(base + ["--reduced-start-min", "abc"])
+
+
+@_linux_only
+def test_apply_with_reduced_window_writes_drop_in(tmp_path, monkeypatch):
+    mod = _load()
+    calls = _setup(mod, tmp_path, monkeypatch)
+    mod.main(["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40",
+              "--reduced-start-min", "120", "--reduced-end-min", "360",
+              "--reduced-max-common", "10", "--reduced-bandwidth-mbps", "15"])
+    content = (tmp_path / "ccc.conf").read_text()
+    assert "Environment=CCC_REDUCED_START=02:00" in content
+    assert "Environment=CCC_REDUCED_END=06:00" in content
+    assert "Environment=CCC_REDUCED_MAXCOMMON=10" in content
+    assert "Environment=CCC_REDUCED_UP=1875000" in content
+    assert "Environment=CCC_REDUCED_DOWN=1875000" in content
+    assert "ExecStart" not in content
+    assert calls == [("daemon-reload",), ("restart", "conduit")]
+
+
+@_linux_only
+def test_two_arg_apply_still_disables_reduced(tmp_path, monkeypatch):
+    # Backward compatibility: the current M2 backend call (no reduced args)
+    # must still succeed and render the window OFF.
+    mod = _load()
+    _setup(mod, tmp_path, monkeypatch)
+    mod.main(["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40"])
+    content = (tmp_path / "ccc.conf").read_text()
+    assert "Environment=CCC_REDUCED_START=\n" in content
+    assert "Environment=CCC_REDUCED_MAXCOMMON=0" in content
+
+
+def test_conduit_unit_has_reduced_knobs():
+    # The shipped unit must define the reduced defaults (disabled) and the five
+    # static --set tokens that consume them.
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    unit = (repo / "deployment" / "conduit.service").read_text()
+    for env in ("CCC_REDUCED_START=", "CCC_REDUCED_END=",
+                "CCC_REDUCED_MAXCOMMON=0", "CCC_REDUCED_UP=0", "CCC_REDUCED_DOWN=0"):
+        assert f"Environment={env}" in unit, env
+    for tok in (
+        "--set InproxyReducedStartTime=${CCC_REDUCED_START}",
+        "--set InproxyReducedEndTime=${CCC_REDUCED_END}",
+        "--set InproxyReducedMaxCommonClients=${CCC_REDUCED_MAXCOMMON}",
+        "--set InproxyReducedLimitUpstreamBytesPerSecond=${CCC_REDUCED_UP}",
+        "--set InproxyReducedLimitDownstreamBytesPerSecond=${CCC_REDUCED_DOWN}",
+    ):
+        assert tok in unit, tok
+
+
 def test_unit_has_only_narrow_readwritepaths():
     # conduit-cc.service keeps ProtectSystem=strict and adds ONLY the narrow
     # drop-in dir to ReadWritePaths (never broad /etc/systemd).

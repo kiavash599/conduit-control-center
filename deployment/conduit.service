@@ -17,6 +17,10 @@
 # Defaults:
 #   --max-common-clients 50    Adjust for available bandwidth and CPU
 #   --bandwidth 40             Upload capacity in Mbps
+#   reduced window OFF         CCC_REDUCED_* default to empty/0; when CCC sets a
+#                              window, tunnel-core applies the daily HH:MM-UTC
+#                              reduced limits at runtime, with no restart at the
+#                              window boundaries (BS1).
 #
 # UFW: Conduit binds additional UDP ports for inproxy traffic.  The ports are
 # not fixed in advance.  After install, discover them with:
@@ -46,11 +50,25 @@ WorkingDirectory=/var/lib/conduit
 # braced form to $VAR (that would whitespace-split the value).
 Environment=CCC_MAX_COMMON_CLIENTS=50
 Environment=CCC_BANDWIDTH_MBPS=40
+# Reduced-window knobs (BS1). Empty times + zero limits = reduced mode OFF.
+# CCC overrides these the same way as the knobs above: ONLY Environment= lines
+# in the drop-in, written by the root helper ccc-apply-conduit-config. The
+# reduced times are HH:MM (24-hour, UTC); the byte/sec limits are integers.
+Environment=CCC_REDUCED_START=
+Environment=CCC_REDUCED_END=
+Environment=CCC_REDUCED_MAXCOMMON=0
+Environment=CCC_REDUCED_UP=0
+Environment=CCC_REDUCED_DOWN=0
 ExecStart=/opt/conduit/conduit start \
     --data-dir /var/lib/conduit/data \
     --metrics-addr 127.0.0.1:9090 \
     --max-common-clients ${CCC_MAX_COMMON_CLIENTS} \
-    --bandwidth ${CCC_BANDWIDTH_MBPS}
+    --bandwidth ${CCC_BANDWIDTH_MBPS} \
+    --set InproxyReducedStartTime=${CCC_REDUCED_START} \
+    --set InproxyReducedEndTime=${CCC_REDUCED_END} \
+    --set InproxyReducedMaxCommonClients=${CCC_REDUCED_MAXCOMMON} \
+    --set InproxyReducedLimitUpstreamBytesPerSecond=${CCC_REDUCED_UP} \
+    --set InproxyReducedLimitDownstreamBytesPerSecond=${CCC_REDUCED_DOWN}
 Restart=on-failure
 RestartSec=10s
 ProtectSystem=strict
