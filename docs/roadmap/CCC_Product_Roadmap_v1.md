@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.3  
-**Date:** 2026-06-10  
+**Revision:** 1.5  
+**Date:** 2026-06-16  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
 
@@ -139,12 +139,12 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ❌ | Show in Live Ops (v0.2.0) |
 | D10 | `conduit_uptime_seconds` | — | ✅ GaugeFunc (computed at scrape) | ❌ | Show in Live Ops (v0.2.0) |
 | D11 | `conduit_idle_seconds` | — | ✅ GaugeFunc (computed at scrape) | ❌ | Show in Live Ops (v0.2.0) |
-| D12 | `conduit_region_bytes_uploaded{scope,region}` | — | ✅ | ❌ | Regional Analytics (v0.2.0) |
-| D13 | `conduit_region_bytes_downloaded{scope,region}` | — | ✅ | ❌ | Regional Analytics (v0.2.0) |
-| D14 | `conduit_region_connecting_clients{scope,region}` | — | ✅ | ❌ | Regional Analytics (v0.2.0) |
-| D15 | `conduit_region_connected_clients{scope,region}` | — | ✅ | ❌ | Regional Analytics (v0.2.0) |
+| D12 | `conduit_region_bytes_uploaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
+| D13 | `conduit_region_bytes_downloaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
+| D14 | `conduit_region_connecting_clients{scope,region}` | — | ✅ | ❌ | Not used by Regional Analytics MVP (connected only); available (v0.4.0+) |
+| D15 | `conduit_region_connected_clients{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Clients) |
 | D16 | `conduit_build_info{build_repo,build_rev,go_version,values_rev}` | — | ✅ | partial | Expose full build info (v0.2.0) |
-| D17 | Scope labels: `common` / `personal` | — | ✅ | ❌ | Scope filter in Regional Analytics (v0.2.0) |
+| D17 | Scope labels: `common` / `personal` | — | ✅ | ❌ | Scope filter deferred to v0.4.0; Regional Analytics MVP is `scope=common` only |
 | **E — Ryve** |||||
 | E1 | `conduit ryve-claim` command | — | ✅ | ❌ | Subprocess invocation (v0.4.0) |
 | E2 | Claim URI (`network.ryve.app://…`) | — | ✅ | ❌ | Display claim QR (v0.4.0) |
@@ -390,7 +390,7 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
-> **Status: Not yet started.** v0.2.0 remains the next planned *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone; the interactive control features below — configuration, live operations, regional analytics, scheduling, themes — are outstanding.
+> **Status: In progress.** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone. **Regional Analytics (§6.3) was delivered and production-validated (2026-06-16).** The remaining interactive control features below — configuration, live operations, scheduling, themes — are outstanding.
 
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
@@ -430,6 +430,36 @@ Live Operations section, aligned with the card structure defined in Sections 5.3
 **`conduit_idle_seconds` assistant trigger:** if idle > 12h and connected_clients == 0, the Smart Assistant surfaces a contextual message: "Your station hasn't served any clients recently. New stations can take 24–48 hours to build reputation with the Psiphon network. If your station has been running for several days without traffic, check your network connectivity and public IP."
 
 ### 6.3 Regional Analytics
+
+> **Status: ✅ DELIVERED (MVP) — 2026-06-16.** Shipped and production-validated
+> on the Raspberry Pi. Backend `GET /api/conduit/regions` (commit `6f96978`,
+> CI #106 green) + Regions dashboard card (commit `a169089`, CI #107 green).
+> Full closure record: `docs/closure/regional-analytics-closure.md`.
+>
+> **Delivered MVP scope** (intentionally narrower than the original
+> specification retained below):
+> - Top **10** regions (not 15), `scope="common"` only, sorted by **Traffic DESC**.
+> - Columns: **No. · Country (flag + name) · Traffic · Clients**.
+> - **Traffic** = `conduit_region_bytes_uploaded` + `conduit_region_bytes_downloaded`
+>   (combined, binary units). **Clients** = `conduit_region_connected_clients`.
+> - Aggregate-only: no IP, session, or per-client data. "Clients" terminology
+>   enforced (never "Users"). Dashboard-aware 60s polling; mobile responsive
+>   (horizontal-scroll table). Frontend guard tests added.
+>
+> **Deferred (not in the MVP), tracked for future milestones:**
+> - Separate Uploaded / Downloaded columns and a Connecting-clients column
+>   (`conduit_region_connecting_clients`, matrix D14) — not consumed by the MVP.
+> - Scope filter (All / Common / Personal, matrix D17) — deferred to **v0.4.0**
+>   (already listed in §8); surfaces only when personal clients > 0.
+> - Mobile row-expand for hidden Traffic columns (§5.9) — superseded by the
+>   horizontal-scroll table actually shipped.
+>
+> **Accepted deviations from the design spec** (cosmetic, not defects): the
+> delivered country cell shows flag + name without the ISO code in parentheses
+> (cf. §5.6); Unicode flag emoji depend on platform font support and degrade to
+> ISO letters on some desktop environments. Both accepted; see the closure record.
+>
+> The original specification below is retained for historical context.
 
 Top 15 active regions displayed as a table (see Section 5.5 — table rule), aligned with the Regions section of the information architecture.
 
@@ -530,6 +560,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.2 | 2026-06-10 | CCC Development Team | Section 4 corrected: retitled to v0.1.0 Maintenance Items (folded into first public release); replaced collision issue numbers #3–#6 with descriptive names; removed inaccurate "open GitHub issues" claim. |
 | 1.3 | 2026-06-14 | CCC Development Team | Reconciliation: marked D1 complete; noted historical traffic charts delivered early (§7); added v0.2.0 status note; reconciled CHANGELOG with the v0.1.1 tag (0.1.0 MVP + separate 0.1.1 maintenance). No milestone renumbering. |
 | 1.4 | 2026-06-16 | CCC Development Team | §7: marked Traffic UI CLOSED (persistent collector + Lifetime & History card with SVG chart, backed by `/api/traffic/summary` & `/api/traffic/series`) and removed the "Historical charts" row from the v0.3.0 candidate table — recorded as shipped, no longer a future candidate. No other sections changed. |
+| 1.5 | 2026-06-16 | CCC Development Team | Regional Analytics closure: §6.3 marked ✅ DELIVERED (MVP) with delivered-vs-spec reconciliation and a deferred remainder; §3.2 matrix D12/D13/D15 → delivered, D14/D17 annotated (connecting-clients and scope filter deferred); §6 v0.2.0 status updated (RA removed from outstanding). Closure record added at `docs/closure/regional-analytics-closure.md`. No milestone renumbering. |
 
 ---
 

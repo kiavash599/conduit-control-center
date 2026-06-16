@@ -9,6 +9,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Regional Analytics
+
+- Regions dashboard card — aggregate-only, top 10 active regions by traffic,
+  `scope="common"`, sorted Traffic DESC. Columns: No., Country (flag + name),
+  Traffic, Clients. Dashboard-aware 60s polling; mobile responsive.
+- Regions API — `GET /api/conduit/regions` (auth-required, aggregate-only).
+  Per region returns `{region, traffic_bytes, clients}` where
+  `traffic_bytes = conduit_region_bytes_uploaded + conduit_region_bytes_downloaded`
+  and `clients = conduit_region_connected_clients`. No IP, session, or
+  per-client data; degrades to an empty list when metrics are unavailable.
+- "Clients" terminology enforced in the UI (never "Users"); frontend guard
+  tests added (`tests/unit/test_regions_frontend_guard.py`).
+- Known limitation: Unicode flag emoji depend on platform font support; some
+  desktop environments display the ISO letters instead of a flag (cosmetic;
+  accepted, not a defect).
+
 ### Added — Contribution Advisor
 
 - Contribution Advisor — read-only, aggregate-only guidance card at the top of
