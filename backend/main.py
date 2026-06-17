@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -292,6 +293,12 @@ app.include_router(advisor_router, prefix="/api")  # route path is "/advisor" ->
 # ---------------------------------------------------------------------------
 # Static files
 # ---------------------------------------------------------------------------
+
+# Ensure the web app manifest is served with the correct media type. Python's
+# mimetypes map does not know ".webmanifest" by default, so StaticFiles would
+# fall back to text/plain; with nginx's X-Content-Type-Options: nosniff that can
+# cause browsers to warn or reject the manifest. Register it before mounting.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")

@@ -34,6 +34,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Conduit Control Center{% endblock %}</title>
     <link rel="stylesheet" href="{{ static_url('css/base.css') }}">
+
+    <!-- Favicons & app icons (Branding B3).
+         Fallback chain: .ico for legacy/Safari; theme-aware .svg for modern
+         browsers (Chrome/Firefox/Edge pick this); explicit PNG fallbacks; an
+         apple-touch-icon for iOS home screens; the web app manifest for
+         installability. All URLs are cache-busted via static_url(). -->
+    <link rel="icon" href="{{ static_url('favicon/favicon.ico') }}" sizes="32x32">
+    <link rel="icon" type="image/svg+xml" href="{{ static_url('favicon/favicon.svg') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ static_url('favicon/favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ static_url('favicon/favicon-16.png') }}">
+    <link rel="apple-touch-icon" href="{{ static_url('icons/apple-touch-icon.png') }}">
+    <link rel="manifest" href="{{ static_url('site.webmanifest') }}">
+    <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)">
     {% block head_extra %}{% endblock %}
 </head>
 {%- set _body_class %}{% block body_class %}{% endblock %}{% endset -%}
