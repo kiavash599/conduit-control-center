@@ -13,8 +13,9 @@
 
    Usage
    -----
-   Add data-theme="dark" to <html>. v0.1 ships dark-only.
-   [data-theme="light"] stub is included for future implementation.
+   <html data-theme="dark|light|system"> selects the theme (default dark).
+   "system" follows the OS via prefers-color-scheme. The server renders the
+   attribute from the `theme` cookie (TS2) for flash-free first paint.
 
    Script loading order
    --------------------
@@ -26,7 +27,8 @@
    Design tokens — dark theme (v0.1 default)
    ---------------------------------------------------------------------------- */
 
-[data-theme="dark"] {
+[data-theme="dark"],
+[data-theme="system"] {     /* "system" defaults to dark (the app default); flips to light below via prefers-color-scheme */
     /* Background layers */
     --color-bg:             #0f1117;
     --color-surface:        #1a1d27;
@@ -70,19 +72,108 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+    /* Component tokens (TS1 — formerly hard-coded). on-accent = text on a
+       coloured button; spinner = the in-flight button spinner; chart-down =
+       the "Received" series (chart-up references --color-accent). */
+    --color-on-accent:      #ffffff;
+    --color-spinner-track:  rgba(255, 255, 255, 0.35);
+    --color-spinner-head:   #ffffff;
+    --color-chart-down:     #2dd4bf;
 }
 
 
 /* ----------------------------------------------------------------------------
-   Design tokens — light theme stub
-   Populated in a future issue. Zero component rule changes will be needed.
+   Design tokens — light theme (TS1). WCAG AA targets on --color-bg / surface.
    ---------------------------------------------------------------------------- */
 
 [data-theme="light"] {
-    /* TODO: populate all --color-* variables when light theme is implemented.
-       Every component rule already references var(--...) tokens exclusively,
-       so only this block needs to change.
-       Reference contrast targets: text-primary on bg >= 7:1 (AAA preferred). */
+    /* Background layers */
+    --color-bg:             #f8fafc;
+    --color-surface:        #ffffff;
+    --color-surface-raised: #f1f5f9;
+    --color-overlay:        rgba(15, 23, 42, 0.45);
+
+    /* Borders */
+    --color-border:         #e2e8f0;
+    --color-border-focus:   #4f46e5;
+
+    /* Text (AA on white/bg): primary ~16:1, muted ~7:1, dim ~4.8:1 */
+    --color-text-primary:   #0f172a;
+    --color-text-muted:     #475569;
+    --color-text-dim:       #64748b;
+
+    /* Accent / brand (indigo-600; white text ~6.5:1 = AA) */
+    --color-accent:         #4f46e5;
+    --color-accent-hover:   #4338ca;
+    --color-accent-muted:   rgba(79, 70, 229, 0.12);
+
+    /* Semantic status — darker shades so coloured text passes AA on light.
+       Badge-on-solid contrast verified visually in TS4. */
+    --color-success:        #15803d;
+    --color-success-muted:  rgba(21, 128, 61, 0.12);
+    --color-warning:        #b45309;
+    --color-warning-muted:  rgba(180, 83, 9, 0.12);
+    --color-danger:         #dc2626;
+    --color-danger-muted:   rgba(220, 38, 38, 0.12);
+    --color-neutral:        #475569;
+    --color-neutral-muted:  rgba(71, 85, 105, 0.12);
+
+    /* Scrollbar */
+    --color-scrollbar-track: #f1f5f9;
+    --color-scrollbar-thumb: #cbd5e1;
+
+    /* Shadows (softer on light) */
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --shadow-md: 0 4px 8px rgba(15, 23, 42, 0.10);
+    --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.12);
+
+    /* Component tokens (TS1) */
+    --color-on-accent:      #ffffff;
+    --color-spinner-track:  rgba(15, 23, 42, 0.18);
+    --color-spinner-head:   #0f172a;
+    --color-chart-down:     #0d9488;   /* teal-600 — AA on white */
+}
+
+
+/* ----------------------------------------------------------------------------
+   System mode (TS1): "system" defaults to dark (above); flip to light ONLY
+   when the OS prefers light. Pure CSS at first paint -> no flash, no JS.
+   Mirrors [data-theme="light"].
+   ---------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: light) {
+    [data-theme="system"] {
+        --color-bg:             #f8fafc;
+        --color-surface:        #ffffff;
+        --color-surface-raised: #f1f5f9;
+        --color-overlay:        rgba(15, 23, 42, 0.45);
+        --color-border:         #e2e8f0;
+        --color-border-focus:   #4f46e5;
+        --color-text-primary:   #0f172a;
+        --color-text-muted:     #475569;
+        --color-text-dim:       #64748b;
+        --color-accent:         #4f46e5;
+        --color-accent-hover:   #4338ca;
+        --color-accent-muted:   rgba(79, 70, 229, 0.12);
+        --color-success:        #15803d;
+        --color-success-muted:  rgba(21, 128, 61, 0.12);
+        --color-warning:        #b45309;
+        --color-warning-muted:  rgba(180, 83, 9, 0.12);
+        --color-danger:         #dc2626;
+        --color-danger-muted:   rgba(220, 38, 38, 0.12);
+        --color-neutral:        #475569;
+        --color-neutral-muted:  rgba(71, 85, 105, 0.12);
+        --color-scrollbar-track: #f1f5f9;
+        --color-scrollbar-thumb: #cbd5e1;
+        --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+        --shadow-md: 0 4px 8px rgba(15, 23, 42, 0.10);
+        --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.12);
+        --color-on-accent:      #ffffff;
+        --color-spinner-track:  rgba(15, 23, 42, 0.18);
+        --color-spinner-head:   #0f172a;
+        --color-chart-down:     #0d9488;
+    }
 }
 
 
@@ -424,7 +515,7 @@ a:hover {
 
 .btn--primary {
     background-color: var(--color-accent);
-    color: #ffffff;
+    color: var(--color-on-accent);
     border-color: var(--color-accent);
 }
 .btn--primary:hover:not(:disabled) {
@@ -444,7 +535,7 @@ a:hover {
 
 .btn--danger {
     background-color: var(--color-danger);
-    color: #ffffff;
+    color: var(--color-on-accent);
     border-color: var(--color-danger);
 }
 .btn--danger:hover:not(:disabled) {
@@ -475,8 +566,8 @@ a:hover {
     position: absolute;
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #ffffff;
+    border: 2px solid var(--color-spinner-track);
+    border-top-color: var(--color-spinner-head);
     border-radius: var(--radius-full);
     animation: spin 0.6s linear infinite;
 }
@@ -1117,8 +1208,8 @@ a:hover {
    accessible representation; the SVG is aria-hidden.
    ============================================================================ */
 :root {
-    --color-chart-up:   var(--color-accent);   /* Sent — indigo */
-    --color-chart-down: #2dd4bf;               /* Received — teal (non-status) */
+    --color-chart-up:   var(--color-accent);   /* Sent — indigo (theme-aware) */
+    /* The "Received" series colour is theme-aware: defined in [data-theme] blocks. */
 }
 
 /* SVG sized in real px by JS (width/height attributes) — no width:100%/height:auto
