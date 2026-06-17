@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.7  
+**Revision:** 1.8  
 **Date:** 2026-06-17  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
@@ -133,7 +133,7 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | D3 | `conduit_connected_clients` | — | ✅ | ✅ | Already exposed |
 | D4 | `conduit_is_live` (broker connection) | — | ✅ | ✅ | Live Operations — delivered 2026-06-17 (broker badge) |
 | D5 | `conduit_max_common_clients` | — | ✅ | ✅ | Already exposed |
-| D6 | `conduit_max_personal_clients` | — | ✅ | ❌ | Read-only display — minor remaining v0.2 gap (not surfaced); write deferred to v0.4.0 |
+| D6 | `conduit_max_personal_clients` | — | ✅ | ❌ | Reclassified to **v0.4.0 Personal Mode** — read + write fold into "Personal client limit control" (§8). The value is meaningful only alongside the v0.4 compartment / pairing / `--max-personal-clients` flow; not a standalone v0.2 item |
 | D7 | `conduit_bandwidth_limit_bytes_per_second` | — | ✅ (0 = unlimited) | ❌ | Show in Config panel (v0.2.0) |
 | D8 | `conduit_bytes_uploaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
 | D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
@@ -397,7 +397,7 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
-> **Status: In progress (nearing completion).** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Delivered and production-validated: **Conduit Configuration (§6.1, via M2 + Bandwidth Scheduling §6.5) — delivered with one minor remaining gap (D6 read-only `max_personal_clients` display); Regional Analytics (§6.3); Bandwidth Scheduling (§6.5); Live Operations (§6.2/§6.6) — 2026-06-17.** **Smart Assistant (§6.4) is reconciled** — the Contribution Advisor supersedes the original Manual/Assisted concept (Automatic mode → v0.3.0). The **only remaining major v0.2 feature is Theme Support (§6.7)**.
+> **Status: ✅ CLOSED — all v0.2.0 features delivered and production-validated (2026-06-17).** v0.2.0 was the active *feature* milestone (gated by D1, complete). Delivered and production-validated: **Conduit Configuration (§6.1, via M2 + Bandwidth Scheduling §6.5); Regional Analytics (§6.3); Bandwidth Scheduling (§6.5); Live Operations (§6.2/§6.6); Theme Support (§6.7).** **Smart Assistant (§6.4) is reconciled** — the Contribution Advisor supersedes the original Manual/Assisted concept (Automatic mode → v0.3.0). **D6 (`max_personal_clients`) is no longer a v0.2 gap** — reclassified to **v0.4.0 Personal Mode** (the read-only value is meaningful only alongside the compartment / pairing / `--max-personal-clients` flow; see §3.2 D6 and §8). **No open v0.2.0 work remains.**
 
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
@@ -406,7 +406,7 @@ v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive 
 Display and allow editing of the three runtime-configurable parameters:
 
 - **Max common clients** — current value from `conduit_max_common_clients`; editable (0–1000); enforces at-least-one-client rule.
-- **Max personal clients** — current value from `conduit_max_personal_clients`; read-only in v0.2.0 (write deferred to v0.4.0 pending personal-mode setup flow).
+- **Max personal clients** — `conduit_max_personal_clients`. **Reclassified to v0.4.0 Personal Mode** (not surfaced in v0.2.0): the value is only meaningful alongside the compartment-ID / pairing-token / `--max-personal-clients` flow, so its read-only display folds into v0.4's "Personal client limit control" (§8) rather than shipping as an isolated v0.2 field.
 - **Global bandwidth limit** — current value from `conduit_bandwidth_limit_bytes_per_second`; display as Mbps (0 = unlimited); editable with unlimited toggle.
 
 **Apply mechanism:** write new flags to the systemd service unit drop-in (`/etc/systemd/system/conduit.service.d/ccc.conf`) and run `systemctl daemon-reload && systemctl restart conduit`. Confirm to the user that Conduit will restart briefly (see Section 5.8).
@@ -507,9 +507,16 @@ Rules: regions with zero clients AND zero bytes in all columns are hidden. Scope
 > concept** — "Manual" = ignore the advice; "Assisted" = the default. **Automatic
 > mode remains a v0.3.0 item.** No open v0.2.0 work.
 
-Three modes as defined in Section 5.7. Automatic mode deferred to v0.3.0 (see review note — risk on Raspberry Pi restart cascades). v0.2.0 ships Manual and Assisted modes only.
+> **Superseded — retained for historical context.** The original three-mode
+> model (Manual / Assisted / Automatic) below is superseded by the reconciliation
+> above: the always-on **Contribution Advisor** delivers the Assisted-mode value
+> ("Manual" = ignore the advice; "Assisted" = the default), and **Automatic mode
+> remains a v0.3.0 item** (Raspberry Pi restart-cascade risk). v0.2.0 has **no open
+> Smart Assistant work**.
 
-**Assisted mode analysis inputs:** CPU utilisation (psutil), RAM utilisation, `conduit_connected_clients`, `conduit_bandwidth_limit_bytes_per_second`, `conduit_bytes_uploaded`, `conduit_bytes_downloaded`, `conduit_idle_seconds`.
+Three modes as originally defined in Section 5.7. Automatic mode deferred to v0.3.0 (see review note — risk on Raspberry Pi restart cascades).
+
+**Advisor (Assisted-mode) analysis inputs:** CPU utilisation (psutil), RAM utilisation, `conduit_connected_clients`, `conduit_bandwidth_limit_bytes_per_second`, `conduit_bytes_uploaded`, `conduit_bytes_downloaded`, `conduit_idle_seconds`.
 
 **GUIDE.md baseline:** ~150–350 concurrent users per CPU / 2 GB RAM pair. The assistant references this range when computing suggestions.
 
@@ -560,6 +567,16 @@ Changes to the schedule follow the same diff + confirm + restart workflow as all
 `conduit_is_live` is the topmost element of the Overview screen and is also present in the Live Clients section. Four states as defined in Section 6.2. Broker disconnected banner displayed per Section 5.8.
 
 ### 6.7 Theme Support
+
+> **Status: ✅ DELIVERED — 2026-06-17.** Light / Dark / System themes shipped and
+> **production-validated on the Raspberry Pi (TS4)** across all three themes, both
+> persistence paths (reload + login/logout), all three pages (Dashboard / Settings
+> / Login), mobile layout, the toggle, and the error/revert path — no blocking
+> defects. Commits `46547c0` (TS1 CSS, CI #117) / `df49f42` (TS2 backend, CI #118) /
+> TS3 (Settings toggle). Flash-free **server-rendered** first paint from a `theme`
+> cookie (HttpOnly, Secure, SameSite=Strict, 1-year); **no localStorage**.
+> Settings-only native radio toggle with instant apply and revert-on-failure;
+> default dark. Closure record: `docs/closure/theme-support-closure.md`.
 
 Light / Dark / System themes implemented per Section 5.10. Theme preference persisted via server-side cookie, not localStorage.
 
@@ -629,6 +646,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.5 | 2026-06-16 | CCC Development Team | Regional Analytics closure: §6.3 marked ✅ DELIVERED (MVP) with delivered-vs-spec reconciliation and a deferred remainder; §3.2 matrix D12/D13/D15 → delivered, D14/D17 annotated (connecting-clients and scope filter deferred); §6 v0.2.0 status updated (RA removed from outstanding). Closure record added at `docs/closure/regional-analytics-closure.md`. No milestone renumbering. |
 | 1.6 | 2026-06-16 | CCC Development Team | Bandwidth Scheduling closure: §6.5 marked ✅ DELIVERED (commit `f838ff4`; CI #109–#113) with the confirmed reduced-mode model (HH:MM UTC, runtime switching in tunnel-core, no CCC scheduler, no boundary restarts, restart only on value change); §3.2 C6/C7 → delivered and C8 de-conflated (`conduit-monitor` quota throttle separated from `InproxyReduced*`, noted not deployed by CCC); §5.7 day-of-week selector removed and the 100 GB/7-day tooltip corrected; §6 v0.2.0 status updated (scheduling removed from outstanding). Closure record at `docs/closure/bandwidth-scheduling-closure.md`. No milestone renumbering. |
 | 1.7 | 2026-06-17 | CCC Development Team | Live Operations closure: §6.2/§6.6 marked ✅ DELIVERED (Option 1 — Node Status extension; commits `3741b71`/`d61a478`/`b4bc9c1`, CI #115); §3.2 D1/D2/D4/D11 → delivered, D8/D9 noted delivered-via-Traffic, D10 deferred (service uptime only), D16 build_rev partial, D6 noted as a minor remaining gap; §3.3 is_live note updated; §6.4 reconciled (Contribution Advisor supersedes the original Manual/Assisted concept; Automatic → v0.3.0); §6 v0.2.0 status updated. Closure record added at `docs/closure/live-operations-closure.md`. No milestone renumbering. |
+| 1.8 | 2026-06-17 | CCC Development Team | **Theme Support closure + v0.2.0 CLOSED.** §6.7 marked ✅ DELIVERED (TS4 Raspberry Pi validation; commits `46547c0`/`df49f42`/TS3, CI #117–#118) with server-rendered flash-free first paint and no localStorage; §6 v0.2.0 status updated to **CLOSED — all features delivered**. **D6 (`max_personal_clients`) reclassified** from a minor v0.2 gap to v0.4.0 Personal Mode in §3.2 and §6.1 (folds into "Personal client limit control", §8). §6.4 stale three-mode prose reconciled (superseded by the Contribution Advisor; Automatic → v0.3.0). Closure record added at `docs/closure/theme-support-closure.md`. No milestone renumbering. |
 
 ---
 

@@ -9,6 +9,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Theme Support (Light / Dark / System)
+
+- **Light / Dark / System** themes selectable from a new **Appearance** card in
+  Settings (native radio group). Default dark; System follows the OS via
+  `prefers-color-scheme`. Light is a WCAG-AA palette.
+- **Flash-free first paint** — the active theme is **server-rendered** into
+  `<html data-theme="…">` from a `theme` cookie (HttpOnly, Secure, SameSite=Strict,
+  Path=/, 1-year). **No localStorage.** Instant apply on toggle via
+  `document.documentElement.dataset.theme`, with UI + dataset **revert on a failed
+  save**.
+- API — `POST /api/settings/theme` (auth + CSRF), validating against
+  `light` / `dark` / `system` (422 + no cookie on an invalid value). Theme injected
+  into the Dashboard, Settings, and Login page contexts. `textContent`/DOM-only —
+  no `innerHTML`.
+- CSS tokenised for theming — populated `[data-theme]` blocks and four shared
+  tokens (`--color-on-accent`, `--color-spinner-track`, `--color-spinner-head`,
+  `--color-chart-down`); five hard-coded colour leaks removed. Validated end-to-end
+  on a Raspberry Pi 4 (TS4); see `docs/closure/theme-support-closure.md`.
+
 ### Added — Live Operations (Node Status broker badge + live signals)
 
 - Node Status card extended with a four-state **broker badge** (Live / Starting /
