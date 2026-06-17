@@ -9,6 +9,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Live Operations (Node Status broker badge + live signals)
+
+- Node Status card extended with a four-state **broker badge** (Live / Starting /
+  Disconnected / Not running, plus "Unknown" when metrics are unreadable),
+  **connecting clients**, **idle**, and the Conduit **build revision** (appended
+  to the version line). Read-only and aggregate-only.
+- API — `GET /api/status` gains a nested `live` block
+  `{broker_state, connecting_clients, idle_seconds, build_rev}`, computed
+  server-side and **non-fatal**: a metrics failure never changes the HTTP code
+  and never nulls `node_status` / `conduit_version` / `uptime_seconds`.
+- No duplication of Advisor/Traffic/Lifetime values; `conduit_uptime_seconds`
+  intentionally deferred (Node Status shows service uptime only). Validated on a
+  Raspberry Pi 4; see `docs/closure/live-operations-closure.md`.
+
 ### Added — Bandwidth Scheduling (reduced-mode window)
 
 - Operator-configurable **daily reduced-mode window** for Conduit, set through the

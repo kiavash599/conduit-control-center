@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.6  
-**Date:** 2026-06-16  
+**Revision:** 1.7  
+**Date:** 2026-06-17  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
 
@@ -128,22 +128,22 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | C7 | Reduced common clients during schedule | — | ✅ `InproxyReducedMaxCommonClients` via `--set` | ✅ | Bandwidth Scheduling — delivered 2026-06-16 (`f838ff4`) |
 | C8 | Minimum throttle protection (100 GB / 7 days) | — | ✅ enforced by `conduit-monitor` — a **separate** quota supervisor (restart-based), distinct from `InproxyReduced*` | — | Not deployed by CCC; unrelated to Bandwidth Scheduling |
 | **D — Metrics** |||||
-| D1 | `conduit_announcing` | — | ✅ | ✅ | Already exposed |
-| D2 | `conduit_connecting_clients` | — | ✅ | ✅ | Already exposed |
+| D1 | `conduit_announcing` | — | ✅ | ✅ | Read for broker_state — Live Operations (delivered 2026-06-17) |
+| D2 | `conduit_connecting_clients` | — | ✅ | ✅ | Live Operations — delivered 2026-06-17 (Node Status; first parsed in Commit 1) |
 | D3 | `conduit_connected_clients` | — | ✅ | ✅ | Already exposed |
-| D4 | `conduit_is_live` (broker connection) | — | ✅ | ❌ | Add to Live Ops (v0.2.0) |
+| D4 | `conduit_is_live` (broker connection) | — | ✅ | ✅ | Live Operations — delivered 2026-06-17 (broker badge) |
 | D5 | `conduit_max_common_clients` | — | ✅ | ✅ | Already exposed |
-| D6 | `conduit_max_personal_clients` | — | ✅ | ❌ | Show in Config panel (v0.2.0) |
+| D6 | `conduit_max_personal_clients` | — | ✅ | ❌ | Read-only display — minor remaining v0.2 gap (not surfaced); write deferred to v0.4.0 |
 | D7 | `conduit_bandwidth_limit_bytes_per_second` | — | ✅ (0 = unlimited) | ❌ | Show in Config panel (v0.2.0) |
-| D8 | `conduit_bytes_uploaded` | — | ✅ cumulative | ❌ | Show in Live Ops (v0.2.0) |
-| D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ❌ | Show in Live Ops (v0.2.0) |
-| D10 | `conduit_uptime_seconds` | — | ✅ GaugeFunc (computed at scrape) | ❌ | Show in Live Ops (v0.2.0) |
-| D11 | `conduit_idle_seconds` | — | ✅ GaugeFunc (computed at scrape) | ❌ | Show in Live Ops (v0.2.0) |
+| D8 | `conduit_bytes_uploaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
+| D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
+| D10 | `conduit_uptime_seconds` | — | ✅ GaugeFunc (computed at scrape) | ❌ | Intentionally deferred — Node Status shows service uptime (avoid a second uptime figure) |
+| D11 | `conduit_idle_seconds` | — | ✅ GaugeFunc (computed at scrape) | ✅ | Live Operations — delivered 2026-06-17 (Node Status Idle) |
 | D12 | `conduit_region_bytes_uploaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
 | D13 | `conduit_region_bytes_downloaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
 | D14 | `conduit_region_connecting_clients{scope,region}` | — | ✅ | ❌ | Not used by Regional Analytics MVP (connected only); available (v0.4.0+) |
 | D15 | `conduit_region_connected_clients{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Clients) |
-| D16 | `conduit_build_info{build_repo,build_rev,go_version,values_rev}` | — | ✅ | partial | Expose full build info (v0.2.0) |
+| D16 | `conduit_build_info{build_repo,build_rev,go_version,values_rev}` | — | ✅ | partial | build_rev delivered in Node Status (Live Operations 2026-06-17); full build info (repo/go/values_rev) future |
 | D17 | Scope labels: `common` / `personal` | — | ✅ | ❌ | Scope filter deferred to v0.4.0; Regional Analytics MVP is `scope=common` only |
 | **E — Ryve** |||||
 | E1 | `conduit ryve-claim` command | — | ✅ | ❌ | Subprocess invocation (v0.4.0) |
@@ -164,7 +164,7 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 
 **Bandwidth** defaults to 40 Mbps (decimal, stored as bytes/sec). The `--bandwidth` flag controls a combined limit; separate upstream/downstream limits require JSON config overrides and are not exposed on the `--set` allowlist. Reduced-mode scheduling (`InproxyReduced*` via `--set`) is the correct mechanism for time-based throttling, including the v0.2.0 bandwidth scheduling feature.
 
-**`conduit_is_live`** is a confirmed metric (1 = broker connected, 0 = disconnected) and is not yet surfaced in CCC. It should be the topmost status signal on the dashboard in v0.2.0.
+**`conduit_is_live`** is a confirmed metric (1 = broker connected, 0 = disconnected) and is surfaced as the Node Status **broker badge** (Live Operations, delivered 2026-06-17) — the topmost broker signal on the dashboard.
 
 **Ryve** is a mobile app that claims a Conduit station by scanning a QR code encoding the station's private keypair. CCC must never store or display the private key itself. The safe workflow is: invoke `conduit ryve-claim --output <path>` as a subprocess (after explicit user confirmation), serve the resulting QR PNG temporarily, then delete it. The private key must never be logged, stored in the database, or transmitted over the API.
 
@@ -397,7 +397,7 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
-> **Status: In progress.** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Note: the persistent-traffic backend and historical chart originally scoped under v0.3.0 (§7) were delivered ahead of this milestone. **Regional Analytics (§6.3) was delivered and production-validated (2026-06-16). Bandwidth Scheduling (§6.5) was delivered and production-validated (2026-06-16).** The remaining interactive control features below — configuration, live operations, themes — are outstanding.
+> **Status: In progress (nearing completion).** v0.2.0 remains the active *feature* milestone (gated by D1, now complete). Delivered and production-validated: **Conduit Configuration (§6.1, via M2 + Bandwidth Scheduling §6.5) — delivered with one minor remaining gap (D6 read-only `max_personal_clients` display); Regional Analytics (§6.3); Bandwidth Scheduling (§6.5); Live Operations (§6.2/§6.6) — 2026-06-17.** **Smart Assistant (§6.4) is reconciled** — the Contribution Advisor supersedes the original Manual/Assisted concept (Automatic mode → v0.3.0). The **only remaining major v0.2 feature is Theme Support (§6.7)**.
 
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
@@ -414,6 +414,22 @@ Display and allow editing of the three runtime-configurable parameters:
 > **Note:** `conduit_bandwidth_limit_bytes_per_second` uses decimal megabits (1 Mbps = 125,000 bytes/sec). Display and input must use decimal Mbps to match CLI behaviour.
 
 ### 6.2 Live Operations Panel
+
+> **Status: ✅ DELIVERED — 2026-06-17.** Shipped as **Option 1** — an extension
+> of the existing **Node Status** card, not a standalone panel — to avoid
+> duplicating the Advisor, Traffic, and Lifetime cards. Commits `3741b71` /
+> `d61a478` / `b4bc9c1`; CI #115 green; production-validated. Closure record:
+> `docs/closure/live-operations-closure.md`.
+>
+> **Delivered subset:** four-state **broker badge** (Live / Starting /
+> Disconnected / Not running, + an "Unknown" degradation state), **connecting
+> clients**, **idle**, and **build_rev** (appended to the version line).
+> **Not re-shown (no duplication):** connected clients (Advisor), bytes
+> (Traffic/Lifetime), service uptime + version (Node Status). **Deferred:**
+> `conduit_uptime_seconds` (a second uptime figure would confuse operators).
+> "Starting" is sub-poll-interval and may be skipped by the 5 s poller (accepted).
+>
+> The original metric table below is retained for historical context.
 
 Live Operations section, aligned with the card structure defined in Sections 5.3 and 5.5:
 
@@ -482,6 +498,15 @@ Rules: regions with zero clients AND zero bytes in all columns are hidden. Scope
 
 ### 6.4 Smart Assistant
 
+> **Status: ✅ Reconciled — delivered in spirit (2026-06-17).** The shipped
+> **Contribution Advisor** delivers the intended Assisted-mode value: its
+> Capacity domain analyses CPU / RAM (psutil) plus connected clients and the
+> max-common limit to emit back-off / grow guidance, alongside reduced-mode and
+> contribution-health advice. It is always-on and advisory ("recommends; does
+> not set"). **The Contribution Advisor supersedes the original Manual / Assisted
+> concept** — "Manual" = ignore the advice; "Assisted" = the default. **Automatic
+> mode remains a v0.3.0 item.** No open v0.2.0 work.
+
 Three modes as defined in Section 5.7. Automatic mode deferred to v0.3.0 (see review note — risk on Raspberry Pi restart cascades). v0.2.0 ships Manual and Assisted modes only.
 
 **Assisted mode analysis inputs:** CPU utilisation (psutil), RAM utilisation, `conduit_connected_clients`, `conduit_bandwidth_limit_bytes_per_second`, `conduit_bytes_uploaded`, `conduit_bytes_downloaded`, `conduit_idle_seconds`.
@@ -527,6 +552,10 @@ Fields written to the service unit drop-in: `InproxyReducedStartTime`, `InproxyR
 Changes to the schedule follow the same diff + confirm + restart workflow as all other configuration changes.
 
 ### 6.6 Broker Live Status
+
+> **Status: ✅ DELIVERED — 2026-06-17.** The four-state broker badge is rendered
+> in the **Node Status** card (not a separate Overview element). Validated
+> Disconnected → Live; "Starting" is sub-poll-interval (accepted). See §6.2.
 
 `conduit_is_live` is the topmost element of the Overview screen and is also present in the Live Clients section. Four states as defined in Section 6.2. Broker disconnected banner displayed per Section 5.8.
 
@@ -599,6 +628,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.4 | 2026-06-16 | CCC Development Team | §7: marked Traffic UI CLOSED (persistent collector + Lifetime & History card with SVG chart, backed by `/api/traffic/summary` & `/api/traffic/series`) and removed the "Historical charts" row from the v0.3.0 candidate table — recorded as shipped, no longer a future candidate. No other sections changed. |
 | 1.5 | 2026-06-16 | CCC Development Team | Regional Analytics closure: §6.3 marked ✅ DELIVERED (MVP) with delivered-vs-spec reconciliation and a deferred remainder; §3.2 matrix D12/D13/D15 → delivered, D14/D17 annotated (connecting-clients and scope filter deferred); §6 v0.2.0 status updated (RA removed from outstanding). Closure record added at `docs/closure/regional-analytics-closure.md`. No milestone renumbering. |
 | 1.6 | 2026-06-16 | CCC Development Team | Bandwidth Scheduling closure: §6.5 marked ✅ DELIVERED (commit `f838ff4`; CI #109–#113) with the confirmed reduced-mode model (HH:MM UTC, runtime switching in tunnel-core, no CCC scheduler, no boundary restarts, restart only on value change); §3.2 C6/C7 → delivered and C8 de-conflated (`conduit-monitor` quota throttle separated from `InproxyReduced*`, noted not deployed by CCC); §5.7 day-of-week selector removed and the 100 GB/7-day tooltip corrected; §6 v0.2.0 status updated (scheduling removed from outstanding). Closure record at `docs/closure/bandwidth-scheduling-closure.md`. No milestone renumbering. |
+| 1.7 | 2026-06-17 | CCC Development Team | Live Operations closure: §6.2/§6.6 marked ✅ DELIVERED (Option 1 — Node Status extension; commits `3741b71`/`d61a478`/`b4bc9c1`, CI #115); §3.2 D1/D2/D4/D11 → delivered, D8/D9 noted delivered-via-Traffic, D10 deferred (service uptime only), D16 build_rev partial, D6 noted as a minor remaining gap; §3.3 is_live note updated; §6.4 reconciled (Contribution Advisor supersedes the original Manual/Assisted concept; Automatic → v0.3.0); §6 v0.2.0 status updated. Closure record added at `docs/closure/live-operations-closure.md`. No milestone renumbering. |
 
 ---
 
