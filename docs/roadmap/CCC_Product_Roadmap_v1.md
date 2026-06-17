@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.8  
+**Revision:** 1.9  
 **Date:** 2026-06-17  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
@@ -37,6 +37,7 @@
    - 6.5 [Bandwidth Scheduling](#65-bandwidth-scheduling)
    - 6.6 [Broker Live Status](#66-broker-live-status)
    - 6.7 [Theme Support](#67-theme-support)
+- [Approved Delivery Priority (USER-VALUE-FIRST)](#approved-delivery-priority-user-value-first)
 7. [v0.3.0 — Historical Analytics & Operations](#7-v030--historical-analytics--operations)
 8. [v0.4.0 — Personal Mode & Ryve](#8-v040--personal-mode--ryve)
 9. [Out of Scope](#9-out-of-scope)
@@ -582,6 +583,36 @@ Light / Dark / System themes implemented per Section 5.10. Theme preference pers
 
 ---
 
+## Approved Delivery Priority (USER-VALUE-FIRST)
+
+> **Authoritative execution order — approved 2026-06-17 (Product Owner).** This
+> section records the **sequence** in which the post-v0.2.0 epics will be
+> delivered under the USER-VALUE-FIRST direction. It is intentionally **decoupled
+> from the milestone version labels** in §7 (v0.3.0) and §8 (v0.4.0): those
+> sections are **preserved as-is** for historical and feature-specification
+> purposes. Where the priority order and the old milestone grouping disagree,
+> **this order governs delivery**; §7/§8 remain the detailed feature catalogues.
+> No feature is removed and no scope is reduced — every item below points back to
+> its existing specification.
+
+| # | Epic | Spec reference | Notes |
+|---|---|---|---|
+| **1** | **Branding & Identity** | _new — not previously sectioned_ | Favicon, logo, GitHub avatar, docs branding. Isolated static assets/docs; no Conduit interaction, no privilege surface, fully reversible. Prior branding review was conditional-GO (needs a simplified favicon variant + full-bleed/maskable; teal-vs-indigo accent) — resolve design before starting. If a PWA icon set is in scope, note no web manifest exists today. |
+| **2** | **Personal Mode** | §8 (Personal mode setup, Pairing token generation, Personal client limit control) + §3.2 A1–A7/B2/B6, §3.3 | Compartment generation (`new-compartment-id`), pairing token (`BuildPersonalPairingToken`, CCC-rendered QR), `--max-personal-clients` write (flag, **not** `--set` — §3.3). **D6 (`conduit_max_personal_clients`) is part of this epic** (read + write fold into "Personal client limit control"). **Scope filter in Regional Analytics** (§8; §3.2 D14/D17) folds in here — it is only meaningful when personal clients > 0. Introduces the privileged-subprocess runner reused by epic 3. |
+| **3** | **Ryve Claim / Identity** | §8 (Ryve claim QR, ProxyID display) + §3.2 E1–E5/E7, §3.3, §5.8 modal | `conduit ryve-claim` subprocess after the §5.8 modal; serve QR PNG, display ProxyID, delete PNG after display. **Highest security surface** — the private key is printed to stdout and must never be logged, stored, or returned (§3.2 E5). Reuses the runner from epic 2 (so it follows Personal Mode). **Renamed from "Ryve Rewards"** — see the out-of-scope note below. |
+| **4** | **Backup & Restore** | §7 | Export CCC configuration (never the Conduit/Ryve key) to an encrypted archive; restore. Precedes Update Center to provide a pre-update rollback. |
+| **5** | **Update Center** | §7 | GitHub-releases check + one-click `update.sh`. Depends on epic 4 for the rollback safety net on the production Pi. |
+| **6** | **Automatic Mode** | §7 + §6.4, §5.7 | Adjust `max_common_clients` within operator bounds. Requires **audit-log infrastructure** (built within this epic) plus bounds/hysteresis/disable to avoid Pi restart cascades (§5.7). Backup is **not** a prerequisite. |
+| **7** | **Health Score** | §7 | Composite of uptime %, broker-live %, avg clients, bandwidth headroom. Fully unblocked today (all inputs exist); placed last by product choice, no dependency forces it earlier. |
+
+**Also preserved (not dropped):** **Per-direction bandwidth display** (§7) remains a
+planned read-only item, delivered alongside the operations epics (4–7). **Ryve
+rewards / points** remain **explicitly out-of-scope** (§3.2 E6, §8, §9) until
+Psiphon exposes the data via a metric or a documented API — epic 3 delivers claim
++ ProxyID identity only, **not** rewards.
+
+---
+
 ## 7. v0.3.0 — Historical Analytics & Operations
 
 > **Status: ✅ Traffic UI CLOSED — shipped early (v0.1.x → v0.2 cycle, in production).**
@@ -646,6 +677,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.5 | 2026-06-16 | CCC Development Team | Regional Analytics closure: §6.3 marked ✅ DELIVERED (MVP) with delivered-vs-spec reconciliation and a deferred remainder; §3.2 matrix D12/D13/D15 → delivered, D14/D17 annotated (connecting-clients and scope filter deferred); §6 v0.2.0 status updated (RA removed from outstanding). Closure record added at `docs/closure/regional-analytics-closure.md`. No milestone renumbering. |
 | 1.6 | 2026-06-16 | CCC Development Team | Bandwidth Scheduling closure: §6.5 marked ✅ DELIVERED (commit `f838ff4`; CI #109–#113) with the confirmed reduced-mode model (HH:MM UTC, runtime switching in tunnel-core, no CCC scheduler, no boundary restarts, restart only on value change); §3.2 C6/C7 → delivered and C8 de-conflated (`conduit-monitor` quota throttle separated from `InproxyReduced*`, noted not deployed by CCC); §5.7 day-of-week selector removed and the 100 GB/7-day tooltip corrected; §6 v0.2.0 status updated (scheduling removed from outstanding). Closure record at `docs/closure/bandwidth-scheduling-closure.md`. No milestone renumbering. |
 | 1.7 | 2026-06-17 | CCC Development Team | Live Operations closure: §6.2/§6.6 marked ✅ DELIVERED (Option 1 — Node Status extension; commits `3741b71`/`d61a478`/`b4bc9c1`, CI #115); §3.2 D1/D2/D4/D11 → delivered, D8/D9 noted delivered-via-Traffic, D10 deferred (service uptime only), D16 build_rev partial, D6 noted as a minor remaining gap; §3.3 is_live note updated; §6.4 reconciled (Contribution Advisor supersedes the original Manual/Assisted concept; Automatic → v0.3.0); §6 v0.2.0 status updated. Closure record added at `docs/closure/live-operations-closure.md`. No milestone renumbering. |
+| 1.9 | 2026-06-17 | CCC Development Team | **Approved Delivery Priority (USER-VALUE-FIRST) recorded** as a new authoritative section before §7, documenting the post-v0.2.0 execution order (1 Branding & Identity, 2 Personal Mode, 3 Ryve Claim / Identity, 4 Backup & Restore, 5 Update Center, 6 Automatic Mode, 7 Health Score) **without renumbering** §7/§8 — those sections are preserved as feature catalogues. D6 recorded as part of Personal Mode; **"Ryve Rewards" renamed to "Ryve Claim / Identity"** with rewards/points kept explicitly out-of-scope (§3.2 E6, §8, §9); Per-direction bandwidth display and Regional-Analytics scope filter explicitly preserved. Companion to the `APP_VERSION 0.1.0 → 0.2.0` consistency cleanup (CHANGELOG `[0.2.0]` stamp + version guard + `docs/release-checklist.md`). No milestone renumbering. |
 | 1.8 | 2026-06-17 | CCC Development Team | **Theme Support closure + v0.2.0 CLOSED.** §6.7 marked ✅ DELIVERED (TS4 Raspberry Pi validation; commits `46547c0`/`df49f42`/TS3, CI #117–#118) with server-rendered flash-free first paint and no localStorage; §6 v0.2.0 status updated to **CLOSED — all features delivered**. **D6 (`max_personal_clients`) reclassified** from a minor v0.2 gap to v0.4.0 Personal Mode in §3.2 and §6.1 (folds into "Personal client limit control", §8). §6.4 stale three-mode prose reconciled (superseded by the Contribution Advisor; Automatic → v0.3.0). Closure record added at `docs/closure/theme-support-closure.md`. No milestone renumbering. |
 
 ---
