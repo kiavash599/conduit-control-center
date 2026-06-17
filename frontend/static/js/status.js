@@ -63,6 +63,22 @@
     };
 
     /* ------------------------------------------------------------------
+       Broker badge configuration (Live Operations, Option 1).
+       Maps broker_state (from GET /api/status .live) to an existing badge
+       class + label. Reuses the running/starting/error/stopped/neutral
+       classes (no new CSS): live=green, starting=yellow, disconnected=red,
+       not_running=grey, unknown=neutral.
+    ------------------------------------------------------------------ */
+
+    var BROKER_BADGE = {
+        live:         { cls: 'badge--running',  text: 'Live',         pulse: true  },
+        starting:     { cls: 'badge--starting', text: 'Starting',     pulse: true  },
+        disconnected: { cls: 'badge--error',    text: 'Disconnected', pulse: false },
+        not_running:  { cls: 'badge--stopped',  text: 'Not running',  pulse: false },
+        unknown:      { cls: 'badge--neutral',  text: 'Unknown',      pulse: false },
+    };
+
+    /* ------------------------------------------------------------------
        Module state
     ------------------------------------------------------------------ */
 
@@ -137,6 +153,39 @@
     }
 
     /* ------------------------------------------------------------------
+       Broker badge + live fields (Live Operations, Option 1)
+    ------------------------------------------------------------------ */
+
+    function updateBrokerBadge(state) {
+        var badge = el('broker-badge');
+        if (!badge) return;
+        ['badge--running', 'badge--stopped', 'badge--starting',
+         'badge--stopping', 'badge--error', 'badge--neutral',
+         'badge--pulse'].forEach(function (c) { badge.classList.remove(c); });
+        var cfg = BROKER_BADGE[state] || BROKER_BADGE.unknown;
+        badge.classList.add(cfg.cls);
+        if (cfg.pulse) badge.classList.add('badge--pulse');
+        badge.textContent = cfg.text;
+    }
+
+    // idle_seconds: 0 (or null<=0) means clients are active; >0 is a duration.
+    function formatIdle(seconds) {
+        if (seconds == null) return '—';
+        if (seconds <= 0) return 'Active';
+        return formatUptime(seconds);
+    }
+
+    function renderLive(live) {
+        live = live || {};
+        updateBrokerBadge(live.broker_state);
+        setText('status-connecting',
+            (live.connecting_clients == null ? '—' : String(live.connecting_clients)));
+        setText('status-idle', formatIdle(live.idle_seconds));
+        // Append build_rev to the existing version line (no duplication).
+        setText('status-build-rev', live.build_rev ? (' · ' + live.build_rev) : '');
+    }
+
+    /* ------------------------------------------------------------------
        Button state update
        Never re-enables buttons while an action is in flight.
     ------------------------------------------------------------------ */
@@ -162,6 +211,7 @@
         setText('status-last-changed', relativeTime(data.last_changed));
         setText('status-version',      data.conduit_version || '—');
         setText('status-uptime',       formatUptime(data.uptime_seconds));
+        renderLive(data.live);
     }
 
     /* ------------------------------------------------------------------
@@ -176,7 +226,10 @@
         updateButtons(null);              // all disabled
         setText('status-last-changed', '—');
         setText('status-uptime',       '—');
-        // Preserve version if previously known (it doesn't change on network loss).
+        updateBrokerBadge('unknown');     // broker badge -> Unknown on poll failure
+        setText('status-connecting', '—');
+        setText('status-idle',       '—');
+        // Preserve version + build_rev if previously known (unchanged on net loss).
     }
 
     /* ------------------------------------------------------------------

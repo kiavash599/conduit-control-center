@@ -239,8 +239,19 @@
                           aria-atomic="true">—</span>
                 </div>
 
-                <!-- Status metadata: last changed / uptime / version -->
+                <!-- Status metadata: broker / last changed / uptime / connecting /
+                     idle / version. Live Operations (Option 1): broker_state +
+                     connecting/idle come from GET /api/status .live; build_rev is
+                     appended to the version line. No new endpoint/card; no
+                     duplication of Advisor/Traffic/Lifetime values. -->
                 <dl class="status-meta" aria-label="Conduit service details">
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Broker</dt>
+                        <dd class="status-meta__val">
+                            <span class="badge badge--neutral" id="broker-badge"
+                                  role="status" aria-live="polite">—</span>
+                        </dd>
+                    </div>
                     <div class="status-meta__row">
                         <dt class="status-meta__key">Last changed</dt>
                         <dd class="status-meta__val" id="status-last-changed">—</dd>
@@ -250,8 +261,18 @@
                         <dd class="status-meta__val" id="status-uptime">—</dd>
                     </div>
                     <div class="status-meta__row">
+                        <dt class="status-meta__key">Connecting clients</dt>
+                        <dd class="status-meta__val" id="status-connecting">—</dd>
+                    </div>
+                    <div class="status-meta__row">
+                        <dt class="status-meta__key">Idle</dt>
+                        <dd class="status-meta__val" id="status-idle">—</dd>
+                    </div>
+                    <div class="status-meta__row">
                         <dt class="status-meta__key">Conduit version</dt>
-                        <dd class="status-meta__val" id="status-version">—</dd>
+                        <dd class="status-meta__val">
+                            <span id="status-version">—</span><span id="status-build-rev" class="text-dim text-sm"></span>
+                        </dd>
                     </div>
                 </dl>
 
