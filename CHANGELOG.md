@@ -9,6 +9,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+_No unreleased changes yet._
+
+---
+
+## [0.2.0] — 2026-06-17
+
+> Smart Conduit Control milestone — CLOSED and production-validated on a
+> Raspberry Pi 4 (Ubuntu 22.04 ARM64). `APP_VERSION` is bumped to match this
+> heading; the `test_version` guard keeps the two in lock-step.
+
 ### Added — Theme Support (Light / Dark / System)
 
 - **Light / Dark / System** themes selectable from a new **Appearance** card in
