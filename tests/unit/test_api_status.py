@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.status import _compute_uptime, router
 from backend.conduit.adapter import ConduitAdapterError, ConduitPermissionError
+from backend.conduit.models import LiveStatus
 from backend.dependencies import AuthenticatedUser, get_current_user
 
 
@@ -122,8 +123,80 @@ class TestGetConduitStatusRoute:
     def test_uptime_calculated_when_running(self, status_client):
         with patch("backend.api.status.get_status", new_callable=AsyncMock, return_value="running"), \
              patch("backend.api.status.get_last_changed", new_callable=AsyncMock, return_value="2026-01-01T00:00:00Z"), \
-             patch("backend.api.status.get_version", new_callable=AsyncMock, return_value=None):
+             patch("backend.api.status.get_version", new_callable=AsyncMock, return_value=None), \
+             patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=None):
             response = status_client.get("/api/status")
         data = response.json()
         assert data["uptime_seconds"] is not None
         assert data["uptime_seconds"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# GET /api/status -- live block (Live Operations, Option 1)
+# ---------------------------------------------------------------------------
+
+
+class TestLiveBlock:
+    def _core(self):
+        return (
+            patch("backend.api.status.get_status", new_callable=AsyncMock, return_value="running"),
+            patch("backend.api.status.get_last_changed", new_callable=AsyncMock, return_value="2026-01-01T00:00:00Z"),
+            patch("backend.api.status.get_version", new_callable=AsyncMock, return_value="2.0.0"),
+        )
+
+    def test_broker_live_and_fields(self, status_client):
+        live = LiveStatus(is_live=True, announcing=1, connecting_clients=3, idle_seconds=0, build_rev="8531118")
+        s, lc, v = self._core()
+        with s, lc, v, patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=live):
+            d = status_client.get("/api/status").json()
+        assert d["live"]["broker_state"] == "live"
+        assert d["live"]["connecting_clients"] == 3
+        assert d["live"]["idle_seconds"] == 0
+        assert d["live"]["build_rev"] == "8531118"
+
+    def test_broker_starting(self, status_client):
+        live = LiveStatus(is_live=False, announcing=2, connecting_clients=1)
+        s, lc, v = self._core()
+        with s, lc, v, patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=live):
+            assert status_client.get("/api/status").json()["live"]["broker_state"] == "starting"
+
+    def test_broker_disconnected(self, status_client):
+        live = LiveStatus(is_live=False, announcing=0)
+        s, lc, v = self._core()
+        with s, lc, v, patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=live):
+            assert status_client.get("/api/status").json()["live"]["broker_state"] == "disconnected"
+
+    def test_broker_not_running(self, status_client):
+        with patch("backend.api.status.get_status", new_callable=AsyncMock, return_value="stopped"), \
+             patch("backend.api.status.get_last_changed", new_callable=AsyncMock, return_value=None), \
+             patch("backend.api.status.get_version", new_callable=AsyncMock, return_value=None), \
+             patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=None):
+            d = status_client.get("/api/status").json()
+        assert d["live"]["broker_state"] == "not_running"
+        assert d["live"]["connecting_clients"] is None
+
+    def test_metrics_none_degrades_to_unknown_but_200(self, status_client):
+        # running but metrics unreachable -> live None -> 'unknown'; core fields intact.
+        s, lc, v = self._core()
+        with s, lc, v, patch("backend.api.status.get_live_status", new_callable=AsyncMock, return_value=None):
+            r = status_client.get("/api/status")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["node_status"] == "running"
+        assert d["conduit_version"] == "2.0.0"
+        assert d["uptime_seconds"] is not None
+        assert d["live"]["broker_state"] == "unknown"
+        assert d["live"]["connecting_clients"] is None and d["live"]["build_rev"] is None
+
+    def test_metrics_exception_never_changes_status_or_core_fields(self, status_client):
+        # get_live_status RAISES -> caught by return_exceptions -> still 200,
+        # node_status/version/uptime intact, broker_state degrades to 'unknown'.
+        s, lc, v = self._core()
+        with s, lc, v, patch("backend.api.status.get_live_status", new_callable=AsyncMock, side_effect=Exception("boom")):
+            r = status_client.get("/api/status")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["node_status"] == "running"
+        assert d["conduit_version"] == "2.0.0"
+        assert d["uptime_seconds"] is not None
+        assert d["live"]["broker_state"] == "unknown"

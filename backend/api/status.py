@@ -54,7 +54,9 @@ from pydantic import BaseModel
 from backend.conduit.adapter import (
     ConduitAdapterError,
     ConduitPermissionError,
+    broker_state,
     get_last_changed,
+    get_live_status,
     get_status,
     get_version,
 )
@@ -70,18 +72,38 @@ router = APIRouter(tags=["status"])
 # ---------------------------------------------------------------------------
 
 
+class LiveOut(BaseModel):
+    """
+    Live broker/activity sub-block (Live Operations, Option 1).
+
+    Read-only and aggregate-only. ``broker_state`` is ALWAYS present and
+    degrades to "unknown" (running but metrics unreadable) or "not_running";
+    the other fields are null on a metrics miss. Deliberately does NOT duplicate
+    connected_clients / bytes / uptime shown by the Advisor, Traffic, and
+    Node Status cards. (``conduit_uptime_seconds`` is intentionally deferred —
+    Node Status shows service uptime only, to avoid two uptime figures.)
+    """
+
+    broker_state: str  # not_running | starting | live | disconnected | unknown
+    connecting_clients: int | None = None
+    idle_seconds: int | None = None
+    build_rev: str | None = None
+
+
 class StatusResponse(BaseModel):
     """
     Response body for GET /api/status.
 
-    All fields except node_status may be null when the corresponding data
-    is not available (service never started, version not detectable, etc.).
+    All fields except node_status and live.broker_state may be null when the
+    corresponding data is not available (service never started, version not
+    detectable, metrics endpoint unreachable, etc.).
     """
 
     node_status: str
     last_changed: str | None
     conduit_version: str | None
     uptime_seconds: float | None
+    live: LiveOut
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +182,13 @@ async def get_conduit_status(
             detail=str(exc),
         )
 
-    # Secondary calls: failures are non-fatal; fields become null.
+    # Secondary calls: ALL non-fatal. A failure of any of these (including the
+    # live-status metrics scrape) must never change the HTTP status code nor
+    # prevent node_status / conduit_version / uptime_seconds from being returned.
     results = await asyncio.gather(
         get_last_changed(),
         get_version(),
+        get_live_status(),
         return_exceptions=True,
     )
 
@@ -187,9 +212,34 @@ async def get_conduit_status(
     else:
         conduit_version = results[1]
 
+    # Live broker/activity gauges. get_live_status() already returns None on an
+    # unreachable endpoint; return_exceptions=True guards any unexpected error.
+    # Either way, broker_state degrades (unknown/not_running) and the other live
+    # fields go null -- the fields above are unaffected.
+    live_status = None
+    if isinstance(results[2], BaseException):
+        logger.warning(
+            "GET /api/status: get_live_status() failed: %s -- live fields degrade",
+            results[2],
+        )
+    else:
+        live_status = results[2]  # LiveStatus | None
+
+    live = LiveOut(
+        broker_state=broker_state(
+            node_status,
+            live_status.announcing if live_status else None,
+            live_status.is_live if live_status else None,
+        ),
+        connecting_clients=live_status.connecting_clients if live_status else None,
+        idle_seconds=live_status.idle_seconds if live_status else None,
+        build_rev=live_status.build_rev if live_status else None,
+    )
+
     return StatusResponse(
         node_status=node_status,
         last_changed=last_changed,
         conduit_version=conduit_version,
         uptime_seconds=_compute_uptime(last_changed, node_status),
+        live=live,
     )
