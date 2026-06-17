@@ -1372,3 +1372,17 @@ a:hover {
     padding-left: var(--space-3);
     border-left: 2px solid var(--color-border);
 }
+
+/* ============================================================================
+   THEME TOGGLE — Appearance card radio rows (TS3).
+   ----------------------------------------------------------------------------
+   Layout/spacing only — no colours (theme palettes are unchanged). Each radio
+   sits on its own row with its label, comfortably tappable on mobile.
+   ============================================================================ */
+.theme-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    cursor: pointer;
+}

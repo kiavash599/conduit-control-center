@@ -1028,6 +1028,44 @@
             </div><!-- /#settings-card -->
 
             <!--
+              Appearance (Theme Support, TS3). Settings-only theme toggle.
+              JS: settings.js wires the radios; API: POST /api/settings/theme.
+              The current selection is server-rendered from the `theme` cookie
+              (no flash, no JS needed for initial state).
+              DOM consumed by settings.js:
+                #theme-fieldset  — the radio group
+                input[name="theme"] (values: dark | light | system)
+                #theme-status    — aria-live feedback line
+            -->
+            <div class="card" id="appearance-card">
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Appearance</h2>
+                        <p class="card__subtitle">Theme for this browser</p>
+                    </div>
+                </div>
+                <fieldset class="form-group" id="theme-fieldset">
+                    <legend class="label">Theme</legend>
+                    <label class="theme-option">
+                        <input type="radio" name="theme" value="dark"
+                               {% if (theme | default('dark', true)) == 'dark' %}checked{% endif %}>
+                        Dark
+                    </label>
+                    <label class="theme-option">
+                        <input type="radio" name="theme" value="light"
+                               {% if (theme | default('dark', true)) == 'light' %}checked{% endif %}>
+                        Light
+                    </label>
+                    <label class="theme-option">
+                        <input type="radio" name="theme" value="system"
+                               {% if (theme | default('dark', true)) == 'system' %}checked{% endif %}>
+                        System <span class="form-hint">(follow your device)</span>
+                    </label>
+                </fieldset>
+                <p class="form-hint" id="theme-status" role="status" aria-live="polite" hidden></p>
+            </div><!-- /#appearance-card -->
+
+            <!--
               Conduit Configuration (read-only) — M1 (§6.1).
               Shows configured (next-start) vs effective (running) values + drift.
               NO edit controls, NO apply button (write path is a later milestone).

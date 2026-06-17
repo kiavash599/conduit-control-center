@@ -105,10 +105,68 @@
     }
 
     /* ------------------------------------------------------------------
+       Theme toggle (Theme Support, TS3) — Settings-only.
+       Instant apply via document.documentElement.dataset.theme; persists via
+       POST /api/settings/theme (apiFetch adds CSRF + toasts). Reverts the UI
+       and dataset on failure. The initial selection is server-rendered.
+    ------------------------------------------------------------------ */
+
+    var THEMES = ['dark', 'light', 'system'];
+
+    function setCheckedTheme(value) {
+        // value is a controlled member of THEMES (never user-supplied text).
+        if (THEMES.indexOf(value) === -1) return;
+        document.documentElement.dataset.theme = value;
+        var radio = document.querySelector(
+            '#theme-fieldset input[value="' + value + '"]');
+        if (radio) radio.checked = true;
+    }
+
+    function setThemeStatus(msg) {
+        var e = el('theme-status');
+        if (!e) return;
+        e.textContent = msg || '';   // textContent — DOM text only
+        e.hidden = !msg;
+    }
+
+    function wireThemeToggle() {
+        var radios = document.querySelectorAll('#theme-fieldset input[name="theme"]');
+        if (!radios.length) return;
+        var prevTheme = document.documentElement.dataset.theme || 'dark';
+
+        function onChange(ev) {
+            var r = ev.target;
+            if (!r.checked) return;
+            var value = r.value;
+            setCheckedTheme(value);            // 1. instant apply (dataset + radio)
+            setThemeStatus('Saving…');
+            apiFetch('/api/settings/theme', {  // 2. persist (CSRF + error toast via apiFetch)
+                method: 'POST',
+                body: JSON.stringify({ theme: value }),
+            })
+            .then(function () {
+                prevTheme = value;
+                setThemeStatus('Theme saved.');
+            })
+            .catch(function () {
+                // 3. revert UI + dataset to the last saved theme (toast already shown).
+                setCheckedTheme(prevTheme);
+                setThemeStatus('Could not save theme. Reverted.');
+            });
+        }
+
+        for (var i = 0; i < radios.length; i++) {
+            radios[i].addEventListener('change', onChange);
+        }
+    }
+
+    /* ------------------------------------------------------------------
        Form submit handler
     ------------------------------------------------------------------ */
 
     onReady(function () {
+        wireThemeToggle();   // independent of the password form below
+
         var form      = el('settings-password-form');
         var submitBtn = el('settings-submit-btn');
         var successEl = el('settings-success');
