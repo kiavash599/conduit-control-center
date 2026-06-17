@@ -85,3 +85,37 @@ class RegionStat:
     region: str
     traffic_bytes: int
     clients: int
+
+
+@dataclass(frozen=True)
+class LiveStatus:
+    """Forgiving, aggregate-only read of Conduit's live broker/activity gauges,
+    for the Node Status broker badge (Live Operations, Option 1).
+
+    Returned by ``backend.conduit.adapter.get_live_status()``. The adapter
+    returns ``None`` (not this object) when the metrics endpoint is unreachable;
+    a populated object means "endpoint reachable; these gauges were present".
+    Each field is ``None`` individually when its gauge is missing/unparseable.
+
+    Deliberately omits connected_clients / bytes / uptime: those are already
+    shown by the Advisor, Traffic, and Node Status cards (no duplication).
+
+    Fields
+    ------
+    is_live : bool | None
+        ``conduit_is_live`` (1 = broker connected).
+    announcing : int | None
+        ``conduit_announcing`` — in-flight announcement requests.
+    connecting_clients : int | None
+        ``conduit_connecting_clients`` — clients currently connecting.
+    idle_seconds : int | None
+        ``conduit_idle_seconds`` — seconds since the last client activity.
+    build_rev : str | None
+        ``build_rev`` label on ``conduit_build_info`` (short revision).
+    """
+
+    is_live: bool | None = None
+    announcing: int | None = None
+    connecting_clients: int | None = None
+    idle_seconds: int | None = None
+    build_rev: str | None = None

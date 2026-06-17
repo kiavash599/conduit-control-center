@@ -125,6 +125,7 @@ from backend.config import get_app_config
 from backend.conduit.models import (
     ConduitConfigView,
     ConfigField,
+    LiveStatus,
     ReducedConfigView,
     RegionStat,
 )
@@ -922,8 +923,10 @@ _METRIC_IS_LIVE        = "conduit_is_live"
 # (e.g. conduit_connected_clients{scope="common"}) and per-region series
 # (conduit_region_*) are never parsed — aggregate-only by construction.
 _METRIC_CONNECTED_CLIENTS  = "conduit_connected_clients"
+_METRIC_CONNECTING_CLIENTS = "conduit_connecting_clients"
 _METRIC_IDLE_SECONDS       = "conduit_idle_seconds"
 _METRIC_MAX_COMMON_CLIENTS = "conduit_max_common_clients"
+_METRIC_ANNOUNCING         = "conduit_announcing"
 
 # build_rev is a label on the conduit_build_info gauge:
 #   conduit_build_info{build_repo="...",build_rev="8531118",...} 1
@@ -1129,6 +1132,83 @@ async def get_node_runtime() -> NodeRuntime | None:
         connected_clients=_optional_int(text, _METRIC_CONNECTED_CLIENTS),
         idle_seconds=_optional_int(text, _METRIC_IDLE_SECONDS),
         max_common_clients=_optional_int(text, _METRIC_MAX_COMMON_CLIENTS),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live Operations (Option 1) -- forgiving broker/activity read + state machine.
+# ---------------------------------------------------------------------------
+# Read-only, aggregate-only. Feeds the Node Status broker badge. Deliberately
+# omits connected_clients / bytes / uptime to avoid duplicating the Advisor,
+# Traffic, and Node Status cards.
+
+# broker_state() result values: the four observable states plus an honest
+# degradation case ("unknown") for "running but metrics could not be read".
+BROKER_NOT_RUNNING  = "not_running"
+BROKER_STARTING     = "starting"
+BROKER_LIVE         = "live"
+BROKER_DISCONNECTED = "disconnected"
+BROKER_UNKNOWN      = "unknown"
+
+
+def broker_state(service_status: str, announcing: int | None, is_live: bool | None) -> str:
+    """Derive the four-state broker status (pure; no I/O).
+
+    not_running  : the service is not active.
+    live         : conduit_is_live == 1 (dominant -- even if announcing is absent).
+    starting     : running, announcing, not yet live.
+    disconnected : running and reachable (is_live read as 0), not announcing.
+    unknown      : running but metrics could not be read (is_live is None) -- an
+                   honest fallback so we never assert Live/Disconnected without
+                   evidence.
+    """
+    if service_status != "running":
+        return BROKER_NOT_RUNNING
+    if is_live is True:
+        return BROKER_LIVE
+    if is_live is None:
+        return BROKER_UNKNOWN
+    # is_live is False here (metrics were readable).
+    if (announcing or 0) > 0:
+        return BROKER_STARTING
+    return BROKER_DISCONNECTED
+
+
+async def get_live_status() -> LiveStatus | None:
+    """Forgiving, aggregate-only read of Conduit's live broker/activity gauges.
+
+    Scrapes ``http://localhost:{conduit_metrics_port}/metrics`` and extracts:
+      - ``conduit_is_live``            -> is_live
+      - ``conduit_announcing``         -> announcing
+      - ``conduit_connecting_clients`` -> connecting_clients
+      - ``conduit_idle_seconds``       -> idle_seconds
+      - ``build_rev`` label            -> build_rev
+
+    Returns ``None`` when the metrics endpoint is unreachable; otherwise a
+    ``LiveStatus`` whose fields are individually ``None`` for any missing or
+    unparseable gauge. Only unlabelled scalars are read (aggregate-only). Never
+    raises.
+    """
+    port = get_app_config().conduit_metrics_port
+    url = f"http://localhost:{port}/metrics"
+    try:
+        text = await asyncio.to_thread(_fetch_metrics_text, url)
+    except (urllib.error.URLError, OSError) as exc:
+        logger.debug("get_live_status: metrics endpoint %r unreachable (%s)", url, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "get_live_status: unexpected error fetching %r (type=%s) -- returning None",
+            url, type(exc).__name__,
+        )
+        return None
+
+    return LiveStatus(
+        is_live=_parse_is_live(text),
+        announcing=_optional_int(text, _METRIC_ANNOUNCING),
+        connecting_clients=_optional_int(text, _METRIC_CONNECTING_CLIENTS),
+        idle_seconds=_optional_int(text, _METRIC_IDLE_SECONDS),
+        build_rev=_extract_build_rev(text),
     )
 
 
