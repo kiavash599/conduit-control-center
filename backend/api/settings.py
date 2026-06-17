@@ -53,7 +53,12 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, model_validator
 
-from backend.auth.cookies import clear_session_cookie, clear_csrf_cookie
+from backend.auth.cookies import (
+    VALID_THEMES,
+    clear_session_cookie,
+    clear_csrf_cookie,
+    set_theme_cookie,
+)
 from backend.auth.login import hash_password, verify_password
 from backend.auth.sessions import delete_all_sessions
 from backend.config import get_env_file_path, get_settings
@@ -94,6 +99,48 @@ class ChangePasswordRequest(BaseModel):
         if self.new_password != self.confirm_password:
             raise ValueError("new_password and confirm_password do not match")
         return self
+
+
+class ThemeRequest(BaseModel):
+    """Body for POST /api/settings/theme (Theme Support, TS2)."""
+
+    theme: str = Field(..., description="light | dark | system")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/settings/theme  (Theme Support, TS2)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/theme",
+    summary="Set the UI theme preference (light | dark | system)",
+    responses={
+        200: {"description": "Theme preference saved"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
+        422: {"description": "Invalid theme value"},
+    },
+)
+async def set_theme(
+    body:     ThemeRequest,
+    response: Response,
+    _user:    AuthenticatedUser = Depends(get_current_user),
+    _csrf:    None              = Depends(require_csrf_token),
+) -> dict:
+    """
+    Persist the operator's theme preference as a cookie, read server-side to
+    render ``data-theme`` on the next page load (flash-free). Read-only with
+    respect to Conduit; no privileged operation. Any value outside
+    {light, dark, system} is rejected with 422 and no cookie is set.
+    """
+    if body.theme not in VALID_THEMES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="theme must be one of: light, dark, system",
+        )
+    set_theme_cookie(response, body.theme)
+    return {"theme": body.theme}
 
 
 # ---------------------------------------------------------------------------

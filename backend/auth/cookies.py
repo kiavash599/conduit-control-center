@@ -30,7 +30,7 @@ Public API
 
 from __future__ import annotations
 
-from fastapi import Response
+from fastapi import Request, Response
 
 from backend.config import get_app_config, get_settings
 
@@ -42,6 +42,12 @@ COOKIE_NAME      = "session_id"
 CSRF_COOKIE_NAME = "csrf_token"
 _COOKIE_PATH     = "/"
 _COOKIE_SAMESITE = "strict"
+
+# Theme preference (Theme Support, TS2). Server-read to render data-theme.
+THEME_COOKIE_NAME = "theme"
+VALID_THEMES      = ("light", "dark", "system")
+DEFAULT_THEME     = "dark"
+_THEME_MAX_AGE    = 60 * 60 * 24 * 365   # 1 year
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +150,53 @@ def clear_csrf_cookie(response: Response) -> None:
         key=CSRF_COOKIE_NAME,
         path=_COOKIE_PATH,
         httponly=False,
+        secure=get_settings().secure_cookies,
+        samesite=_COOKIE_SAMESITE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Theme preference cookie helpers  (Theme Support, TS2)
+# ---------------------------------------------------------------------------
+
+
+def read_theme(request: Request) -> str:
+    """
+    Return the validated theme preference from the cookie, or DEFAULT_THEME.
+
+    The cookie is the single source of truth for the rendered ``data-theme``
+    attribute (server-rendered for flash-free first paint). Any missing,
+    tampered, or unrecognised value degrades to DEFAULT_THEME ("dark"). Never
+    raises.
+    """
+    try:
+        value = request.cookies.get(THEME_COOKIE_NAME)
+    except Exception:  # noqa: BLE001 -- never let cookie access break a render
+        return DEFAULT_THEME
+    return value if value in VALID_THEMES else DEFAULT_THEME
+
+
+def set_theme_cookie(response: Response, theme: str) -> None:
+    """
+    Persist the theme preference.
+
+    Attributes
+    ----------
+    HttpOnly  -- True (only the server reads it, to render data-theme; the UI
+                 toggle applies the change in the DOM and persists via the API)
+    Secure    -- same as the session cookie (HTTPS only in production)
+    SameSite  -- strict (consistent with the session/CSRF cookies)
+    Max-Age   -- 1 year (a durable preference, independent of session timeout)
+    Path      -- /
+
+    The caller MUST validate ``theme`` against VALID_THEMES before calling.
+    """
+    response.set_cookie(
+        key=THEME_COOKIE_NAME,
+        value=theme,
+        max_age=_THEME_MAX_AGE,
+        path=_COOKIE_PATH,
+        httponly=True,
         secure=get_settings().secure_cookies,
         samesite=_COOKIE_SAMESITE,
     )

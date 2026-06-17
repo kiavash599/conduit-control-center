@@ -61,7 +61,7 @@ from backend.auth.login import (
     InvalidCredentials,
     authenticate_user,
 )
-from backend.auth.cookies import set_session_cookie, set_csrf_cookie
+from backend.auth.cookies import read_theme, set_session_cookie, set_csrf_cookie
 from backend.auth.sessions import create_session
 from backend.config import get_app_config, get_settings
 from backend.dependencies import AuthenticatedUser, get_db, require_auth_html
@@ -168,6 +168,7 @@ async def login_page(
             "next":     next_for_tpl,
             "username": "",
             "error":    "",
+            "theme":    read_theme(request),
         },
     )
 
@@ -221,6 +222,7 @@ async def login_form(
                 "next":     next_for_tpl,
                 "username": username,   # preserved
                 "error":    msg,
+                "theme":    read_theme(request),
                 # password is intentionally absent -- never round-trips
             },
             status_code=200,
@@ -296,5 +298,6 @@ async def dashboard(
             # session_timeout_minutes from config.json -- displayed read-only
             # on the Settings page (Issue #31). Edit deferred to v1.1.
             "session_timeout": get_app_config().session_timeout_minutes,
+            "theme":           read_theme(request),
         },
     )
