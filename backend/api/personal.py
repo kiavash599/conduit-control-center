@@ -34,6 +34,7 @@ from backend.conduit.adapter import (
     apply_conduit_config,
     get_conduit_config_view,
     helper_is_safe,
+    restart,
     rollback_conduit_config,
     verify_conduit_config_health,
 )
@@ -46,6 +47,7 @@ from backend.conduit.errors import (
 )
 from backend.conduit.personal import (
     personal_create,
+    personal_restore,
     personal_show_token,
     personal_status,
 )
@@ -94,6 +96,15 @@ class CreateCompartmentRequest(BaseModel):
         if len(v) > _NAME_MAX:
             raise ValueError(f"display_name must be at most {_NAME_MAX} characters")
         return v
+
+
+class RegenerateCompartmentRequest(CreateCompartmentRequest):
+    # Inherits + validates display_name (defined above); adds a confirm flag.
+    confirm: bool = False
+
+
+class RestoreCompartmentRequest(BaseModel):
+    confirm: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -313,3 +324,167 @@ async def set_personal_max_clients(
         out = {"status": "rolled_back" if post_ok else "rollback_failed",
                "active": (reported or 0) > 0, "max_personal_clients": reported}
         return JSONResponse(status_code=(200 if post_ok else 503), content=out)
+
+
+# ---------------------------------------------------------------------------
+# Regenerate / restore (C6c) -- change the COMPARTMENT file, not the drop-in.
+# Restart (when active) uses the existing `restart` adapter directly -- NOT the
+# M2 apply path -- because the systemd drop-in is unchanged. Rollback for a
+# failed active regenerate is a COMPARTMENT .bak restore (a distinct domain from
+# the M2 drop-in rollback).
+# ---------------------------------------------------------------------------
+
+def _active_from_view(view) -> bool:
+    """active = max_personal_clients > 0 (effective if available, else configured)."""
+    eff = view.max_personal_clients.effective
+    mpc = eff if eff is not None else (view.max_personal_clients.configured or 0)
+    return mpc > 0
+
+
+async def _restart_and_verify(view) -> bool:
+    """Restart Conduit (direct adapter) and verify post-restart health. Returns
+    True iff healthy. ConduitPermissionError propagates (sudoers misconfig); any
+    other adapter/systemctl failure is treated as 'not healthy' (health-as-truth).
+    No daemon-reload, no M2 apply -- the unit/drop-in are unchanged."""
+    try:
+        await restart()
+    except ConduitPermissionError:
+        raise
+    except ConduitAdapterError:
+        return False
+    mcc = view.max_common_clients.configured
+    bw = -1 if view.bandwidth_mbps.unlimited_configured else view.bandwidth_mbps.configured
+    if mcc is None or bw is None:
+        return False
+    ok, _reason = await verify_conduit_config_health(mcc, bw)
+    return ok
+
+
+@router.post(
+    "/personal/compartment/regenerate",
+    summary="Regenerate the personal compartment (new identity; restart if active)",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
+        409: {"description": "No valid compartment / apply in progress"},
+        422: {"description": "Not confirmed / invalid display name"},
+    },
+)
+async def regenerate_personal_compartment(
+    body: RegenerateCompartmentRequest,
+    request: Request,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+) -> JSONResponse:
+    """Rotate the compartment identity (helper snapshots the previous to .bak,
+    creates a new id + runs the divergence self-check). Restart ONLY when active.
+    On an active restart/health failure, restore the previous compartment from
+    .bak and restart again. Returns the new token on success (no-store); no token
+    on rollback (re-display the active one via GET /personal/token)."""
+    if not body.confirm:
+        raise HTTPException(status_code=422, detail="Regeneration must be explicitly confirmed.")
+    try:
+        st = await personal_status()
+    except ConduitAdapterError as exc:
+        raise _http_for_personal_error(exc) from exc
+    if not (st.exists and st.valid):
+        raise HTTPException(status_code=409, detail="No valid personal compartment to regenerate.")
+    if not helper_is_safe():
+        raise HTTPException(status_code=503, detail="Config helper missing or unsafe.")
+
+    app = request.app
+    ensure_conduit_apply_lock(app)
+    lock = app.state.conduit_apply_lock
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="A configuration apply is already in progress.")
+
+    async with lock:
+        view = await get_conduit_config_view()
+        active = _active_from_view(view)
+        await set_setting(PERSONAL_COMPARTMENT_NAME_KEY, body.display_name)
+        try:
+            token = await personal_create(body.display_name)
+        except ConduitAdapterError as exc:
+            raise _http_for_personal_error(exc) from exc
+
+        if not active:
+            return _no_store({"status": "regenerated", "active": False, "token": token})
+
+        try:
+            healthy = await _restart_and_verify(view)
+        except ConduitPermissionError as exc:
+            raise _http_for_personal_error(exc) from exc
+        if healthy:
+            return _no_store({"status": "regenerated", "active": True, "token": token})
+
+        # Active restart/health failed -> restore the previous compartment (.bak)
+        # and restart again; report by post-rollback service health. No token.
+        try:
+            await personal_restore()
+        except ConduitAdapterError:
+            pass
+        try:
+            await restart()
+        except ConduitAdapterError:
+            pass
+        post_ok = await _service_healthy()
+        out = {"status": "rolled_back" if post_ok else "rollback_failed", "active": True}
+        return JSONResponse(status_code=(200 if post_ok else 503), content=out)
+
+
+@router.post(
+    "/personal/compartment/restore",
+    summary="Restore the previous compartment from .bak (restart if active)",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
+        409: {"description": "No backup / apply in progress"},
+        422: {"description": "Not confirmed"},
+    },
+)
+async def restore_personal_compartment(
+    body: RestoreCompartmentRequest,
+    request: Request,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+) -> JSONResponse:
+    """Restore the immediately-previous compartment from the helper's single-depth
+    .bak (undoes the last regenerate). Restart ONLY when active. No token (the
+    restored identity is re-displayable via GET /personal/token). There is no
+    second-level undo: an active restore that fails health returns restore_failed."""
+    if not body.confirm:
+        raise HTTPException(status_code=422, detail="Restore must be explicitly confirmed.")
+    try:
+        st = await personal_status()
+    except ConduitAdapterError as exc:
+        raise _http_for_personal_error(exc) from exc
+    if not st.backup:
+        raise HTTPException(status_code=409, detail="No previous compartment to restore.")
+    if not helper_is_safe():
+        raise HTTPException(status_code=503, detail="Config helper missing or unsafe.")
+
+    app = request.app
+    ensure_conduit_apply_lock(app)
+    lock = app.state.conduit_apply_lock
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="A configuration apply is already in progress.")
+
+    async with lock:
+        view = await get_conduit_config_view()
+        active = _active_from_view(view)
+        try:
+            await personal_restore()
+        except ConduitAdapterError as exc:
+            raise _http_for_personal_error(exc) from exc
+
+        if not active:
+            return JSONResponse(status_code=200, content={"status": "restored", "active": False})
+
+        try:
+            healthy = await _restart_and_verify(view)
+        except ConduitPermissionError as exc:
+            raise _http_for_personal_error(exc) from exc
+        if healthy:
+            return JSONResponse(status_code=200, content={"status": "restored", "active": True})
+        # Single-depth .bak: no second-level undo.
+        return JSONResponse(status_code=503, content={"status": "restore_failed", "active": True})

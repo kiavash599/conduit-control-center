@@ -52,6 +52,37 @@ def _patch_apply_chain(monkeypatch, *, health=(True, None), svc_healthy=True, ca
     monkeypatch.setattr(personal_api, "_service_healthy", _svc)
 
 
+def _patch_restart(monkeypatch, *, raises=None, calls=None):
+    async def _r():
+        if calls is not None:
+            calls.append(1)
+        if raises:
+            raise raises
+        return {"status": "restarted"}
+    monkeypatch.setattr(personal_api, "restart", _r)
+
+
+def _patch_personal_restore(monkeypatch, *, raises=None, calls=None):
+    async def _pr():
+        if calls is not None:
+            calls.append(1)
+        if raises:
+            raise raises
+    monkeypatch.setattr(personal_api, "personal_restore", _pr)
+
+
+def _patch_verify(monkeypatch, *, health=(True, None), svc_healthy=True):
+    # Mocks ONLY verify + _service_healthy (NOT apply_conduit_config/
+    # rollback_conduit_config) -- so a regenerate/restore that erroneously used the
+    # M2 apply path would hit the real (unmocked) functions and fail the test.
+    async def _verify(_m, _b, **_k):
+        return health
+    async def _svc():
+        return svc_healthy
+    monkeypatch.setattr(personal_api, "verify_conduit_config_health", _verify)
+    monkeypatch.setattr(personal_api, "_service_healthy", _svc)
+
+
 @pytest.fixture
 def client(monkeypatch):
     # In-memory settings store standing in for C1 app_settings.
@@ -338,10 +369,167 @@ def test_max_clients_personal_absent_applies_via_fallback(client, monkeypatch):
     assert r.json()["max_personal_clients"] == 5         # falls back to requested
 
 
-def test_module_has_no_restart_or_systemctl_wiring():
-    # C6a/C6b must not wire systemctl directly; restart happens ONLY through the
-    # M2 apply path (apply_conduit_config), never a direct systemctl call here.
-    # (A source substring scan would false-fail on docstrings, so check the
-    # module namespace.)
+# --- regenerate (C6c) ------------------------------------------------------
+
+def _regen(client, **body):
+    return client.post("/api/conduit/personal/compartment/regenerate", json=body)
+
+
+def test_regenerate_requires_auth(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    client.app.dependency_overrides.pop(get_current_user, None)
+    assert _regen(client, display_name="x", confirm=True).status_code == 401
+
+
+def test_regenerate_requires_csrf(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    client.app.dependency_overrides.pop(require_csrf_token, None)
+    assert _regen(client, display_name="x", confirm=True).status_code == 403
+
+
+def test_regenerate_requires_confirm(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    assert _regen(client, display_name="x", confirm=False).status_code == 422
+
+
+def test_regenerate_409_when_no_compartment(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=False))
+    assert _regen(client, display_name="x", confirm=True).status_code == 409
+
+
+def test_regenerate_inactive_returns_token_no_restart(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    _patch_view(monkeypatch, mpc_cfg=0)          # inactive
+    _patch_create(monkeypatch, token="NEW")
+    calls = []
+    _patch_restart(monkeypatch, calls=calls)
+    r = _regen(client, display_name="host", confirm=True)
+    assert r.status_code == 200
+    assert r.json() == {"status": "regenerated", "active": False, "token": "NEW"}
+    assert r.headers["cache-control"] == "no-store"
+    assert calls == []                            # no restart when inactive
+
+
+def test_regenerate_active_healthy_returns_token(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    _patch_view(monkeypatch, mpc_eff=5)           # active
+    _patch_create(monkeypatch, token="NEW")
+    calls = []
+    _patch_restart(monkeypatch, calls=calls)
+    _patch_verify(monkeypatch, health=(True, None))
+    r = _regen(client, display_name="host", confirm=True)
+    assert r.status_code == 200
+    assert r.json() == {"status": "regenerated", "active": True, "token": "NEW"}
+    assert len(calls) == 1                        # restarted once
+
+
+def test_regenerate_active_unhealthy_rolls_back(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    _patch_view(monkeypatch, mpc_eff=5)
+    _patch_create(monkeypatch, token="NEW")
+    rcalls, prcalls = [], []
+    _patch_restart(monkeypatch, calls=rcalls)
+    _patch_personal_restore(monkeypatch, calls=prcalls)
+    _patch_verify(monkeypatch, health=(False, "bad"), svc_healthy=True)
+    r = _regen(client, display_name="host", confirm=True)
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"status": "rolled_back", "active": True}
+    assert "token" not in body
+    assert prcalls == [1] and len(rcalls) == 2    # restore + 2 restarts
+
+
+def test_regenerate_active_rollback_failed_503(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    _patch_view(monkeypatch, mpc_eff=5)
+    _patch_create(monkeypatch, token="NEW")
+    _patch_restart(monkeypatch)
+    _patch_personal_restore(monkeypatch)
+    _patch_verify(monkeypatch, health=(False, "bad"), svc_healthy=False)
+    r = _regen(client, display_name="host", confirm=True)
+    assert r.status_code == 503
+    assert r.json() == {"status": "rollback_failed", "active": True}
+    assert "token" not in r.json()
+
+
+def test_regenerate_token_not_logged(client, monkeypatch, caplog):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True))
+    _patch_view(monkeypatch, mpc_cfg=0)
+    _patch_create(monkeypatch, token="SECRET_REGEN_TOKEN")
+    _patch_restart(monkeypatch)
+    with caplog.at_level("DEBUG"):
+        _regen(client, display_name="host", confirm=True)
+    assert "SECRET_REGEN_TOKEN" not in caplog.text
+
+
+# --- restore (C6c) ---------------------------------------------------------
+
+def _restore(client, **body):
+    return client.post("/api/conduit/personal/compartment/restore", json=body)
+
+
+def test_restore_requires_auth(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    client.app.dependency_overrides.pop(get_current_user, None)
+    assert _restore(client, confirm=True).status_code == 401
+
+
+def test_restore_requires_csrf(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    client.app.dependency_overrides.pop(require_csrf_token, None)
+    assert _restore(client, confirm=True).status_code == 403
+
+
+def test_restore_requires_confirm(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    assert _restore(client, confirm=False).status_code == 422
+
+
+def test_restore_409_when_no_backup(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=False))
+    assert _restore(client, confirm=True).status_code == 409
+
+
+def test_restore_inactive_no_restart(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    _patch_view(monkeypatch, mpc_cfg=0)
+    prcalls, rcalls = [], []
+    _patch_personal_restore(monkeypatch, calls=prcalls)
+    _patch_restart(monkeypatch, calls=rcalls)
+    r = _restore(client, confirm=True)
+    assert r.status_code == 200
+    assert r.json() == {"status": "restored", "active": False}
+    assert rcalls == [] and prcalls == [1]
+    assert "token" not in r.json()
+
+
+def test_restore_active_healthy(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    _patch_view(monkeypatch, mpc_eff=5)
+    _patch_personal_restore(monkeypatch)
+    rcalls = []
+    _patch_restart(monkeypatch, calls=rcalls)
+    _patch_verify(monkeypatch, health=(True, None))
+    r = _restore(client, confirm=True)
+    assert r.status_code == 200
+    assert r.json() == {"status": "restored", "active": True}
+    assert len(rcalls) == 1
+
+
+def test_restore_active_unhealthy_503(client, monkeypatch):
+    _patch_status(monkeypatch, PersonalCompartmentStatus(exists=True, valid=True, backup=True))
+    _patch_view(monkeypatch, mpc_eff=5)
+    _patch_personal_restore(monkeypatch)
+    _patch_restart(monkeypatch)
+    _patch_verify(monkeypatch, health=(False, "bad"))
+    r = _restore(client, confirm=True)
+    assert r.status_code == 503
+    assert r.json() == {"status": "restore_failed", "active": True}
+    assert "token" not in r.json()
+
+
+def test_module_has_no_direct_systemctl():
+    # Personal Mode never calls systemctl directly. C6c restarts via the `restart`
+    # ADAPTER (when active); apply_conduit_config is used only by max-clients (C6b),
+    # never for compartment ops.
     assert not hasattr(personal_api, "systemctl")
-    assert not hasattr(personal_api, "restart")
