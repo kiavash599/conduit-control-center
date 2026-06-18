@@ -119,3 +119,25 @@ class LiveStatus:
     connecting_clients: int | None = None
     idle_seconds: int | None = None
     build_rev: str | None = None
+
+
+@dataclass(frozen=True)
+class PersonalCompartmentStatus:
+    """Structural state of the personal compartment, from the C4 helper's
+    ``status`` subcommand (Personal Mode, C5).
+
+    Carries ONLY non-sensitive booleans -- never the compartment ID or a token.
+
+    Fields
+    ------
+    exists : bool
+        A ``personal_compartment.json`` file is present.
+    valid : bool
+        That file parses and its compartment ID passes validation.
+    backup : bool
+        A ``.bak`` snapshot is present (restorable previous compartment).
+    """
+
+    exists: bool = False
+    valid: bool = False
+    backup: bool = False

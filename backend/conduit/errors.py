@@ -61,3 +61,32 @@ class MetricsContractError(ConduitAdapterError):
     signal). The collector flags it (``parse_gap``) rather than fabricating a
     zero value, which would corrupt the delta ledger.
     """
+
+
+class PersonalCompartmentError(ConduitAdapterError):
+    """
+    Base for failures of the personal-compartment helper
+    (``ccc-personal-compartment``, C4/C5). Covers the helper's filesystem /
+    safety errors and Conduit subprocess errors (helper exit 3 / 4), timeouts,
+    and any unexpected non-zero exit.
+
+    The message is generic and safe for operator display: it NEVER contains the
+    pairing token, the compartment ID, or the helper's stdout.
+    """
+
+
+class PersonalValidationError(PersonalCompartmentError):
+    """
+    Raised when the helper rejects the input (helper exit 2) -- e.g. an empty,
+    over-long, or multi-line display name -- or when the adapter's own light
+    pre-check rejects it before spawning the subprocess.
+    """
+
+
+class PersonalDivergenceError(PersonalCompartmentError):
+    """
+    Raised when the helper's token divergence self-check fails (helper exit 5):
+    the helper's rebuilt token did not match Conduit's canonical output, meaning
+    the deployed token format and the helper are out of sync (an upgrade
+    signal). Fail-closed: no token is produced.
+    """
