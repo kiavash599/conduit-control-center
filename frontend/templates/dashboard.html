@@ -1198,6 +1198,49 @@
                 <p id="cc-status" class="text-sm mt-4" role="status" aria-live="polite" hidden></p>
             </div><!-- /#conduit-config-card -->
 
+            <!--
+              Personal Mode (read-only status) — C6d Slice 1.
+              Shows the personal compartment state: Not set up / Created — inactive
+              / Active. READ-ONLY in this slice: NO create, NO max-clients apply,
+              NO token, NO QR (added in later C6d slices). The display name is
+              token-bound and immutable, so it is rendered as a static label,
+              never an input.
+              JS: personal.js; API: GET /api/conduit/personal/status (refresh-on-
+              view, no polling). DOM consumed by personal.js:
+                #personal-{loading,error,body}
+                #pm-badge, #pm-name, #pm-max
+            -->
+            <div class="card" id="personal-card">
+                <div class="card__header">
+                    <h2 class="card__title">Personal mode</h2>
+                </div>
+                <p class="card__subtitle">Let trusted people use your node directly via a personal pairing identity</p>
+
+                <p id="personal-loading" class="is-loading">Loading personal mode&hellip;</p>
+                <p id="personal-error" class="panel-error" role="status" hidden>Personal mode status unavailable.</p>
+
+                <div id="personal-body" hidden>
+                    <p>
+                        <span id="pm-badge" class="badge badge--neutral">Not set up</span>
+                    </p>
+                    <dl class="status-meta status-meta--divided">
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Display name</dt>
+                            <dd class="status-meta__val" id="pm-name">&mdash;</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Max personal clients</dt>
+                            <dd class="status-meta__val" id="pm-max">&mdash;</dd>
+                        </div>
+                    </dl>
+
+                    <!-- Action controls (create / max-clients / view-share /
+                         regenerate / restore) are added in later C6d slices.
+                         Hidden placeholder. -->
+                    <div id="personal-actions" class="mt-4" hidden></div>
+                </div>
+            </div><!-- /#personal-card -->
+
         </div>
 
     </main><!-- /.main-content -->
@@ -1247,6 +1290,9 @@
 
 <!-- M1 (§6.1): read-only Conduit configuration view (Settings; refresh-on-view) -->
 <script src="{{ static_url('js/conduit_config.js') }}"></script>
+
+<!-- C6d Slice 1: read-only Personal Mode status view (Settings; refresh-on-view) -->
+<script src="{{ static_url('js/personal.js') }}"></script>
 
 <!-- Issue #43: DDNS status panel -->
 <script src="{{ static_url('js/ddns.js') }}"></script>
