@@ -4,7 +4,7 @@ Unit tests for backend/database.py
 
 Coverage:
   - get_db_path()   — dev path when prod dir absent / prod path when dir exists
-  - _TABLE_DDL      — all three tables are represented
+  - _TABLE_DDL      — all application tables are represented
   - create_tables() — creates all tables / idempotent (IF NOT EXISTS)
   - get_db()        — yields aiosqlite.Connection with row_factory set
 """
@@ -58,7 +58,12 @@ class TestGetDbPath:
 
 
 class TestTableDdl:
-    """_TABLE_DDL must define all three application tables."""
+    """_TABLE_DDL must define every application table."""
+
+    # Tables that must always be present. Single source of truth: guards against
+    # accidental schema loss (a missing/renamed table fails the presence loop)
+    # and silent drift (the count must equal this set). Add new tables here.
+    EXPECTED_TABLES = {"sessions", "failed_attempts", "audit_log", "app_settings"}
 
     def _combined(self):
         return " ".join(_TABLE_DDL).lower()
@@ -72,14 +77,21 @@ class TestTableDdl:
     def test_audit_log_table_defined(self):
         assert "audit_log" in self._combined()
 
+    def test_app_settings_table_defined(self):
+        assert "app_settings" in self._combined()
+
     def test_all_statements_use_if_not_exists(self):
         """DDL must be idempotent (safe to run on every startup)."""
         combined = self._combined()
         count = combined.count("if not exists")
         assert count == len(_TABLE_DDL)
 
-    def test_three_ddl_statements(self):
-        assert len(_TABLE_DDL) == 3
+    def test_ddl_defines_exactly_expected_tables(self):
+        """All four expected application tables present, and no silent drift."""
+        combined = self._combined()
+        for table in self.EXPECTED_TABLES:
+            assert table in combined, f"missing DDL for {table}"
+        assert len(_TABLE_DDL) == len(self.EXPECTED_TABLES)
 
 
 # ---------------------------------------------------------------------------
