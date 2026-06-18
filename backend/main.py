@@ -50,6 +50,7 @@ from backend.api import (
     advisor_router,
     auth_router,
     conduit_router,
+    personal_router,
     ddns_router,
     health_router,
     logs_router,
@@ -283,6 +284,7 @@ app.include_router(health_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(status_router, prefix="/api")
 app.include_router(conduit_router, prefix="/api/conduit")
+app.include_router(personal_router, prefix="/api/conduit")
 app.include_router(metrics_router, prefix="/api/metrics")
 app.include_router(logs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api/settings")

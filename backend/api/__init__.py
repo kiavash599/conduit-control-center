@@ -21,6 +21,7 @@ from backend.api.health import router as health_router
 from backend.api.auth import router as auth_router
 from backend.api.status import router as status_router
 from backend.api.conduit import router as conduit_router
+from backend.api.personal import router as personal_router
 from backend.api.metrics import router as metrics_router
 from backend.api.logs import router as logs_router
 from backend.api.settings import router as settings_router
@@ -33,6 +34,7 @@ __all__ = [
     "auth_router",
     "status_router",
     "conduit_router",
+    "personal_router",
     "metrics_router",
     "logs_router",
     "settings_router",
