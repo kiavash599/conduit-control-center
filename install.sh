@@ -845,7 +845,19 @@ EOF
         grep -qE "^Environment=${_t}=" "${_conduit_unit}" \
             || die "conduit.service missing default: Environment=${_t}"
     done
-    info "Reduced-mode helper + conduit.service tokens verified"
+    # ---- Personal-clients token guard (C2) --------------------------------- #
+    # ExecStart references the braced ${CCC_MAX_PERSONAL_CLIENTS}; the base unit
+    # MUST carry the =0 default so the expansion is never empty (an empty
+    # --max-personal-clients argument fails Conduit startup). The compartment ID
+    # must NOT be passed on ExecStart (Conduit auto-loads it from disk).
+    grep -qF -- "--max-personal-clients \${CCC_MAX_PERSONAL_CLIENTS}" "${_conduit_unit}" \
+        || die "conduit.service missing personal token: --max-personal-clients \${CCC_MAX_PERSONAL_CLIENTS}"
+    grep -qE "^Environment=CCC_MAX_PERSONAL_CLIENTS=0$" "${_conduit_unit}" \
+        || die "conduit.service missing default: Environment=CCC_MAX_PERSONAL_CLIENTS=0"
+    if grep -qF -- "--compartment-id" "${_conduit_unit}"; then
+        die "conduit.service must NOT pass --compartment-id (auto-loaded from personal_compartment.json)"
+    fi
+    info "Reduced-mode + personal-clients helper/unit tokens verified"
 
     # ---- 2x-f  Enable and start Conduit ------------------------------------ #
     step "2x-f — Enabling and starting conduit service"

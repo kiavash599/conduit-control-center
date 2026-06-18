@@ -50,6 +50,13 @@ WorkingDirectory=/var/lib/conduit
 # braced form to $VAR (that would whitespace-split the value).
 Environment=CCC_MAX_COMMON_CLIENTS=50
 Environment=CCC_BANDWIDTH_MBPS=40
+# Personal-clients knob (Personal Mode, C2). Default 0 = personal mode OFF;
+# Conduit ignores any personal compartment until this is > 0. CCC overrides it
+# the same way as the knobs above (a single Environment= line in the drop-in,
+# written by the root helper). The compartment ID is NOT passed here: Conduit
+# auto-loads it from /var/lib/conduit/data/personal_compartment.json, keeping the
+# shareable ID out of the unit and the journal.
+Environment=CCC_MAX_PERSONAL_CLIENTS=0
 # Reduced-window knobs (BS1). Empty times + zero limits = reduced mode OFF.
 # CCC overrides these the same way as the knobs above: ONLY Environment= lines
 # in the drop-in, written by the root helper ccc-apply-conduit-config. The
@@ -63,6 +70,7 @@ ExecStart=/opt/conduit/conduit start \
     --data-dir /var/lib/conduit/data \
     --metrics-addr 127.0.0.1:9090 \
     --max-common-clients ${CCC_MAX_COMMON_CLIENTS} \
+    --max-personal-clients ${CCC_MAX_PERSONAL_CLIENTS} \
     --bandwidth ${CCC_BANDWIDTH_MBPS} \
     --set InproxyReducedStartTime=${CCC_REDUCED_START} \
     --set InproxyReducedEndTime=${CCC_REDUCED_END} \

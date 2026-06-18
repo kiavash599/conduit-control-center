@@ -269,6 +269,33 @@ def test_conduit_unit_has_reduced_knobs():
         assert tok in unit, tok
 
 
+def test_conduit_unit_has_personal_clients_knob():
+    # Personal Mode (C2): the shipped unit must define the =0 default and the
+    # braced ExecStart token that consumes it, must NOT pass --compartment-id
+    # (auto-loaded from disk), and must keep the existing reduced --set tokens
+    # (no regression). The =0 default is mandatory: without it the braced
+    # ${CCC_MAX_PERSONAL_CLIENTS} would expand empty and fail Conduit startup.
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    unit = (repo / "deployment" / "conduit.service").read_text()
+
+    # Default present and exactly 0 (whole-line match).
+    assert any(
+        ln.strip() == "Environment=CCC_MAX_PERSONAL_CLIENTS=0"
+        for ln in unit.splitlines()
+    ), "missing Environment=CCC_MAX_PERSONAL_CLIENTS=0"
+
+    # ExecStart token present and BRACED (one argument, no shell split).
+    assert "--max-personal-clients ${CCC_MAX_PERSONAL_CLIENTS}" in unit
+    assert "--max-personal-clients $CCC_MAX_PERSONAL_CLIENTS " not in unit  # no unbraced form
+
+    # Compartment ID must never be on ExecStart.
+    assert "--compartment-id" not in unit
+
+    # Regression guard: a couple of the reduced tokens remain present.
+    assert "--set InproxyReducedStartTime=${CCC_REDUCED_START}" in unit
+    assert "Environment=CCC_MAX_COMMON_CLIENTS=50" in unit
+
+
 def test_unit_has_only_narrow_readwritepaths():
     # conduit-cc.service keeps ProtectSystem=strict and adds ONLY the narrow
     # drop-in dir to ReadWritePaths (never broad /etc/systemd).

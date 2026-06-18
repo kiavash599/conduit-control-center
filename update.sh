@@ -1096,7 +1096,21 @@ phase_bs1_reduced_guard() {
                 || die "conduit.service is missing default: Environment=${_t}" \
                        "Aborting to roll back to the previous working unit."
         done
-        info "conduit.service has all reduced --set tokens + CCC_REDUCED_* defaults"
+        # Personal-clients token + default (C2). The base unit MUST carry the =0
+        # default so the braced ${CCC_MAX_PERSONAL_CLIENTS} never expands empty
+        # (an empty --max-personal-clients argument fails Conduit startup). The
+        # compartment ID must NOT be on ExecStart (auto-loaded from disk).
+        grep -qF -- "--max-personal-clients \${CCC_MAX_PERSONAL_CLIENTS}" "${_unit_dst}" \
+            || die "conduit.service is missing personal token: --max-personal-clients \${CCC_MAX_PERSONAL_CLIENTS}" \
+                   "Aborting to roll back to the previous working unit."
+        grep -qE "^Environment=CCC_MAX_PERSONAL_CLIENTS=0$" "${_unit_dst}" \
+            || die "conduit.service is missing default: Environment=CCC_MAX_PERSONAL_CLIENTS=0" \
+                   "Aborting to roll back to the previous working unit."
+        if grep -qF -- "--compartment-id" "${_unit_dst}"; then
+            die "conduit.service must NOT pass --compartment-id (auto-loaded from personal_compartment.json)" \
+                "Aborting to roll back to the previous working unit."
+        fi
+        info "conduit.service has all reduced + personal-clients tokens + defaults"
     else
         info "Conduit unit not installed here — skipping unit token guard"
     fi
