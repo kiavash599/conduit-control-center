@@ -25,7 +25,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from backend.api.conduit import ensure_conduit_apply_lock
+from backend.api.conduit import (
+    _reduced_dict,
+    _service_healthy,
+    ensure_conduit_apply_lock,
+)
+from backend.conduit.adapter import (
+    apply_conduit_config,
+    get_conduit_config_view,
+    helper_is_safe,
+    rollback_conduit_config,
+    verify_conduit_config_health,
+)
+from backend.conduit.config_validation import validate_max_personal_clients
 from backend.conduit.errors import (
     ConduitAdapterError,
     ConduitPermissionError,
@@ -62,6 +74,12 @@ class PersonalStatusResponse(BaseModel):
     valid: bool
     backup_exists: bool
     display_name: str | None
+    max_personal_clients: int          # effective if available, else configured
+    active: bool                       # compartment_exists AND max_personal > 0
+
+
+class MaxClientsRequest(BaseModel):
+    max_personal_clients: int
 
 
 class CreateCompartmentRequest(BaseModel):
@@ -124,11 +142,16 @@ async def get_personal_status(
     except ConduitAdapterError as exc:
         raise _http_for_personal_error(exc) from exc
     name = await get_setting(PERSONAL_COMPARTMENT_NAME_KEY)
+    view = await get_conduit_config_view()
+    eff = view.max_personal_clients.effective
+    mpc = eff if eff is not None else (view.max_personal_clients.configured or 0)
     return PersonalStatusResponse(
         compartment_exists=st.exists,
         valid=st.valid,
         backup_exists=st.backup,
         display_name=name,
+        max_personal_clients=mpc,
+        active=(st.exists and mpc > 0),
     )
 
 
@@ -190,3 +213,103 @@ async def get_personal_token(
     except ConduitAdapterError as exc:
         raise _http_for_personal_error(exc) from exc
     return _no_store({"token": token})
+
+
+@router.put(
+    "/personal/max-clients",
+    summary="Enable/disable/adjust the personal-client limit (restart via M2)",
+    responses={
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
+        409: {"description": "No valid compartment (when enabling) / apply in progress"},
+        422: {"description": "max_personal_clients out of range"},
+    },
+)
+async def set_personal_max_clients(
+    body: MaxClientsRequest,
+    request: Request,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+) -> JSONResponse:
+    """Set CCC_MAX_PERSONAL_CLIENTS via the M2 apply path (restart + health +
+    rollback). Full-set merge: preserves max_common/bandwidth/reduced; changes
+    ONLY the personal knob. No token, no compartment ID. 0 disables; N>0
+    enables/adjusts. A value equal to the current configured one is a no-op (no
+    restart). Reuses the shared apply-lock; introduces no new restart mechanism."""
+    n, err = validate_max_personal_clients(body.max_personal_clients)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+
+    # Ordering guard: never write max>0 without a valid compartment (Conduit
+    # would refuse to start). Checked BEFORE acquiring the apply-lock.
+    if n > 0:
+        try:
+            st = await personal_status()
+        except ConduitAdapterError as exc:
+            raise _http_for_personal_error(exc) from exc
+        if not (st.exists and st.valid):
+            raise HTTPException(
+                status_code=409,
+                detail="Create a valid personal compartment before enabling Personal Mode.",
+            )
+
+    if not helper_is_safe():
+        raise HTTPException(status_code=503, detail="Config helper missing or unsafe.")
+
+    app = request.app
+    ensure_conduit_apply_lock(app)
+    lock = app.state.conduit_apply_lock
+    if lock.locked():
+        raise HTTPException(status_code=409, detail="A configuration apply is already in progress.")
+
+    async with lock:
+        view = await get_conduit_config_view()
+        mcc = view.max_common_clients.configured
+        bw = -1 if view.bandwidth_mbps.unlimited_configured else view.bandwidth_mbps.configured
+        if mcc is None or bw is None:
+            raise HTTPException(status_code=503, detail="Cannot read current Conduit configuration.")
+
+        current = view.max_personal_clients.configured or 0
+        if current == n:
+            # No change -> no restart.
+            return JSONResponse(
+                status_code=200,
+                content={"status": "no-op", "active": n > 0, "max_personal_clients": n},
+            )
+
+        # Full-set merge: preserve mcc/bw/reduced; change only the personal knob.
+        red = _reduced_dict(view)
+        await apply_conduit_config(
+            mcc, bw,
+            max_personal_clients=n,
+            reduced_start_min=red["start_min"],
+            reduced_end_min=red["end_min"],
+            reduced_max_common=red["reduced_max_common_clients"],
+            reduced_bandwidth_mbps=red["reduced_bandwidth_mbps"],
+        )
+        ok, _reason = await verify_conduit_config_health(mcc, bw)
+
+        # C6b hardening: confirm the personal limit actually took effect. When the
+        # conduit_max_personal_clients metric is PRESENT it must equal the request;
+        # ABSENCE is not a failure -- fall back to the mcc/bw-only result (the same
+        # health-as-truth posture used for reduced-mode, which has no metric).
+        eff = (await get_conduit_config_view()).max_personal_clients.effective
+        personal_ok = (eff is None) or (eff == n)
+
+        if ok and personal_ok:
+            reported = eff if eff is not None else n
+            return JSONResponse(
+                status_code=200,
+                content={"status": "applied", "active": (reported or 0) > 0,
+                         "max_personal_clients": reported},
+            )
+
+        # mcc/bw health OR personal-effective verification failed -> roll back;
+        # decide rolled_back vs rollback_failed by post-rollback service health.
+        await rollback_conduit_config()
+        post_ok = await _service_healthy()
+        eff = (await get_conduit_config_view()).max_personal_clients.effective
+        reported = eff if eff is not None else current
+        out = {"status": "rolled_back" if post_ok else "rollback_failed",
+               "active": (reported or 0) > 0, "max_personal_clients": reported}
+        return JSONResponse(status_code=(200 if post_ok else 503), content=out)

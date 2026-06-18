@@ -44,7 +44,8 @@ def test_shape_and_in_sync(monkeypatch):
     r = c.get("/api/conduit/config")
     assert r.status_code == 200
     j = r.json()
-    assert set(j) == {"service_status", "drift", "max_common_clients", "bandwidth_mbps", "reduced"}
+    assert set(j) == {"service_status", "drift", "max_common_clients", "bandwidth_mbps",
+                      "max_personal_clients", "reduced"}
     assert j["service_status"] == "running"
     assert j["drift"] is False
     assert j["max_common_clients"] == {
@@ -55,6 +56,20 @@ def test_shape_and_in_sync(monkeypatch):
         "enabled": False, "start": None, "end": None,
         "max_common_clients": None, "bandwidth_mbps": None,
     }
+
+
+def test_config_includes_max_personal_clients(monkeypatch):
+    # D6 / C6b: the read-only config view surfaces configured + effective personal.
+    view = ConduitConfigView(
+        service_status="running",
+        max_common_clients=ConfigField(50, 50),
+        bandwidth_mbps=ConfigField(40, 40),
+        max_personal_clients=ConfigField(25, 25),
+    )
+    c = _client(monkeypatch, view)
+    j = c.get("/api/conduit/config").json()
+    assert j["max_personal_clients"]["configured"] == 25
+    assert j["max_personal_clients"]["effective"] == 25
 
 
 def test_reduced_enabled_serialized(monkeypatch):

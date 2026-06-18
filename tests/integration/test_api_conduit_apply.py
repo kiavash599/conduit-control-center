@@ -209,6 +209,24 @@ def test_apply_reduced_invalid_422(monkeypatch):
     assert r.status_code == 422 and r.json()["valid"] is False
 
 
+def test_config_apply_preserves_max_personal(monkeypatch):
+    # Symmetric full-set merge (C6b): a config-only change (bandwidth) must NOT
+    # silently disable Personal Mode -- the helper call must carry the CURRENT
+    # max_personal value (the drop-in is monolithic).
+    view = ConduitConfigView(
+        service_status="running",
+        max_common_clients=ConfigField(50, 50),
+        bandwidth_mbps=ConfigField(40, 40),
+        max_personal_clients=ConfigField(25, 25),
+    )
+    cap = {}
+    c = _client(monkeypatch, view=view, capture=cap)
+    r = c.post("/api/conduit/config/apply",
+               json={"max_common_clients": 50, "bandwidth_mbps": 80})
+    assert r.status_code == 200
+    assert cap["max_personal_clients"] == 25   # preserved, not clobbered to 0
+
+
 def test_apply_reduced_max_exceeds_mcc_422(monkeypatch):
     c = _client(monkeypatch, view=_view(50, 50, 40, 40))
     r = c.post("/api/conduit/config/apply", json={

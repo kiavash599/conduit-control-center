@@ -127,6 +127,7 @@ class ConduitConfigResponse(BaseModel):
     drift: bool | None = None
     max_common_clients: ConfigFieldOut
     bandwidth_mbps: ConfigFieldOut
+    max_personal_clients: ConfigFieldOut = ConfigFieldOut()   # D6 / C6b
     reduced: ReducedConfigOut = ReducedConfigOut()
 
 
@@ -152,6 +153,11 @@ async def get_conduit_config(
             configured=bw.configured, effective=bw.effective, drift=bw.drift,
             unlimited_configured=bw.unlimited_configured,
             unlimited_effective=bw.unlimited_effective,
+        ),
+        max_personal_clients=ConfigFieldOut(
+            configured=view.max_personal_clients.configured,
+            effective=view.max_personal_clients.effective,
+            drift=view.max_personal_clients.drift,
         ),
         reduced=ReducedConfigOut(
             enabled=red.enabled, start=red.start, end=red.end,
@@ -460,6 +466,11 @@ async def apply_config(
         # values, the apply succeeded regardless of rc.
         rc, err = await apply_conduit_config(
             nmcc, nbw,
+            # Symmetric full-set merge (C6b): the drop-in is monolithic, so a
+            # config write must PRESERVE the current max_personal_clients or it
+            # would silently disable Personal Mode. This endpoint never changes
+            # the personal knob -- it only carries the current value through.
+            max_personal_clients=(view.max_personal_clients.configured or 0),
             reduced_start_min=normalized["start_min"],
             reduced_end_min=normalized["end_min"],
             reduced_max_common=normalized["reduced_max_common_clients"],

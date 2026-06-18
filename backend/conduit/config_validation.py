@@ -44,6 +44,18 @@ def validate_max_common_clients(value: object) -> tuple[int | None, str | None]:
     return value, None
 
 
+def validate_max_personal_clients(value: object) -> tuple[int | None, str | None]:
+    """Return (normalized_int, None) or (None, error_message). Range 0..1000.
+
+    0 disables Personal Mode; N>0 enables/adjusts it. Parity with the root helper
+    ccc-apply-conduit-config (MPC_MIN/MPC_MAX)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None, "max_personal_clients must be an integer"
+    if value < MPC_MIN or value > MPC_MAX:
+        return None, f"max_personal_clients must be between {MPC_MIN} and {MPC_MAX}"
+    return value, None
+
+
 def validate_bandwidth_mbps(
     value: object, *, max_mbps: int = DEFAULT_BW_MAX_MBPS
 ) -> tuple[int | None, str | None]:

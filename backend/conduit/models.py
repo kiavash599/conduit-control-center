@@ -60,10 +60,18 @@ class ConduitConfigView:
     service_status: str  # "running" | "stopped" | "starting" | "stopping" | "error" | "unknown"
     max_common_clients: ConfigField
     bandwidth_mbps: ConfigField
+    # Personal Mode (D6 / C6b). Configured from CCC_MAX_PERSONAL_CLIENTS;
+    # effective from the conduit_max_personal_clients gauge. Defaults to
+    # unknown/unknown so existing positional constructions keep working.
+    max_personal_clients: ConfigField = field(
+        default_factory=lambda: ConfigField(configured=None, effective=None)
+    )
     reduced: ReducedConfigView = field(default_factory=ReducedConfigView)
 
     @property
     def drift(self) -> bool | None:
+        # Drift aggregate is the config-write knobs only (max_personal has no
+        # config-write path here; its own .drift is available on the field).
         drifts = [self.max_common_clients.drift, self.bandwidth_mbps.drift]
         if any(d is True for d in drifts):
             return True

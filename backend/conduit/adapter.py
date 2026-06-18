@@ -926,6 +926,7 @@ _METRIC_CONNECTED_CLIENTS  = "conduit_connected_clients"
 _METRIC_CONNECTING_CLIENTS = "conduit_connecting_clients"
 _METRIC_IDLE_SECONDS       = "conduit_idle_seconds"
 _METRIC_MAX_COMMON_CLIENTS = "conduit_max_common_clients"
+_METRIC_MAX_PERSONAL_CLIENTS = "conduit_max_personal_clients"  # D6 / C6b
 _METRIC_ANNOUNCING         = "conduit_announcing"
 
 # build_rev is a label on the conduit_build_info gauge:
@@ -1368,18 +1369,22 @@ async def get_conduit_config_view() -> ConduitConfigView:
 
     eff_mcc = _optional_int(text, _METRIC_MAX_COMMON_CLIENTS) if text else None
     eff_bw_bps = _optional_int(text, _METRIC_BANDWIDTH_LIMIT) if text else None
+    eff_mpc = _optional_int(text, _METRIC_MAX_PERSONAL_CLIENTS) if text else None
 
     # Configured values: Environment is authoritative post-M2 (ExecStart prints
     # the literal ${VAR}). Fall back to ExecStart argv only for pre-M2 units.
     env = _parse_environment(await _read_configured_environment())
     cfg_mcc = _env_int(env, "CCC_MAX_COMMON_CLIENTS")
     cfg_bw = _env_int(env, "CCC_BANDWIDTH_MBPS")
-    if cfg_mcc is None or cfg_bw is None:
+    cfg_mpc = _env_int(env, "CCC_MAX_PERSONAL_CLIENTS")
+    if cfg_mcc is None or cfg_bw is None or cfg_mpc is None:
         argv = _argv_from_execstart(await _read_configured_execstart())
         if cfg_mcc is None:
             cfg_mcc = _flag_int(argv, "--max-common-clients")
         if cfg_bw is None:
             cfg_bw = _flag_int(argv, "--bandwidth")
+        if cfg_mpc is None:
+            cfg_mpc = _flag_int(argv, "--max-personal-clients")
 
     # Configured-only reduced window (BS1). No effective/runtime metric exists;
     # read the CCC_REDUCED_* knobs from the same authoritative Environment. The
@@ -1412,6 +1417,7 @@ async def get_conduit_config_view() -> ConduitConfigView:
             unlimited_configured=(cfg_bw == -1),
             unlimited_effective=(eff_bw_bps == 0),
         ),
+        max_personal_clients=ConfigField(configured=cfg_mpc, effective=eff_mpc),
         reduced=reduced,
     )
 
@@ -1496,6 +1502,7 @@ async def apply_conduit_config(
     max_common_clients: int,
     bandwidth_mbps: int,
     *,
+    max_personal_clients: int = 0,
     reduced_start_min: int = -1,
     reduced_end_min: int = -1,
     reduced_max_common: int = 0,
@@ -1506,11 +1513,17 @@ async def apply_conduit_config(
     Reduced-window args are integers only (the helper formats HH:MM itself) and
     default to the disabled sentinel, preserving the original two-knob call. The
     API always passes the full state (BS1 Commit 2).
+
+    ``max_personal_clients`` (C6b) is an integer COUNT only (the helper is
+    ID-free). Because the drop-in is monolithic, every caller MUST pass the
+    current value to avoid clobbering Personal Mode (default 0 only for legacy
+    callers that predate Personal Mode).
     """
     return await _run_helper(
         "apply",
         "--max-common-clients", str(int(max_common_clients)),
         "--bandwidth-mbps", str(int(bandwidth_mbps)),
+        "--max-personal-clients", str(int(max_personal_clients)),
         "--reduced-start-min", str(int(reduced_start_min)),
         "--reduced-end-min", str(int(reduced_end_min)),
         "--reduced-max-common", str(int(reduced_max_common)),

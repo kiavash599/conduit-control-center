@@ -126,3 +126,14 @@ def test_validate_reduced_parity_with_helper():
     assert (cv.BW_MIN, cv.DEFAULT_BW_MAX_MBPS) == (helper.BW_MIN, helper.BW_MAX)
     # Personal-clients range parity (C3).
     assert (cv.MPC_MIN, cv.MPC_MAX) == (helper.MPC_MIN, helper.MPC_MAX)
+
+
+def test_validate_max_personal_clients():
+    from backend.conduit.config_validation import validate_max_personal_clients as v
+    assert v(0) == (0, None)
+    assert v(1000) == (1000, None)
+    assert v(25) == (25, None)
+    assert v(-1)[0] is None
+    assert v(1001)[0] is None
+    assert v(True)[0] is None        # bool rejected
+    assert v("5")[0] is None         # non-int rejected
