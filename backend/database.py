@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -89,7 +90,66 @@ _TABLE_DDL: list[str] = [
         detail     TEXT
     )
     """,
+    # Application settings -- non-secret key/value metadata (Personal Mode, C1).
+    # Holds ONLY benign, operator-set labels that must survive restart and do not
+    # belong in Conduit's own files. NEVER store secrets, pairing tokens, or
+    # compartment IDs here.
+    """
+    CREATE TABLE IF NOT EXISTS app_settings (
+        key        TEXT     PRIMARY KEY,
+        value      TEXT     NOT NULL,
+        updated_at DATETIME NOT NULL
+    )
+    """,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Application settings (key/value) -- non-secret metadata
+# ---------------------------------------------------------------------------
+# A tiny key/value store for non-secret, operator-set metadata. Introduced for
+# Personal Mode's display name (the compartment label shown to paired clients).
+#
+# Storage contract (do not weaken):
+#   * Non-secret values ONLY -- benign labels such as a display name.
+#   * NEVER store pairing tokens, compartment IDs, private keys, or any secret.
+#     The compartment ID lives in Conduit's 0600 personal_compartment.json and is
+#     read on demand; pairing tokens are rebuilt in memory and never persisted.
+#   * Keys are namespaced by feature (e.g. personal_*).
+
+# Known keys.
+PERSONAL_COMPARTMENT_NAME_KEY = "personal_compartment_name"
+
+
+async def get_setting(key: str, default: str | None = None) -> str | None:
+    """Return the stored value for *key*, or *default* if the key is absent."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+    return row["value"] if row is not None else default
+
+
+async def set_setting(key: str, value: str) -> None:
+    """Insert or update *key* with *value* (upsert), stamping updated_at in UTC.
+
+    Idempotent for a given (key, value): re-setting the same key overwrites the
+    previous value in place (single row per key, enforced by the PRIMARY KEY).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value      = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, now),
+        )
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
