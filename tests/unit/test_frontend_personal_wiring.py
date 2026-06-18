@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: MIT
-"""C6d static/presence wiring for the Personal Mode card (Slice 1 + Slice 2).
+"""C6d static/presence wiring for the Personal Mode card (Slices 1–3).
 
 Pure file-content assertions (no app import, no runtime): the dashboard template
-exposes the element ids personal.js consumes, the module is wired after
-conduit_config.js, and it is CSP-safe + token-safe. Slice 2 adds the create
-flow, so POST is now legitimate (PUT/DELETE are not), and a guard enforces that
-the module never references the pairing token (`.token`). Guards the wiring in
-CI ("static green") without a JS test toolchain.
+exposes the element ids personal.js consumes, the scripts are wired in the right
+order, and the module is CSP-safe + token-lifecycle-safe.
+
+Slice 3 adds the token panel + client-side QR, so personal.js now legitimately
+reads the token from GET /token to render it; the Slice-2 `.token`-absent guard
+is therefore replaced by lifecycle guards: the module must not persist or log the
+token (no localStorage / sessionStorage / cookie write / console), and it must
+clear the token on close. Guards the wiring in CI ("static green") without a JS
+test toolchain.
 """
 from __future__ import annotations
 
@@ -51,13 +55,25 @@ def test_personal_create_ids_present():
         assert needle in html, needle
 
 
-def test_personal_js_script_included_after_conduit_config():
+def test_personal_token_ids_present():
+    html = _dashboard()
+    for needle in (
+        'id="pm-view-btn"',
+        'id="pm-token-panel"',
+        'id="pm-token-text"',
+        'id="pm-qr"',
+        'id="pm-token-close"',
+    ):
+        assert needle in html, needle
+
+
+def test_script_order_qrcodegen_then_personal_after_config():
     html = _dashboard()
     cc = html.find("js/conduit_config.js")
+    qr = html.find("js/vendor/qrcodegen.js")
     pj = html.find("js/personal.js")
-    assert cc != -1, "conduit_config.js script missing"
-    assert pj != -1, "personal.js script missing"
-    assert pj > cc, "personal.js must load after conduit_config.js"
+    assert cc != -1 and qr != -1 and pj != -1
+    assert cc < qr < pj, "load order must be conduit_config.js -> qrcodegen.js -> personal.js"
 
 
 def test_personal_js_exists_and_reads_status():
@@ -75,15 +91,27 @@ def test_personal_js_create_wiring():
     assert "X-CSRF-Token" in js
 
 
-def test_personal_js_is_csp_safe_and_token_safe():
+def test_personal_js_token_wiring():
     js = _personal_js()
-    # CSP-safe: no DOM-injection sink, no eval. Match ".innerHTML", not the bare
-    # word (which appears in the module docstring).
+    assert "/api/conduit/personal/token" in js
+    assert "qrcodegen.QrCode.encodeText" in js
+    assert "closeTokenPanel" in js
+
+
+def test_personal_js_is_csp_safe_and_token_lifecycle_safe():
+    js = _personal_js()
+    # CSP-safe: no DOM-injection sink, no eval/Function. Match ".innerHTML",
+    # not the bare word (which appears in the module docstring).
     assert ".innerHTML" not in js
     assert "eval(" not in js
-    # Token-safe: Slice 2 must never read the pairing token from the response.
-    assert ".token" not in js
-    # Slice 2 uses POST (create) only; no other mutating verbs yet.
+    assert "Function(" not in js
+    assert "document.write" not in js
+    # Token-lifecycle-safe: never persist or log the token.
+    assert "localStorage" not in js
+    assert "sessionStorage" not in js
+    assert "document.cookie =" not in js   # getCsrf only reads document.cookie
+    assert "console" not in js
+    # Slice 3 uses GET (status/token) + POST (create) only; no PUT/DELETE yet.
     for verb in (
         "method: 'PUT'", "method: 'DELETE'",
         'method: "PUT"', 'method: "DELETE"',

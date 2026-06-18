@@ -1256,8 +1256,29 @@
                     <!-- Guidance / create result (textContent set by personal.js). -->
                     <p id="pm-status" class="text-sm mt-4" role="status" aria-live="polite" hidden></p>
 
-                    <!-- Action controls (max-clients / view-share / regenerate /
-                         restore) are added in later C6d slices. Hidden placeholder. -->
+                    <!-- View / share token (C6d Slice 3): the button is visible only
+                         once a compartment exists (personal.js toggles from GET
+                         status). It opens the inline panel below, which fetches the
+                         token on demand (GET /personal/token) and renders a
+                         client-side QR (vendored Nayuki qrcodegen). The token exists
+                         only in runtime memory while the panel is open and is removed
+                         from the DOM on close and on navigation away. -->
+                    <div id="pm-view" class="mt-4">
+                        <button type="button" id="pm-view-btn" class="btn btn--secondary" hidden>View / share token</button>
+                    </div>
+
+                    <div id="pm-token-panel" class="mt-4" hidden>
+                        <p class="text-sm">Pairing token — share only with people you trust. You can reopen this any time.</p>
+                        <p id="pm-token-text" class="font-mono log-line"></p>
+                        <div id="pm-qr" class="mt-2"></div>
+                        <p class="text-warning text-sm">Anyone with this token can use your personal slots.</p>
+                        <div class="mt-2">
+                            <button type="button" id="pm-token-close" class="btn btn--secondary">Close</button>
+                        </div>
+                    </div>
+
+                    <!-- Action controls (max-clients / regenerate / restore) are
+                         added in later C6d slices. Hidden placeholder. -->
                     <div id="personal-actions" class="mt-4" hidden></div>
                 </div>
             </div><!-- /#personal-card -->
@@ -1312,7 +1333,11 @@
 <!-- M1 (§6.1): read-only Conduit configuration view (Settings; refresh-on-view) -->
 <script src="{{ static_url('js/conduit_config.js') }}"></script>
 
-<!-- C6d Slice 1: read-only Personal Mode status view (Settings; refresh-on-view) -->
+<!-- C6d Slice 3: vendored Nayuki qrcodegen v1.8.0 (MIT) — client-side QR for the
+     personal pairing token. Same-origin (script-src 'self'); loaded before personal.js. -->
+<script src="{{ static_url('js/vendor/qrcodegen.js') }}"></script>
+
+<!-- C6d Slices 1–3: Personal Mode (read-only status, create flow, token/QR) -->
 <script src="{{ static_url('js/personal.js') }}"></script>
 
 <!-- Issue #43: DDNS status panel -->
