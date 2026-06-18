@@ -644,6 +644,18 @@ RATELIMIT_EOF
         "Config helper ownership/perms wrong (${helper_meta}); expected root:755"
     info "Config helper installed (root:root 0755)"
 
+    # ---- 2l-pc  Personal compartment helper (C4) --------------------------- #
+    # Separate helper for the Personal Compartment identity. Runs AS conduit (via
+    # the (conduit) sudoers grant below), NEVER root. Must be root-owned and NOT
+    # writable by ${APP_USER} or conduit.
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-personal-compartment" \
+        /opt/conduit-cc/bin/ccc-personal-compartment
+    pc_helper_meta="$(stat -c '%U:%a' /opt/conduit-cc/bin/ccc-personal-compartment)"
+    [ "${pc_helper_meta}" = "root:755" ] || die \
+        "Personal compartment helper ownership/perms wrong (${pc_helper_meta}); expected root:755"
+    info "Personal compartment helper installed (root:root 0755)"
+
     # ---- 2l  sudoers rule for Conduit controls ----------------------------- #
     # adapter.py calls "sudo systemctl start|stop|restart conduit" and, for the
     # M2 config write path, "sudo /opt/conduit-cc/bin/ccc-apply-conduit-config".
@@ -657,6 +669,7 @@ ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl start conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl stop conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart conduit
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-apply-conduit-config
+${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-personal-compartment
 EOF
     chmod 440 "${SUDOERS_FILE}"
     visudo -cf "${SUDOERS_FILE}" || die \

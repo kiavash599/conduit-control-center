@@ -1023,6 +1023,22 @@ phase_m2_config_write_artifacts() {
         warn "config helper not in source (${_helper_src}) — skipping helper install"
     fi
 
+    # (4b) Personal compartment helper (C4). Root-owned 0755; run AS conduit via
+    # the (conduit) grant below. Not writable by ${_app_user} or conduit.
+    local _pc_helper_src="${SOURCE_DIR}/deployment/bin/ccc-personal-compartment"
+    local _pc_helper_dst="/opt/conduit-cc/bin/ccc-personal-compartment"
+    if [[ -f "${_pc_helper_src}" ]]; then
+        step "M2-a2 — Installing personal compartment helper"
+        install -o root -g root -m 0755 "${_pc_helper_src}" "${_pc_helper_dst}"
+        local _pcm
+        _pcm="$(stat -c '%U:%G:%a' "${_pc_helper_dst}")"
+        [[ "${_pcm}" == "root:root:755" ]] || die \
+            "Personal compartment helper ownership/perms wrong (${_pcm}); expected root:root:755"
+        info "Personal compartment helper installed (root:root 0755)"
+    else
+        warn "personal compartment helper not in source (${_pc_helper_src}) — skipping"
+    fi
+
     # (5-6) Exact sudoers helper grant; append-if-missing; 0440; visudo -c.
     if [[ -f "${_sudoers}" ]]; then
         if ! grep -qF "${_helper_dst}" "${_sudoers}"; then
@@ -1034,6 +1050,17 @@ phase_m2_config_write_artifacts() {
             info "sudoers helper grant added + validated"
         else
             info "sudoers helper grant already present"
+        fi
+        # (6b) Personal compartment grant (C4): runas=conduit (NOT root).
+        if ! grep -qF "(conduit) NOPASSWD: ${_pc_helper_dst}" "${_sudoers}"; then
+            step "M2-b2 — Adding personal compartment sudoers grant"
+            printf '%s\n' "${_app_user} ALL=(conduit) NOPASSWD: ${_pc_helper_dst}" >> "${_sudoers}"
+            chown root:root "${_sudoers}"
+            chmod 440 "${_sudoers}"
+            visudo -cf "${_sudoers}" || die "sudoers syntax check failed after adding personal grant"
+            info "personal compartment sudoers grant added + validated"
+        else
+            info "personal compartment sudoers grant already present"
         fi
     else
         warn "${_sudoers} missing — run install.sh; skipping sudoers grant"

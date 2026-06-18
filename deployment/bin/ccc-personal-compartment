@@ -1,0 +1,370 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-personal-compartment -- privileged helper for the Personal Compartment
+identity (Personal Mode, C4). Runs AS the `conduit` user (sudo -u conduit),
+NEVER as root: least privilege, since the only resources are conduit-owned
+(/var/lib/conduit/data, mode 0700; files 0600). Separate from the M2 helper
+ccc-apply-conduit-config, which stays Environment-only / count-only /
+compartment-ID-free.
+
+Security contract (do not weaken):
+  * argv-only; NEVER a shell (no os.system / shell=True / eval).
+  * Subcommands: only `create`, `status`, `restore-bak`, `show-token`.
+  * Hardcoded conduit binary, data dir, file/bak/lock paths; NEVER a path arg.
+  * The raw compartment ID NEVER leaves this process: never printed, never
+    logged, never placed in argv or exception text. Only the displayable pairing
+    TOKEN (create / show-token) is emitted, on THIS process's stdout, which CCC
+    captures over a pipe -- never inherited to journald.
+  * NEVER opens the Conduit private-key file (only personal_compartment.json +
+    its .bak); the key file's name is not even referenced in this helper.
+  * The display name is read from STDIN (never argv), validated (non-empty,
+    <=32 Unicode scalars, single line, no control characters).
+  * Conduit's compartment write is NOT atomic (os.WriteFile in compartment.go);
+    `create` snapshots a .bak first, re-reads + validates the result, and
+    restores the .bak (or clears a fresh file) on ANY failure. The helper's own
+    .bak snapshot / restore use temp + fsync + os.replace (atomic).
+  * Serialized with an flock on a conduit-writable lock in the data dir.
+  * Token divergence self-check: at `create` the helper rebuilds the token from
+    the persisted ID + name and compares it byte-for-byte to Conduit's canonical
+    stdout token; on mismatch it FAILS CLOSED (reverts, emits no token, exit 5).
+  * Conduit stdout/stderr are PIPE-captured (never inherited); only the parsed
+    token is re-emitted; no ID/token is ever logged.
+
+Exit codes: 0 ok; 2 validation/usage; 3 filesystem/safety; 4 conduit/subprocess;
+5 token divergence.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import logging
+import logging.handlers
+import os
+import subprocess
+import sys
+import tempfile
+import unicodedata
+
+try:
+    import fcntl
+except ImportError:  # non-Linux (e.g. Windows CI importing for the pure tests)
+    fcntl = None  # production runs on Linux; _acquire_lock requires fcntl there
+
+# --- Hardcoded, non-overridable constants (no path ever comes from argv) ---
+CONDUIT_BIN = "/opt/conduit/conduit"
+DATA_DIR = "/var/lib/conduit/data"
+COMPARTMENT_FILE = DATA_DIR + "/personal_compartment.json"
+BAK_FILE = COMPARTMENT_FILE + ".bak"
+# Lock lives in the conduit-owned data dir (this helper runs AS conduit, which
+# owns DATA_DIR 0700; it cannot write /etc/conduit-cc, owned by conduit-cc).
+LOCK_FILE = DATA_DIR + "/.ccc-personal-compartment.lock"
+
+NAME_MAX = 32                 # Unicode scalars; matches PersonalPairingNameMaxLength
+ID_LEN = 43                   # base64 RawStd of 32 bytes
+ID_BYTE_LEN = 32
+TOKEN_VERSION = "1"
+CONDUIT_TIMEOUT_S = 30
+
+# Characters Go's encoding/json escapes beyond <,>,& : the line/paragraph
+# separators U+2028/U+2029. We reject them as "not a single line" so the only
+# escaping the rebuilder must replicate is <,>,& (legitimate in names).
+_LINE_SEPARATORS = (0x0A, 0x0D, 0x2028, 0x2029)
+
+EXIT_OK, EXIT_USAGE, EXIT_FS, EXIT_CONDUIT, EXIT_DIVERGENCE = 0, 2, 3, 4, 5
+
+
+def _make_logger() -> logging.Logger:
+    logging.raiseExceptions = False
+    log = logging.getLogger("ccc-personal-compartment")
+    log.setLevel(logging.INFO)
+    if sys.platform == "linux":
+        try:
+            h = logging.handlers.SysLogHandler(address="/dev/log")
+            h.setFormatter(logging.Formatter("ccc-personal-compartment: %(message)s"))
+            log.addHandler(h)
+        except OSError:
+            pass
+    log.addHandler(logging.StreamHandler(sys.stderr))
+    return log
+
+
+LOG = _make_logger()
+
+
+def _fail(code: int, msg: str) -> None:
+    # msg is ALWAYS a generic, non-sensitive string -- never an ID or token.
+    LOG.error(msg)
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _valid_id(cid: object) -> bool:
+    """True iff cid is a 43-char unpadded standard-base64 32-byte value."""
+    if not isinstance(cid, str) or len(cid) != ID_LEN:
+        return False
+    if any(c in "-_=" for c in cid):     # url-safe chars / padding are invalid
+        return False
+    try:
+        raw = base64.b64decode(cid + "=", validate=True)
+    except (ValueError, Exception):
+        return False
+    return len(raw) == ID_BYTE_LEN
+
+
+def _validate_name(raw: str) -> str:
+    name = (raw or "").strip()
+    if not name:
+        _fail(EXIT_USAGE, "display name is empty")
+    if any(ord(c) in _LINE_SEPARATORS for c in name):
+        _fail(EXIT_USAGE, "display name must be a single line")
+    if any(unicodedata.category(c).startswith("C") for c in name):
+        _fail(EXIT_USAGE, "display name contains control characters")
+    if len(name) > NAME_MAX:
+        _fail(EXIT_USAGE, f"display name must be at most {NAME_MAX} characters")
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Token builder (byte-identical to Conduit BuildPersonalPairingToken)
+# ---------------------------------------------------------------------------
+
+def _build_token(cid: str, name: str) -> str:
+    """base64url(no pad) of compact JSON {"v":"1","data":{"id":..,"name":..}}.
+
+    Replicates Go encoding/json: compact separators, key order v,data{id,name},
+    and the default HTML escaping of <, >, & -- so the rebuilt token matches
+    Conduit's output for every valid name. (U+2028/U+2029, the other characters
+    Go escapes, are rejected by _validate_name as line separators, so they can
+    never reach here.)
+    """
+    data = json.dumps(
+        {"v": TOKEN_VERSION, "data": {"id": cid, "name": name}},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    data = (data.replace("<", "\\u003c")
+                .replace(">", "\\u003e")
+                .replace("&", "\\u0026"))
+    return base64.urlsafe_b64encode(data.encode("utf-8")).rstrip(b"=").decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# Filesystem helpers (atomic; O_NOFOLLOW)
+# ---------------------------------------------------------------------------
+
+def _acquire_lock() -> int:
+    if fcntl is None:  # Linux-only; never reached in production (runs on the Pi)
+        _fail(EXIT_FS, "file locking unavailable (fcntl missing) -- Linux required")
+    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def _read_bytes_nofollow(path: str) -> bytes | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _fail(EXIT_FS, f"cannot open file: {exc}")
+    with os.fdopen(fd, "rb") as f:
+        return f.read()
+
+
+def _atomic_write(path: str, data: bytes) -> None:
+    fd, tmp = tempfile.mkstemp(dir=DATA_DIR, prefix=".ccc-pc-tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        _fail(EXIT_FS, f"atomic write failed: {exc}")
+
+
+def _read_validated_id_from(path: str) -> str | None:
+    """Return the validated compartment ID from `path`, or None. Never logs it."""
+    data = _read_bytes_nofollow(path)
+    if data is None:
+        return None
+    try:
+        obj = json.loads(data)
+        cid = obj.get("id")
+    except (ValueError, AttributeError):
+        return None
+    return cid if _valid_id(cid) else None
+
+
+def _snapshot_bak() -> None:
+    data = _read_bytes_nofollow(COMPARTMENT_FILE)
+    if data is not None:
+        _atomic_write(BAK_FILE, data)
+
+
+def _restore_or_clear(had_prior: bool) -> None:
+    """Revert after a failed create/regenerate without leaking anything."""
+    if had_prior:
+        data = _read_bytes_nofollow(BAK_FILE)
+        if data is not None:
+            _atomic_write(COMPARTMENT_FILE, data)
+            return
+    # Fresh create (no prior) or no usable .bak -> remove any partial file.
+    try:
+        os.unlink(COMPARTMENT_FILE)
+    except FileNotFoundError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Conduit invocation (PIPE-captured; never inherited)
+# ---------------------------------------------------------------------------
+
+def _run_conduit(args: list[str]) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(
+            [CONDUIT_BIN, *args],
+            capture_output=True, text=True, shell=False, timeout=CONDUIT_TIMEOUT_S,
+        )  # noqa: S603
+    except FileNotFoundError:
+        _fail(EXIT_CONDUIT, "conduit binary not found")
+    except subprocess.TimeoutExpired:
+        _fail(EXIT_CONDUIT, "conduit timed out")
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _parse_share_token(stdout: str) -> str | None:
+    lines = stdout.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip() == "Share token:" and i + 1 < len(lines):
+            return lines[i + 1].strip()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+def cmd_create(name: str) -> None:
+    name = _validate_name(name)
+    lock = _acquire_lock()
+    try:
+        had_prior = os.path.exists(COMPARTMENT_FILE)
+        if had_prior:
+            _snapshot_bak()
+
+        rc, out, _err = _run_conduit(
+            ["new-compartment-id", "--name", name, "--data-dir", DATA_DIR]
+        )
+        if rc != 0:
+            _restore_or_clear(had_prior)
+            _fail(EXIT_CONDUIT, "conduit new-compartment-id failed")
+
+        cid = _read_validated_id_from(COMPARTMENT_FILE)
+        if cid is None:
+            _restore_or_clear(had_prior)
+            _fail(EXIT_FS, "generated compartment file is missing or invalid")
+
+        canonical = _parse_share_token(out)
+        if not canonical:
+            _restore_or_clear(had_prior)
+            _fail(EXIT_CONDUIT, "could not read share token from conduit output")
+
+        # Divergence self-check: helper rebuild must match Conduit byte-for-byte.
+        if _build_token(cid, name) != canonical:
+            _restore_or_clear(had_prior)
+            _fail(EXIT_DIVERGENCE,
+                  "token format mismatch (helper rebuild != conduit); update required")
+
+        sys.stdout.write(canonical + "\n")   # token only, to the captured pipe
+        LOG.info("personal compartment created (divergence check ok)")
+    finally:
+        os.close(lock)
+
+
+def cmd_status() -> None:
+    lock = _acquire_lock()
+    try:
+        exists = os.path.exists(COMPARTMENT_FILE)
+        valid = (_read_validated_id_from(COMPARTMENT_FILE) is not None) if exists else False
+        backup = os.path.exists(BAK_FILE)
+        # Non-sensitive booleans only -- no ID, no token.
+        sys.stdout.write(
+            "exists=%s\nvalid=%s\nbackup=%s\n"
+            % (str(exists).lower(), str(valid).lower(), str(backup).lower())
+        )
+    finally:
+        os.close(lock)
+
+
+def cmd_restore_bak() -> None:
+    lock = _acquire_lock()
+    try:
+        if not os.path.exists(BAK_FILE):
+            _fail(EXIT_FS, "no backup to restore")
+        if _read_validated_id_from(BAK_FILE) is None:
+            _fail(EXIT_FS, "backup compartment is invalid; refusing to restore")
+        data = _read_bytes_nofollow(BAK_FILE)
+        if data is None:
+            _fail(EXIT_FS, "backup disappeared during restore")
+        _atomic_write(COMPARTMENT_FILE, data)
+        LOG.info("personal compartment restored from backup")
+        sys.stdout.write("restored=true\n")
+    finally:
+        os.close(lock)
+
+
+def cmd_show_token(name: str) -> None:
+    name = _validate_name(name)
+    lock = _acquire_lock()
+    try:
+        cid = _read_validated_id_from(COMPARTMENT_FILE)
+        if cid is None:
+            _fail(EXIT_FS, "no valid personal compartment")
+        # Builder validated at create-time; re-display reuses it. Token only.
+        sys.stdout.write(_build_token(cid, name) + "\n")
+    finally:
+        os.close(lock)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def _read_name_from_stdin() -> str:
+    # Name arrives on STDIN (never argv) so it is absent from the process list.
+    return sys.stdin.read()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="ccc-personal-compartment", add_help=True)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("create")        # name via stdin
+    sub.add_parser("status")
+    sub.add_parser("restore-bak")
+    sub.add_parser("show-token")    # name via stdin
+    args = parser.parse_args(argv)
+
+    if args.cmd == "create":
+        cmd_create(_read_name_from_stdin())
+    elif args.cmd == "status":
+        cmd_status()
+    elif args.cmd == "restore-bak":
+        cmd_restore_bak()
+    elif args.cmd == "show-token":
+        cmd_show_token(_read_name_from_stdin())
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
