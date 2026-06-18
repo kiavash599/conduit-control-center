@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
-"""C6d Slice 1: static/presence wiring for the read-only Personal Mode card.
+"""C6d static/presence wiring for the Personal Mode card (Slice 1 + Slice 2).
 
 Pure file-content assertions (no app import, no runtime): the dashboard template
-exposes the element ids personal.js consumes, the personal.js module exists and
-is read-only + CSP-safe (no innerHTML / eval, no write verbs), and the script is
-wired after conduit_config.js. Guards the Slice 1 wiring in CI ("static green")
-without introducing a JS test toolchain.
+exposes the element ids personal.js consumes, the module is wired after
+conduit_config.js, and it is CSP-safe + token-safe. Slice 2 adds the create
+flow, so POST is now legitimate (PUT/DELETE are not), and a guard enforces that
+the module never references the pairing token (`.token`). Guards the wiring in
+CI ("static green") without a JS test toolchain.
 """
 from __future__ import annotations
 
@@ -38,6 +39,18 @@ def test_personal_card_ids_present():
         assert needle in html, needle
 
 
+def test_personal_create_ids_present():
+    html = _dashboard()
+    for needle in (
+        'id="personal-create"',
+        'id="pm-create-name"',
+        'id="pm-create-error"',
+        'id="pm-create-btn"',
+        'id="pm-status"',
+    ):
+        assert needle in html, needle
+
+
 def test_personal_js_script_included_after_conduit_config():
     html = _dashboard()
     cc = html.find("js/conduit_config.js")
@@ -54,14 +67,25 @@ def test_personal_js_exists_and_reads_status():
     assert "/api/conduit/personal/status" in js
 
 
-def test_personal_js_is_read_only_and_csp_safe():
+def test_personal_js_create_wiring():
     js = _personal_js()
-    # Slice 1 is read-only and CSP-safe: no DOM injection, no eval, no writes.
-    # Match the actual sink (".innerHTML"), not the word in the file's docstring.
+    assert "/api/conduit/personal/compartment" in js
+    assert "method: 'POST'" in js
+    assert "getCsrf" in js
+    assert "X-CSRF-Token" in js
+
+
+def test_personal_js_is_csp_safe_and_token_safe():
+    js = _personal_js()
+    # CSP-safe: no DOM-injection sink, no eval. Match ".innerHTML", not the bare
+    # word (which appears in the module docstring).
     assert ".innerHTML" not in js
     assert "eval(" not in js
+    # Token-safe: Slice 2 must never read the pairing token from the response.
+    assert ".token" not in js
+    # Slice 2 uses POST (create) only; no other mutating verbs yet.
     for verb in (
-        "method: 'POST'", "method: 'PUT'", "method: 'DELETE'",
-        'method: "POST"', 'method: "PUT"', 'method: "DELETE"',
+        "method: 'PUT'", "method: 'DELETE'",
+        'method: "PUT"', 'method: "DELETE"',
     ):
         assert verb not in js, verb

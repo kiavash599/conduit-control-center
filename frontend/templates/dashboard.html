@@ -1234,9 +1234,30 @@
                         </div>
                     </dl>
 
-                    <!-- Action controls (create / max-clients / view-share /
-                         regenerate / restore) are added in later C6d slices.
-                         Hidden placeholder. -->
+                    <!-- Create flow (C6d Slice 2): shown only in the "Not set up"
+                         state (personal.js toggles from GET status). The display
+                         name participates in pairing-token generation and is
+                         immutable after creation, so it is editable ONLY here —
+                         there is no rename control in any other state. -->
+                    <div id="personal-create" hidden>
+                        <div class="form-group">
+                            <label class="form-label" for="pm-create-name">Display name (1–32 characters)</label>
+                            <input class="form-input" type="text" id="pm-create-name"
+                                   maxlength="32" autocomplete="off" inputmode="text">
+                            <p class="form-hint">Shown to people you pair with. This becomes part of the
+                               pairing identity and cannot be changed later (only regenerated).</p>
+                        </div>
+                        <p id="pm-create-error" class="text-danger text-sm" role="alert" hidden></p>
+                        <div class="mt-2">
+                            <button type="button" id="pm-create-btn" class="btn btn--primary">Create personal identity</button>
+                        </div>
+                    </div>
+
+                    <!-- Guidance / create result (textContent set by personal.js). -->
+                    <p id="pm-status" class="text-sm mt-4" role="status" aria-live="polite" hidden></p>
+
+                    <!-- Action controls (max-clients / view-share / regenerate /
+                         restore) are added in later C6d slices. Hidden placeholder. -->
                     <div id="personal-actions" class="mt-4" hidden></div>
                 </div>
             </div><!-- /#personal-card -->
