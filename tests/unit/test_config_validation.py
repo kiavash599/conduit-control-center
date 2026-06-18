@@ -124,3 +124,5 @@ def test_validate_reduced_parity_with_helper():
     # And the existing MCC/BW ranges (previously comment-only parity).
     assert (cv.MCC_MIN, cv.MCC_MAX) == (helper.MCC_MIN, helper.MCC_MAX)
     assert (cv.BW_MIN, cv.DEFAULT_BW_MAX_MBPS) == (helper.BW_MIN, helper.BW_MAX)
+    # Personal-clients range parity (C3).
+    assert (cv.MPC_MIN, cv.MPC_MAX) == (helper.MPC_MIN, helper.MPC_MAX)

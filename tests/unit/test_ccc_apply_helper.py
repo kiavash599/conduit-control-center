@@ -269,6 +269,109 @@ def test_conduit_unit_has_reduced_knobs():
         assert tok in unit, tok
 
 
+# ---------------------------------------------------------------------------
+# Personal-clients knob (C3): integer COUNT only, never a compartment ID.
+# ---------------------------------------------------------------------------
+
+
+def test_render_personal_explicit_value():
+    mod = _load()
+    out = mod._render(50, 40, mpc=5).decode()
+    assert "Environment=CCC_MAX_PERSONAL_CLIENTS=5" in out
+    assert "ExecStart" not in out
+
+
+def test_render_personal_defaults_to_zero():
+    mod = _load()
+    out = mod._render(50, 40).decode()
+    assert "Environment=CCC_MAX_PERSONAL_CLIENTS=0" in out
+
+
+def test_validate_mpc_range():
+    mod = _load()
+    assert mod._validate_mpc(0) == 0          # off (inclusive min)
+    assert mod._validate_mpc(1000) == 1000    # inclusive max
+    for bad in (-1, 1001):
+        with pytest.raises(SystemExit):
+            mod._validate_mpc(bad)
+
+
+def test_main_apply_threads_personal(monkeypatch):
+    mod = _load()
+    captured = {}
+    monkeypatch.setattr(
+        mod, "cmd_apply",
+        lambda mcc, bw, reduced, mpc=0: captured.update(mcc=mcc, bw=bw, mpc=mpc),
+    )
+    mod.main(["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40",
+              "--max-personal-clients", "7"])
+    assert captured["mpc"] == 7
+
+
+def test_main_omitted_personal_defaults_zero(monkeypatch):
+    mod = _load()
+    captured = {}
+    monkeypatch.setattr(
+        mod, "cmd_apply",
+        lambda mcc, bw, reduced, mpc=0: captured.update(mpc=mpc),
+    )
+    mod.main(["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40"])
+    assert captured["mpc"] == 0
+
+
+def test_main_rejects_out_of_range_personal():
+    mod = _load()
+    for bad in ("-1", "1001"):
+        with pytest.raises(SystemExit):
+            mod.main(["apply", "--max-common-clients", "50",
+                      "--bandwidth-mbps", "40", "--max-personal-clients", bad])
+
+
+def test_helper_rejects_compartment_id_argument():
+    # The helper must NEVER accept a compartment ID flag (argparse rejects it).
+    mod = _load()
+    with pytest.raises(SystemExit):
+        mod.main(["apply", "--max-common-clients", "50", "--bandwidth-mbps", "40",
+                  "--compartment-id", "AAAA"])
+
+
+def test_render_has_no_compartment_identifiers():
+    mod = _load()
+    out = mod._render(50, 40, mpc=5).decode().lower()
+    assert "compartment" not in out
+    assert "--compartment-id" not in out
+
+
+def test_render_personal_and_reduced_coexist():
+    mod = _load()
+    reduced = mod._validate_reduced(120, 360, 10, 15, 50)  # 02:00-06:00 UTC
+    out = mod._render(50, 40, reduced=reduced, mpc=8).decode()
+    assert "Environment=CCC_MAX_PERSONAL_CLIENTS=8" in out
+    assert "Environment=CCC_REDUCED_START=02:00" in out
+    assert "Environment=CCC_REDUCED_MAXCOMMON=10" in out
+    assert "ExecStart" not in out
+
+
+@_linux_only
+def test_apply_logs_mpc_count_not_compartment(tmp_path, monkeypatch):
+    mod = _load()
+    _setup(mod, tmp_path, monkeypatch)
+    logs = []
+
+    class _Rec:
+        def info(self, fmt, *a):
+            logs.append(fmt % a)
+
+        def error(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(mod, "LOG", _Rec())
+    mod.cmd_apply(50, 40, mpc=6)
+    joined = " ".join(logs).lower()
+    assert "mpc=6" in joined
+    assert "compartment" not in joined
+
+
 def test_conduit_unit_has_personal_clients_knob():
     # Personal Mode (C2): the shipped unit must define the =0 default and the
     # braced ExecStart token that consumes it, must NOT pass --compartment-id

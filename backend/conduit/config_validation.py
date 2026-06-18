@@ -14,6 +14,11 @@ from __future__ import annotations
 
 MCC_MIN = 1
 MCC_MAX = 1000
+# Max personal clients (0 = personal mode off). Parity: MUST match the root
+# wrapper ccc-apply-conduit-config (MPC_MIN/MPC_MAX); a parity test asserts it.
+# C3 defines the range only; the validator function lands with the API (C6).
+MPC_MIN = 0
+MPC_MAX = 1000
 BW_UNLIMITED = -1
 BW_MIN = 1
 DEFAULT_BW_MAX_MBPS = 1000  # soft cap; must match the wrapper's BW_MAX

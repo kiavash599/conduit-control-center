@@ -7,7 +7,17 @@ line). The SOLE trust boundary for writing Conduit's CCC-managed config.
 Security contract (do not weaken):
   * argv-only; NEVER a shell (no os.system / shell=True / eval).
   * Subcommands: only `apply` and `rollback`.
-  * apply accepts ONLY --max-common-clients N and --bandwidth-mbps M (ints).
+  * apply accepts ONLY integer knobs: --max-common-clients N, --bandwidth-mbps M,
+    and the optional --max-personal-clients P (default 0). Personal clients are
+    an integer COUNT only: the helper NEVER accepts, writes, or logs a compartment
+    ID, and NEVER takes --compartment-id. The compartment ID lives solely in
+    personal_compartment.json, auto-loaded by Conduit (never in the unit/drop-in).
+  * STATELESS by design: the helper does NOT read the existing drop-in and does
+    NOT merge/preserve unspecified values -- it renders exactly the knobs it is
+    given (omitted optional knobs render their disabled default). The CALLER is
+    responsible for passing the full current knob set on every apply: future
+    callers (C6) must read current values -> merge the requested change -> apply
+    the complete set, or unrelated settings will be reset. (No merge logic here.)
   * Hardcoded drop-in path and unit name; NEVER takes a path or unit argument.
   * Writes ONLY Environment= lines to the drop-in; NEVER ExecStart or any other
     directive; integer values emitted as %d. The only string values are the
@@ -53,8 +63,9 @@ LOCK_PATH = "/etc/conduit-cc/ccc-apply-conduit-config.lock"
 UNIT = "conduit"
 SYSTEMCTL = "/usr/bin/systemctl"
 
-# Ranges -- MUST match backend/conduit/config_validation.py.
+# Ranges -- MUST match backend/conduit/config_validation.py (parity test asserts).
 MCC_MIN, MCC_MAX = 1, 1000
+MPC_MIN, MPC_MAX = 0, 1000            # max personal clients (0 = personal mode off)
 BW_UNLIMITED, BW_MIN, BW_MAX = -1, 1, 1000
 # Reduced-window ranges (BS1). Times are minutes-since-midnight, UTC.
 # Disabled sentinel: start=-1, end=-1, reduced-max=0, reduced-bandwidth=0.
@@ -93,6 +104,13 @@ LOG = _make_logger()
 def _validate_mcc(value: int) -> int:
     if value < MCC_MIN or value > MCC_MAX:
         _fail(EXIT_USAGE, f"max-common-clients out of range ({MCC_MIN}..{MCC_MAX}): {value}")
+    return value
+
+
+def _validate_mpc(value: int) -> int:
+    # Integer count only (0 = personal mode off). Never a compartment ID.
+    if value < MPC_MIN or value > MPC_MAX:
+        _fail(EXIT_USAGE, f"max-personal-clients out of range ({MPC_MIN}..{MPC_MAX}): {value}")
     return value
 
 
@@ -207,22 +225,25 @@ def _atomic_write(path: str, data: bytes) -> None:
         _fail(EXIT_FS, f"atomic write failed: {exc}")
 
 
-def _render(mcc: int, bw: int, reduced=REDUCED_OFF) -> bytes:
+def _render(mcc: int, bw: int, reduced=REDUCED_OFF, mpc: int = 0) -> bytes:
     # Integers via %d. The only strings are the reduced start/end, which are
     # either "" or a helper-formatted HH:MM (validated in _hhmm) -- never a raw
     # argv string -- so no newline/directive injection is possible. Defaulting
-    # `reduced` to OFF keeps the original two-argument M2 apply behaviour.
+    # `reduced` to OFF and `mpc` to 0 keeps the original two-argument M2 apply
+    # behaviour. mpc is an integer COUNT only -- never a compartment ID (Conduit
+    # auto-loads that from personal_compartment.json; it is never written here).
     start_str, end_str, rmax, up_bps, down_bps = reduced
     return (
         "[Service]\n"
         "Environment=CCC_MAX_COMMON_CLIENTS=%d\n"
+        "Environment=CCC_MAX_PERSONAL_CLIENTS=%d\n"
         "Environment=CCC_BANDWIDTH_MBPS=%d\n"
         "Environment=CCC_REDUCED_START=%s\n"
         "Environment=CCC_REDUCED_END=%s\n"
         "Environment=CCC_REDUCED_MAXCOMMON=%d\n"
         "Environment=CCC_REDUCED_UP=%d\n"
         "Environment=CCC_REDUCED_DOWN=%d\n"
-        % (mcc, bw, start_str, end_str, rmax, up_bps, down_bps)
+        % (mcc, mpc, bw, start_str, end_str, rmax, up_bps, down_bps)
     ).encode("ascii")
 
 
@@ -236,22 +257,23 @@ def _systemctl(*args: str) -> None:
         _fail(EXIT_SYSTEMCTL, f"systemctl {' '.join(args)} not runnable: {exc}")
 
 
-def cmd_apply(mcc: int, bw: int, reduced=REDUCED_OFF) -> None:
+def cmd_apply(mcc: int, bw: int, reduced=REDUCED_OFF, mpc: int = 0) -> None:
     _assert_safe_dir()
     lock = _acquire_lock()
     try:
         _backup_existing()
-        _atomic_write(DROPIN_PATH, _render(mcc, bw, reduced))
+        _atomic_write(DROPIN_PATH, _render(mcc, bw, reduced, mpc=mpc))
         _systemctl("daemon-reload")
         _systemctl("restart", UNIT)
+        # mpc is a non-secret integer count; no compartment info is ever logged.
         start_str, end_str, rmax, up_bps, _down = reduced
         if start_str:
             LOG.info(
-                "apply ok: mcc=%d bw=%d reduced=%s-%s UTC max=%d up=down=%d",
-                mcc, bw, start_str, end_str, rmax, up_bps,
+                "apply ok: mcc=%d mpc=%d bw=%d reduced=%s-%s UTC max=%d up=down=%d",
+                mcc, mpc, bw, start_str, end_str, rmax, up_bps,
             )
         else:
-            LOG.info("apply ok: mcc=%d bw=%d reduced=off", mcc, bw)
+            LOG.info("apply ok: mcc=%d mpc=%d bw=%d reduced=off", mcc, mpc, bw)
     finally:
         os.close(lock)
 
@@ -283,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("--max-common-clients", type=int, required=True)
     p_apply.add_argument("--bandwidth-mbps", type=int, required=True)
+    # Personal clients (C3): OPTIONAL integer count, default 0 (= personal mode
+    # off), so the original two-argument M2 apply still works and renders 0.
+    # Integer only -- the helper NEVER accepts a compartment ID or --compartment-id
+    # (Conduit auto-loads the ID from personal_compartment.json).
+    p_apply.add_argument("--max-personal-clients", type=int, default=0)
     # Reduced-window args are OPTIONAL with a disabled default, so the original
     # two-argument M2 apply call still works and renders the window OFF.
     p_apply.add_argument("--reduced-start-min", type=int, default=-1)
@@ -296,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "apply":
         mcc = _validate_mcc(args.max_common_clients)
         bw = _validate_bw(args.bandwidth_mbps)
+        mpc = _validate_mpc(args.max_personal_clients)
         reduced = _validate_reduced(
             args.reduced_start_min,
             args.reduced_end_min,
@@ -303,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
             args.reduced_bandwidth_mbps,
             mcc,
         )
-        cmd_apply(mcc, bw, reduced)
+        cmd_apply(mcc, bw, reduced, mpc=mpc)
     elif args.cmd == "rollback":
         cmd_rollback()
     return EXIT_OK
