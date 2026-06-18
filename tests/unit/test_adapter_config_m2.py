@@ -85,6 +85,31 @@ async def test_reader_falls_back_to_execstart(monkeypatch):
     assert v.bandwidth_mbps.configured == 40
 
 
+async def test_reader_no_execstart_fallback_for_missing_personal(monkeypatch):
+    # Env has MCC/BW but NOT CCC_MAX_PERSONAL_CLIENTS (e.g. a pre-C2 M2 unit):
+    # ExecStart must NOT be read (env-preferred invariant), and personal defaults
+    # to 0 (Personal Mode off). Regression for the C6b reader change.
+    monkeypatch.setattr(adp, "_fetch_metrics_text", lambda _u: "conduit_max_common_clients 50\n")
+
+    async def _env():
+        return "Environment=CCC_MAX_COMMON_CLIENTS=200 CCC_BANDWIDTH_MBPS=80"
+
+    async def _exec():
+        raise AssertionError("ExecStart fallback must not be used for a missing personal knob")
+
+    async def _status():
+        return "running"
+
+    monkeypatch.setattr(adp, "_read_configured_environment", _env)
+    monkeypatch.setattr(adp, "_read_configured_execstart", _exec)
+    monkeypatch.setattr(adp, "get_status", _status)
+
+    v = await adp.get_conduit_config_view()
+    assert v.max_personal_clients.configured == 0
+    assert v.max_common_clients.configured == 200
+    assert v.bandwidth_mbps.configured == 80
+
+
 # --------------------------- reduced apply (BS1) ---------------------------
 async def test_apply_passes_reduced_args(monkeypatch):
     captured = {}

@@ -1377,7 +1377,11 @@ async def get_conduit_config_view() -> ConduitConfigView:
     cfg_mcc = _env_int(env, "CCC_MAX_COMMON_CLIENTS")
     cfg_bw = _env_int(env, "CCC_BANDWIDTH_MBPS")
     cfg_mpc = _env_int(env, "CCC_MAX_PERSONAL_CLIENTS")
-    if cfg_mcc is None or cfg_bw is None or cfg_mpc is None:
+    # ExecStart fallback is ONLY for pre-M2 units (no CCC_* Environment). A
+    # missing personal knob must NOT trigger it -- that would break the
+    # env-preferred invariant -- so the fallback condition stays MCC/BW-only and
+    # CCC_MAX_PERSONAL_CLIENTS simply defaults to 0 (Personal Mode off) when absent.
+    if cfg_mcc is None or cfg_bw is None:
         argv = _argv_from_execstart(await _read_configured_execstart())
         if cfg_mcc is None:
             cfg_mcc = _flag_int(argv, "--max-common-clients")
@@ -1385,6 +1389,8 @@ async def get_conduit_config_view() -> ConduitConfigView:
             cfg_bw = _flag_int(argv, "--bandwidth")
         if cfg_mpc is None:
             cfg_mpc = _flag_int(argv, "--max-personal-clients")
+    if cfg_mpc is None:
+        cfg_mpc = 0
 
     # Configured-only reduced window (BS1). No effective/runtime metric exists;
     # read the CCC_REDUCED_* knobs from the same authoritative Environment. The
