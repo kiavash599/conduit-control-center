@@ -1,0 +1,139 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-ryve-claim -- privileged helper for the Ryve Claim QR (Epic #3, R1).
+Runs AS the `conduit` user (sudo -u conduit), NEVER as root.
+
+KEY-GRADE security contract (do not weaken):
+  * The Ryve claim QR encodes the station identity (data.key). It is treated as
+    PRIVATE-KEY-GRADE: never persisted, never echoed, never written to a log.
+  * argv-only; NEVER a shell. Hardcoded conduit binary + data dir. The ONLY flag
+    passed to `ryve-claim` is --output, pointing at a UNIQUE /tmp (tmpfs) path.
+  * umask 077 is set BEFORE the temp PNG is created (owner-only 0600).
+  * The temp PNG is UNLINKED immediately after it is read into memory; it never
+    lands in the persistent Conduit data dir.
+  * Conduit's stdout/stderr are PIPE-captured and NEVER inherited, printed, or
+    written out verbatim. Only two NON-secret parsed fields (station name, proxy
+    id) and the raw PNG bytes are emitted, in a binary-safe frame on THIS
+    process's stdout, which CCC captures over a pipe.
+  * Raw PNG bytes only -- no encoding step. No log calls. Errors are generic and
+    content-free (never include Conduit output, paths, or key/QR material).
+
+Output frame (binary-safe) on stdout:
+    CCC-RYVE-CLAIM/1\n
+    station_name: <single line>\n
+    proxy_id: <single line>\n
+    png_len: <N>\n
+    \n
+    <exactly N raw PNG bytes; PNG magic validated before emission>
+
+Exit codes: 0 ok; 2 usage; 3 filesystem/safety; 4 conduit/subprocess.
+"""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+# --- Hardcoded, non-overridable constants (no path ever comes from argv) ---
+CONDUIT_BIN = "/opt/conduit/conduit"
+DATA_DIR = "/var/lib/conduit/data"          # passed via -d only; NEVER an --output target
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_TIMEOUT_S = 30
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_FS = 3
+EXIT_CONDUIT = 4
+
+
+def _fail(code, msg):
+    # Generic, content-free: never includes Conduit output, a path-with-content,
+    # or any key/QR material.
+    sys.stderr.write("ccc-ryve-claim: " + msg + "\n")
+    raise SystemExit(code)
+
+
+def _parse_field(text, label):
+    # Strict single-line capture of a NON-secret label (station name / proxy id).
+    # Non-printable characters are dropped; the value is capped. The QR/warning
+    # lines are never matched by this and are otherwise discarded.
+    m = re.search(r"(?im)^\s*" + re.escape(label) + r"\s*:\s*(.+?)\s*$", text)
+    if not m:
+        return ""
+    val = "".join(ch for ch in m.group(1) if ch.isprintable())
+    return val[:128]
+
+
+def main(argv):
+    if len(argv) > 1:
+        _fail(EXIT_USAGE, "no arguments accepted")
+
+    # umask 077 BEFORE creating the temp file -> owner-only (0600).
+    os.umask(0o077)
+
+    # Unique /tmp (tmpfs via the service's PrivateTmp) path. Reserve a unique
+    # name and close our fd; ryve-claim writes the PNG to this path via --output.
+    fd, tmp_path = tempfile.mkstemp(prefix="ccc-ryve-", suffix=".png", dir="/tmp")
+    os.close(fd)
+
+    png = b""
+    try:
+        try:
+            proc = subprocess.run(
+                [CONDUIT_BIN, "-d", DATA_DIR, "ryve-claim", "--output", tmp_path],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=_TIMEOUT_S,
+                check=False,
+            )
+        except FileNotFoundError:
+            _fail(EXIT_CONDUIT, "conduit binary not found")
+        except subprocess.TimeoutExpired:
+            _fail(EXIT_CONDUIT, "ryve-claim timed out")
+
+        if proc.returncode != 0:
+            # NEVER include proc.stdout/stderr (key warning + QR) in the message.
+            _fail(EXIT_CONDUIT, "ryve-claim failed")
+
+        # Parse ONLY the two non-secret fields from captured stdout; the rest of
+        # the output is discarded (never emitted, never written to a log).
+        captured = proc.stdout.decode("utf-8", "replace")
+        station_name = _parse_field(captured, "Station Name")
+        proxy_id = _parse_field(captured, "Proxy ID")
+
+        try:
+            with open(tmp_path, "rb") as fh:
+                png = fh.read()
+        except OSError:
+            _fail(EXIT_FS, "could not read generated image")
+    finally:
+        # Unlink the temp PNG IMMEDIATELY, regardless of outcome.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if not png.startswith(PNG_MAGIC):
+        _fail(EXIT_FS, "generated image is not a valid PNG")
+
+    # Binary-safe frame: fixed ASCII header + blank line + exact raw PNG bytes.
+    header = (
+        "CCC-RYVE-CLAIM/1\n"
+        "station_name: " + station_name + "\n"
+        "proxy_id: " + proxy_id + "\n"
+        "png_len: " + str(len(png)) + "\n"
+        "\n"
+    ).encode("ascii", "replace")
+    out = sys.stdout.buffer
+    out.write(header)
+    out.write(png)
+    out.flush()
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

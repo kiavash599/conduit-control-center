@@ -1039,6 +1039,22 @@ phase_m2_config_write_artifacts() {
         warn "personal compartment helper not in source (${_pc_helper_src}) — skipping"
     fi
 
+    # (4c) Ryve claim helper (Epic #3, R1). Root-owned 0755; run AS conduit via
+    # the (conduit) grant below. Not writable by ${_app_user} or conduit.
+    local _rv_helper_src="${SOURCE_DIR}/deployment/bin/ccc-ryve-claim"
+    local _rv_helper_dst="/opt/conduit-cc/bin/ccc-ryve-claim"
+    if [[ -f "${_rv_helper_src}" ]]; then
+        step "M2-a3 — Installing Ryve claim helper"
+        install -o root -g root -m 0755 "${_rv_helper_src}" "${_rv_helper_dst}"
+        local _rvm
+        _rvm="$(stat -c '%U:%G:%a' "${_rv_helper_dst}")"
+        [[ "${_rvm}" == "root:root:755" ]] || die \
+            "Ryve claim helper ownership/perms wrong (${_rvm}); expected root:root:755"
+        info "Ryve claim helper installed (root:root 0755)"
+    else
+        warn "ryve claim helper not in source (${_rv_helper_src}) — skipping"
+    fi
+
     # (5-6) Exact sudoers helper grant; append-if-missing; 0440; visudo -c.
     if [[ -f "${_sudoers}" ]]; then
         if ! grep -qF "${_helper_dst}" "${_sudoers}"; then
@@ -1061,6 +1077,17 @@ phase_m2_config_write_artifacts() {
             info "personal compartment sudoers grant added + validated"
         else
             info "personal compartment sudoers grant already present"
+        fi
+        # (6c) Ryve claim grant (Epic #3, R1): runas=conduit (NOT root).
+        if ! grep -qF "(conduit) NOPASSWD: ${_rv_helper_dst}" "${_sudoers}"; then
+            step "M2-b3 — Adding Ryve claim sudoers grant"
+            printf '%s\n' "${_app_user} ALL=(conduit) NOPASSWD: ${_rv_helper_dst}" >> "${_sudoers}"
+            chown root:root "${_sudoers}"
+            chmod 440 "${_sudoers}"
+            visudo -cf "${_sudoers}" || die "sudoers syntax check failed after adding ryve grant"
+            info "Ryve claim sudoers grant added + validated"
+        else
+            info "Ryve claim sudoers grant already present"
         fi
     else
         warn "${_sudoers} missing — run install.sh; skipping sudoers grant"
