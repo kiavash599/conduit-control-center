@@ -44,6 +44,16 @@ def test_helper_runs_ryve_claim_with_output_only():
     assert '"--name"' not in src
 
 
+def test_helper_answers_interactive_confirmation():
+    # ryve-claim prompts before revealing the key; the helper answers "y" on a
+    # PIPE stdin (DEVNULL would abort the prompt with exit 0 and no PNG).
+    src = _helper()
+    assert "stdin=subprocess.PIPE" in src
+    assert 'input=b"y\\n"' in src
+    assert "communicate(" in src
+    assert "stdin=subprocess.DEVNULL" not in src
+
+
 def test_helper_unlinks_temp_immediately():
     assert "os.unlink(tmp_path)" in _helper()
 
