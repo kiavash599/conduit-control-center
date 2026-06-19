@@ -61,6 +61,7 @@ from backend.api import (
 )
 from backend.api.advisor import ensure_advisor_state
 from backend.api.conduit import ensure_conduit_apply_lock
+from backend.api.ryve import ensure_ryve_store, router as ryve_router
 from backend.conduit.adapter import helper_is_safe as conduit_helper_is_safe
 
 # ---------------------------------------------------------------------------
@@ -210,6 +211,9 @@ async def lifespan(app: FastAPI):
             "disabled (the apply endpoint will return 503)."
         )
 
+    # Ryve claim store (single-slot, per-process; lock bound to this loop).
+    ensure_ryve_store(app)
+
     app.state.started_at = time.time()
     logger.info(
         "Startup complete -- listening on port %d",
@@ -233,6 +237,12 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass  # expected -- task exited cleanly via cancellation
     logger.info("Session purge task stopped")
+
+    # Zero + drop any in-RAM Ryve claim so key-grade bytes don't linger in a
+    # terminating process heap.
+    ryve_store = getattr(app.state, "ryve_claim_store", None)
+    if ryve_store is not None:
+        await ryve_store.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +295,7 @@ app.include_router(auth_router, prefix="/api/auth")
 app.include_router(status_router, prefix="/api")
 app.include_router(conduit_router, prefix="/api/conduit")
 app.include_router(personal_router, prefix="/api/conduit")
+app.include_router(ryve_router, prefix="/api/conduit")
 app.include_router(metrics_router, prefix="/api/metrics")
 app.include_router(logs_router, prefix="/api")
 app.include_router(settings_router, prefix="/api/settings")

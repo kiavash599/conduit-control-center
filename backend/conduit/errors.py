@@ -90,3 +90,16 @@ class PersonalDivergenceError(PersonalCompartmentError):
     the deployed token format and the helper are out of sync (an upgrade
     signal). Fail-closed: no token is produced.
     """
+
+
+class RyveClaimError(ConduitAdapterError):
+    """
+    Raised for failures of the Ryve claim helper (``ccc-ryve-claim``, Epic #3):
+    a missing or non-zero helper, a timeout, a malformed output frame, or an
+    image that is not a valid PNG.
+
+    Distinct from the personal-compartment errors. The message is generic and
+    safe for operator display: it NEVER contains the helper's stdout/stderr, the
+    PNG bytes, the station name, the proxy id, or any key/QR material. (Sudo /
+    permission denials map to ``ConduitPermissionError`` instead.)
+    """
