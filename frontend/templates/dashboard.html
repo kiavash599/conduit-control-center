@@ -1317,6 +1317,62 @@
                 </div>
             </div><!-- /#personal-card -->
 
+            <!--
+              Ryve claim / station identity (Epic #3, R3). KEY-GRADE: the claim QR
+              reveals the station private identity, so generation is gated behind an
+              inline danger confirm-panel (shown every time), the QR is a same-origin
+              image only, and the claim is torn down on close / navigation / page
+              hide. JS: ryve.js. API: POST /api/conduit/ryve/claim,
+              GET /api/conduit/ryve/claim/image/{claim_id}, DELETE .../{claim_id}.
+            -->
+            <div class="card" id="ryve-card">
+                <div class="card__header">
+                    <h2 class="card__title">Ryve claim · station identity</h2>
+                </div>
+
+                <div id="ryve-idle">
+                    <p class="card__subtitle">Link this station to your Ryve wallet. The claim QR reveals your
+                       station's private identity — generate it only when you are ready to scan it.</p>
+                    <button type="button" id="ryve-generate-btn" class="btn btn--danger">Generate claim QR</button>
+                </div>
+
+                <div id="ryve-warning" class="panel-error mt-4" role="group" aria-label="Ryve claim warning" hidden>
+                    <p class="text-danger text-sm" id="ryve-warning-text">
+                        This QR code reveals your station's private identity key. Anyone who scans or
+                        photographs it can take over this station and its rewards. Scan it only with your
+                        own Ryve app on a trusted device. Never share, screenshot, photograph, or post it.
+                        It is shown only while this panel is open and is cleared when you close it.
+                    </p>
+                    <div class="mt-2">
+                        <button type="button" id="ryve-warning-confirm" class="btn btn--danger">I understand — show claim QR</button>
+                        <button type="button" id="ryve-warning-cancel" class="btn btn--secondary">Cancel</button>
+                    </div>
+                </div>
+
+                <div id="ryve-display" class="mt-4" hidden>
+                    <p class="text-sm">Scan this with your Ryve app to link this station to your wallet.</p>
+                    <div class="mt-2">
+                        <img id="ryve-qr" alt="Ryve claim QR code" width="220" height="220">
+                    </div>
+                    <dl class="status-meta status-meta--divided mt-2">
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Station name</dt>
+                            <dd class="status-meta__val" id="ryve-station">&mdash;</dd>
+                        </div>
+                        <div class="status-meta__row">
+                            <dt class="status-meta__key">Proxy ID</dt>
+                            <dd class="status-meta__val font-mono" id="ryve-proxy">&mdash;</dd>
+                        </div>
+                    </dl>
+                    <p class="text-warning text-sm">Private — do not share or screenshot. Cleared on close.</p>
+                    <div class="mt-2">
+                        <button type="button" id="ryve-close-btn" class="btn btn--secondary">Close</button>
+                    </div>
+                </div>
+
+                <p id="ryve-status" class="text-sm mt-4" role="status" aria-live="polite" hidden></p>
+            </div><!-- /#ryve-card -->
+
         </div>
 
     </main><!-- /.main-content -->
@@ -1373,6 +1429,9 @@
 
 <!-- C6d Slices 1–3: Personal Mode (read-only status, create flow, token/QR) -->
 <script src="{{ static_url('js/personal.js') }}"></script>
+
+<!-- Epic #3 R3: Ryve claim / station identity (Settings; key-grade, transient) -->
+<script src="{{ static_url('js/ryve.js') }}"></script>
 
 <!-- Issue #43: DDNS status panel -->
 <script src="{{ static_url('js/ddns.js') }}"></script>
