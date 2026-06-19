@@ -7,7 +7,6 @@ no encryption, no restore, no filesystem writes."""
 from __future__ import annotations
 
 import io
-import json
 import tarfile
 
 import pytest

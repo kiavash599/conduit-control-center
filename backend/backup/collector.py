@@ -20,7 +20,6 @@ import tempfile
 from dataclasses import dataclass, field
 
 from backend.backup.exclusion import (
-    KeyExclusionError,
     assert_path_allowed,
     scan_content,
 )
