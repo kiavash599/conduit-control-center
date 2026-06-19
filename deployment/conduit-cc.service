@@ -31,7 +31,12 @@
 [Unit]
 Description=Conduit Control Center dashboard
 Documentation=https://github.com/Kiavashrocky/conduit-control-center
-After=network-online.target
+# Order after conduit.service (ORDERING ONLY -- not a Wants/Requires pull-in):
+# it owns /var/lib/conduit/data, and the ReadWritePaths= exception below requires
+# that directory to already exist when this unit starts. After= does NOT start
+# conduit.service; CCC must not auto-start the Conduit node. In production
+# conduit.service is enabled and running, so the data dir exists before CCC.
+After=network-online.target conduit.service
 Wants=network-online.target
 
 [Service]
@@ -81,6 +86,27 @@ ReadWritePaths=/etc/conduit-cc
 #     helper writes only validated Environment= integer lines (no ExecStart,
 #     no shell, hardcoded path/unit, O_NOFOLLOW + atomic write).
 ReadWritePaths=/etc/systemd/system/conduit.service.d
+
+# Personal Mode (C6e fix): the Personal Mode helper (ccc-personal-compartment,
+# run via `sudo -u conduit` and therefore INSIDE this service's mount namespace)
+# writes its serialisation lock, the compartment file, and its .bak under the
+# Conduit data directory /var/lib/conduit/data. ProtectSystem=strict makes that
+# directory read-only inside the CCC namespace, and sudo does NOT escape the
+# namespace, so without this exception the helper hits EROFS (errno 30) on
+# /var/lib/conduit/data/.ccc-personal-compartment.lock even though the conduit
+# user can normally write there. Grant ONLY /var/lib/conduit/data (never the
+# broader /var/lib/conduit):
+#   - ProtectSystem=strict and all other read-only paths are retained;
+#   - the unprivileged conduit-cc web process still CANNOT write here -- the
+#     directory is 0700 conduit:conduit, so only the conduit-uid sudo helper can;
+#   - the Conduit private key is carved back to read-only just below, so the
+#     widened directory does not expose it to the helper uid.
+ReadWritePaths=/var/lib/conduit/data
+# Defense-in-depth: re-impose read-only on the Conduit private key inside the
+# namespace even though its parent directory is now writable. The helper never
+# opens the key; this makes the mount enforce that regardless of code paths or
+# Unix permissions (the key is 0600 conduit:conduit).
+ReadOnlyPaths=/var/lib/conduit/data/conduit_key.json
 
 # UMask=0077 ensures every file the service creates is owner-only (0600) and
 # every directory 0700.  This is the primary guarantee for the SQLite database

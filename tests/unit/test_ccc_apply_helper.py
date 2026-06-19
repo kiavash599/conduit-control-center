@@ -400,8 +400,9 @@ def test_conduit_unit_has_personal_clients_knob():
 
 
 def test_unit_has_only_narrow_readwritepaths():
-    # conduit-cc.service keeps ProtectSystem=strict and adds ONLY the narrow
-    # drop-in dir to ReadWritePaths (never broad /etc/systemd).
+    # conduit-cc.service keeps ProtectSystem=strict and adds ONLY narrow paths to
+    # ReadWritePaths: the drop-in dir (M2) and the Conduit data dir (C6e Personal
+    # Mode helper) -- never broad /etc/systemd, never broad /var/lib/conduit.
     repo = pathlib.Path(__file__).resolve().parents[2]
     unit = (repo / "deployment" / "conduit-cc.service").read_text()
     assert "ProtectSystem=strict" in unit
@@ -410,4 +411,15 @@ def test_unit_has_only_narrow_readwritepaths():
     assert rwp == [
         "ReadWritePaths=/etc/conduit-cc",
         "ReadWritePaths=/etc/systemd/system/conduit.service.d",
+        "ReadWritePaths=/var/lib/conduit/data",
     ], rwp
+    # The data-dir grant is the precise dir, not the broad parent.
+    assert "ReadWritePaths=/var/lib/conduit\n" not in unit
+    # Defense-in-depth: the private key is carved back to read-only.
+    assert "ReadOnlyPaths=/var/lib/conduit/data/conduit_key.json" in unit
+    # The data dir must exist at start, so ORDER after conduit.service -- but do
+    # NOT pull it in (CCC must not auto-start the Conduit node): After= only.
+    assert any(ln.startswith("After=") and "conduit.service" in ln
+               for ln in unit.splitlines())
+    assert not any(ln.startswith("Wants=") and "conduit.service" in ln
+                   for ln in unit.splitlines())
