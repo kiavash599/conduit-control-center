@@ -1234,6 +1234,40 @@
                         </div>
                     </dl>
 
+                    <!-- Max personal clients (C6d Slice 4): visible only once a
+                         compartment exists (personal.js toggles from GET status).
+                         One control enables (0->N), adjusts (N->M) or disables
+                         (N->0). Any actual change goes through the M2 apply path
+                         and restarts Conduit — confirmation is mandatory. 0
+                         disables Personal Mode but keeps the identity. -->
+                    <div id="personal-max" class="mt-4" hidden>
+                        <div id="personal-max-edit">
+                            <div class="form-group">
+                                <label class="form-label" for="pm-max-input">Max personal clients (0–1000)</label>
+                                <input class="form-input" type="number" id="pm-max-input"
+                                       min="0" max="1000" step="1" inputmode="numeric">
+                                <p class="form-hint">0 disables Personal Mode but keeps the identity.
+                                   Applying any change restarts Conduit briefly; common clients may reconnect.</p>
+                            </div>
+                            <p id="pm-max-error" class="text-danger text-sm" role="alert" hidden></p>
+                            <div class="mt-2">
+                                <button type="button" id="pm-max-apply" class="btn btn--primary">Apply…</button>
+                            </div>
+                        </div>
+
+                        <div id="pm-max-confirm" class="mt-2" hidden>
+                            <p id="pm-max-summary" class="text-sm"></p>
+                            <p class="text-warning text-sm">Applying this change restarts Conduit.
+                               Your node may go offline briefly and may take time to reconnect to the broker.</p>
+                            <div class="mt-2">
+                                <button type="button" id="pm-max-confirm-btn" class="btn btn--primary">Confirm &amp; restart</button>
+                                <button type="button" id="pm-max-cancel" class="btn btn--secondary">Cancel</button>
+                            </div>
+                        </div>
+
+                        <p id="pm-max-status" class="text-sm mt-2" role="status" aria-live="polite" hidden></p>
+                    </div>
+
                     <!-- Create flow (C6d Slice 2): shown only in the "Not set up"
                          state (personal.js toggles from GET status). The display
                          name participates in pairing-token generation and is

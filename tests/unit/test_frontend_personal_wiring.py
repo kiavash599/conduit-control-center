@@ -98,6 +98,32 @@ def test_personal_js_token_wiring():
     assert "closeTokenPanel" in js
 
 
+def test_personal_max_ids_present():
+    html = _dashboard()
+    for needle in (
+        'id="personal-max"',
+        'id="personal-max-edit"',
+        'id="pm-max-input"',
+        'id="pm-max-apply"',
+        'id="pm-max-confirm"',
+        'id="pm-max-confirm-btn"',
+        'id="pm-max-cancel"',
+        'id="pm-max-summary"',
+        'id="pm-max-status"',
+    ):
+        assert needle in html, needle
+
+
+def test_personal_js_maxclients_wiring():
+    js = _personal_js()
+    assert "/api/conduit/personal/max-clients" in js
+    assert "method: 'PUT'" in js
+    assert "X-CSRF-Token" in js
+    # Result routing must branch on body.status, not bare HTTP 200.
+    for state in ("no-op", "applied", "rolled_back", "rollback_failed"):
+        assert state in js, state
+
+
 def test_personal_js_is_csp_safe_and_token_lifecycle_safe():
     js = _personal_js()
     # CSP-safe: no DOM-injection sink, no eval/Function. Match ".innerHTML",
@@ -111,9 +137,7 @@ def test_personal_js_is_csp_safe_and_token_lifecycle_safe():
     assert "sessionStorage" not in js
     assert "document.cookie =" not in js   # getCsrf only reads document.cookie
     assert "console" not in js
-    # Slice 3 uses GET (status/token) + POST (create) only; no PUT/DELETE yet.
-    for verb in (
-        "method: 'PUT'", "method: 'DELETE'",
-        'method: "PUT"', 'method: "DELETE"',
-    ):
+    # Slice 4 uses GET (status/token) + POST (create) + PUT (max-clients).
+    # No DELETE is ever issued.
+    for verb in ("method: 'DELETE'", 'method: "DELETE"'):
         assert verb not in js, verb

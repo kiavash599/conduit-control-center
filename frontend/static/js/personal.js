@@ -98,6 +98,14 @@
         if (view) view.hidden = !status.compartment_exists;
         // If no compartment, ensure any open token panel is closed + cleared.
         if (!status.compartment_exists) closeTokenPanel();
+        // Max personal clients control: visible once a compartment exists.
+        var maxBlock = el('personal-max');
+        if (maxBlock) maxBlock.hidden = !status.compartment_exists;
+        lastMax = (status.compartment_exists && status.max_personal_clients != null)
+            ? status.max_personal_clients : 0;
+        var mi = el('pm-max-input');
+        if (mi && document.activeElement !== mi) mi.value = lastMax;
+        showMaxPanel('edit');
         // Later-slice action controls stay hidden.
         var actions = el('personal-actions');
         if (actions) actions.hidden = true;
@@ -121,6 +129,20 @@
     function postJson(path, body) {
         return fetch(path, {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
+                       'X-CSRF-Token': getCsrf() },
+            credentials: 'same-origin',
+            body: JSON.stringify(body)
+        }).then(function (r) {
+            if (r.status === 401) { redirectLogin(); return null; }
+            return r.json().then(function (j) { return { status: r.status, body: j }; },
+                                 function () { return { status: r.status, body: {} }; });
+        });
+    }
+
+    function putJson(path, body) {
+        return fetch(path, {
+            method: 'PUT',
             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
                        'X-CSRF-Token': getCsrf() },
             credentials: 'same-origin',
@@ -174,6 +196,103 @@
         .catch(function () {
             if (btn) btn.disabled = false;
             setStatus('Network error — check your connection and retry.', 'text-danger');
+        });
+    }
+
+    /* ----- max personal clients apply (Slice 4) -----
+     * One control handles enable (0->N), adjust (N->M), and disable (N->0). Any
+     * effective change goes through the M2 apply path on the server and restarts
+     * Conduit; only re-applying the current value is a server-side no-op. 0
+     * disables Personal Mode but keeps the identity. */
+    var lastMax = 0;        // last rendered value (effective-or-configured)
+    var pendingMax = null;  // value awaiting confirm-restart
+
+    function setMaxError(msg) {
+        var e = el('pm-max-error');
+        if (!e) return;
+        if (!msg) { e.hidden = true; e.textContent = ''; return; }
+        e.textContent = msg; e.hidden = false;
+    }
+    function setMaxStatus(msg, cls) {
+        var e = el('pm-max-status');
+        if (!e) return;
+        if (!msg) { e.hidden = true; e.textContent = ''; e.className = 'text-sm mt-2'; return; }
+        e.className = 'text-sm mt-2 ' + (cls || ''); e.textContent = msg; e.hidden = false;
+    }
+    function showMaxPanel(which) {
+        var edit = el('personal-max-edit');
+        var conf = el('pm-max-confirm');
+        if (edit) edit.hidden = (which === 'confirm');
+        if (conf) conf.hidden = (which !== 'confirm');
+    }
+
+    function onMaxApply() {
+        var input = el('pm-max-input');
+        var raw = input ? (input.value || '').trim() : '';
+        if (!/^\d+$/.test(raw)) { setMaxError('Enter a whole number from 0 to 1000.'); return; }
+        var n = parseInt(raw, 10);
+        if (isNaN(n) || n < 0 || n > 1000) { setMaxError('Enter a whole number from 0 to 1000.'); return; }
+        setMaxError(null);
+        if (n === lastMax) { setMaxStatus('No change to apply.', 'text-dim'); return; }
+        pendingMax = n;
+        var sum = el('pm-max-summary');
+        if (sum) sum.textContent = 'Max personal clients: ' + lastMax + ' → ' + n;
+        setMaxStatus(null);
+        showMaxPanel('confirm');
+    }
+
+    function onMaxCancel() {
+        pendingMax = null;
+        setMaxStatus(null);
+        showMaxPanel('edit');
+    }
+
+    function onMaxConfirm() {
+        if (pendingMax === null) return;
+        var n = pendingMax;
+        var cbtn = el('pm-max-confirm-btn'), cc = el('pm-max-cancel');
+        if (cbtn) cbtn.disabled = true;
+        if (cc) cc.disabled = true;
+        setMaxStatus('Applying… restarting Conduit and verifying.', 'text-dim');
+        putJson('/api/conduit/personal/max-clients', { max_personal_clients: n })
+        .then(function (res) {
+            if (cbtn) cbtn.disabled = false;
+            if (cc) cc.disabled = false;
+            if (!res) return;   // 401 -> redirecting
+            var s = res.status, b = res.body || {};
+            showMaxPanel('edit');
+            pendingMax = null;
+            if (s === 200 && b.status === 'no-op') {
+                setMaxStatus('No change was needed.', 'text-dim'); fetchStatus();
+            } else if (s === 200 && b.status === 'applied') {
+                setMaxStatus('Personal client limit applied. Conduit restarted and is reconnecting.', 'text-success'); fetchStatus();
+            } else if (s === 200 && b.status === 'rolled_back') {
+                setMaxStatus('The change prevented Conduit from running; the previous setting was restored and Conduit is running again.', 'text-warning'); fetchStatus();
+            } else if (s === 503 && b.status === 'rollback_failed') {
+                setMaxStatus('Critical: the change failed and automatic revert did not succeed. Conduit may be down — run: sudo systemctl restart conduit', 'text-danger'); fetchStatus();
+            } else if (s === 409) {
+                var d = ('' + (b.detail || '')).toLowerCase();
+                if (d.indexOf('in progress') !== -1) {
+                    setMaxStatus('Another configuration apply is in progress. Try again shortly.', 'text-warning');
+                } else {
+                    setMaxStatus('Create a valid personal compartment before enabling Personal Mode.', 'text-warning'); fetchStatus();
+                }
+            } else if (s === 422) {
+                setMaxError('Enter a whole number from 0 to 1000.');
+            } else if (s === 403) {
+                setMaxStatus('Your session expired — reload and sign in again.', 'text-danger');
+            } else if (s === 503) {
+                setMaxStatus('Configuration changes are unavailable on this server.', 'text-danger');
+            } else {
+                setMaxStatus('Unexpected error applying the change.', 'text-danger');
+            }
+        })
+        .catch(function () {
+            if (cbtn) cbtn.disabled = false;
+            if (cc) cc.disabled = false;
+            showMaxPanel('edit');
+            pendingMax = null;
+            setMaxStatus('Network error — reload to check the current state.', 'text-danger');
         });
     }
 
@@ -292,6 +411,9 @@
         }
         if (el('pm-view-btn')) el('pm-view-btn').addEventListener('click', openTokenPanel);
         if (el('pm-token-close')) el('pm-token-close').addEventListener('click', closeTokenPanel);
+        if (el('pm-max-apply')) el('pm-max-apply').addEventListener('click', onMaxApply);
+        if (el('pm-max-confirm-btn')) el('pm-max-confirm-btn').addEventListener('click', onMaxConfirm);
+        if (el('pm-max-cancel')) el('pm-max-cancel').addEventListener('click', onMaxCancel);
         maybeLoad();
         window.addEventListener('hashchange', onNavigate);
     });
