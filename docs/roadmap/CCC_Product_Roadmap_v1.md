@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.9  
-**Date:** 2026-06-17  
+**Revision:** 1.10  
+**Date:** 2026-06-19  
 **Status:** Draft for Review  
 **Author:** CCC Development Team
 
@@ -104,10 +104,10 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | # | Capability | Android App | Linux CLI | CCC Current | CCC Candidate |
 |---|---|:---:|:---:|:---:|---|
 | **A — Personal Mode** |||||
-| A1 | Enable personal clients | ✅ | ✅ `--max-personal-clients` | ❌ | Read + Write (v0.4.0) |
-| A2 | Compartment ID generation | ✅ | ✅ `new-compartment-id` cmd | ❌ | Generate + persist (v0.4.0) |
-| A3 | Personal pairing token (v1) | ✅ | ✅ `BuildPersonalPairingToken` | ❌ | Generate + display (v0.4.0) |
-| A4 | Personal pairing QR code | ✅ | ✅ (token → QR) | ❌ | Display in UI (v0.4.0) |
+| A1 | Enable personal clients | ✅ | ✅ `--max-personal-clients` | ✅ | **DELIVERED v0.4.0** — Max personal clients apply (Slice 4 / C6b) |
+| A2 | Compartment ID generation | ✅ | ✅ `new-compartment-id` cmd | ✅ | **DELIVERED v0.4.0** — Create identity (Slice 2 / C4 helper) |
+| A3 | Personal pairing token (v1) | ✅ | ✅ `BuildPersonalPairingToken` | ✅ | **DELIVERED v0.4.0** — token retrieval + display (Slice 3 / C6a, C6c) |
+| A4 | Personal pairing QR code | ✅ | ✅ (token → QR) | ✅ | **DELIVERED v0.4.0** — client-side QR, vendored qrcodegen (Slice 3) |
 | A5 | `--compartment-id` accepts raw ID or token | — | ✅ `NormalizePersonalCompartmentInput` | ❌ | Accepts both formats (v0.4.0) |
 | A6 | Pairing name max length | 32 chars | ✅ 32 chars enforced | ❌ | Validated input (v0.4.0) |
 | A7 | Compartment persisted to disk | — | ✅ `personal_compartment.json` | ❌ | Read persisted ID (v0.4.0) |
@@ -134,7 +134,7 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | D3 | `conduit_connected_clients` | — | ✅ | ✅ | Already exposed |
 | D4 | `conduit_is_live` (broker connection) | — | ✅ | ✅ | Live Operations — delivered 2026-06-17 (broker badge) |
 | D5 | `conduit_max_common_clients` | — | ✅ | ✅ | Already exposed |
-| D6 | `conduit_max_personal_clients` | — | ✅ | ❌ | Reclassified to **v0.4.0 Personal Mode** — read + write fold into "Personal client limit control" (§8). The value is meaningful only alongside the v0.4 compartment / pairing / `--max-personal-clients` flow; not a standalone v0.2 item |
+| D6 | `conduit_max_personal_clients` | — | ✅ | ✅ | **DELIVERED v0.4.0** (read + write; Max personal clients apply). Originally reclassified to **v0.4.0 Personal Mode** — read + write fold into "Personal client limit control" (§8). The value is meaningful only alongside the v0.4 compartment / pairing / `--max-personal-clients` flow; not a standalone v0.2 item |
 | D7 | `conduit_bandwidth_limit_bytes_per_second` | — | ✅ (0 = unlimited) | ❌ | Show in Config panel (v0.2.0) |
 | D8 | `conduit_bytes_uploaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
 | D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
@@ -636,12 +636,21 @@ Psiphon exposes the data via a metric or a documented API — epic 3 delivers cl
 
 ## 8. v0.4.0 — Personal Mode & Ryve
 
+> **Personal Mode status (2026-06-19): ✅ CLOSED — DELIVERED and production-validated.**
+> The Personal Mode rows below (setup, pairing token, personal client limit
+> control) are delivered as the **C4–C6 backend + Frontend Slices 1–4** and
+> validated on a Raspberry Pi 4 (C6e). **Regenerate / Restore UI** is deferred
+> (the C6c backend is retained); the **Regional-Analytics scope filter** is
+> upstream-blocked (Conduit exposes no personal-vs-common runtime breakdown). The
+> **Ryve** rows remain a separate future epic. See
+> `docs/closure/PERSONAL_MODE_CLOSURE.md`.
+
 | Feature | Description |
 |---|---|
-| Personal mode setup | Generate compartment ID (`conduit new-compartment-id`), persist to `personal_compartment.json`, display in Config panel. |
-| Pairing token generation | Build v1 pairing tokens (`BuildPersonalPairingToken(id, name)`). Display as QR code and copyable string. Max name: 32 chars. |
-| Personal client limit control | Expose `--max-personal-clients` write path in Config panel (requires compartment ID to be set first). Uses `--max-personal-clients N` flag — not `--set InproxyMaxPersonalClients=N`. |
-| Scope filter in Regional Analytics | Show common / personal scope breakdown when personal clients > 0. |
+| Personal mode setup | **✅ DELIVERED (v0.4.0).** Generate compartment ID (`conduit new-compartment-id`), persist to `personal_compartment.json`, display in Config panel. |
+| Pairing token generation | **✅ DELIVERED (v0.4.0).** Build v1 pairing tokens (`BuildPersonalPairingToken(id, name)`). Display as QR code and copyable string. Max name: 32 chars. _(Regenerate / Restore UI deferred; C6c backend retained.)_ |
+| Personal client limit control | **✅ DELIVERED (v0.4.0).** Expose `--max-personal-clients` write path in Config panel (requires compartment ID to be set first). Uses `--max-personal-clients N` flag — not `--set InproxyMaxPersonalClients=N`. |
+| Scope filter in Regional Analytics | **⏸ DEFERRED — upstream-blocked.** Show common / personal scope breakdown when personal clients > 0. Conduit exposes only an aggregate connected-client count (no personal-vs-common runtime metric); requires upstream Conduit support. |
 | Ryve claim QR | Invoke `conduit ryve-claim --output <tmp_path>` as subprocess after modal confirmation (see Section 5.8). Serve QR PNG. Delete from disk after display. **Never store or log the private key.** |
 | ProxyID display | Show Curve25519-derived ProxyID from `conduit ryve-claim` output. Display-only. |
 | Ryve rewards | Out of scope until Psiphon exposes rewards data via metrics or a documented API. |
@@ -678,6 +687,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.6 | 2026-06-16 | CCC Development Team | Bandwidth Scheduling closure: §6.5 marked ✅ DELIVERED (commit `f838ff4`; CI #109–#113) with the confirmed reduced-mode model (HH:MM UTC, runtime switching in tunnel-core, no CCC scheduler, no boundary restarts, restart only on value change); §3.2 C6/C7 → delivered and C8 de-conflated (`conduit-monitor` quota throttle separated from `InproxyReduced*`, noted not deployed by CCC); §5.7 day-of-week selector removed and the 100 GB/7-day tooltip corrected; §6 v0.2.0 status updated (scheduling removed from outstanding). Closure record at `docs/closure/bandwidth-scheduling-closure.md`. No milestone renumbering. |
 | 1.7 | 2026-06-17 | CCC Development Team | Live Operations closure: §6.2/§6.6 marked ✅ DELIVERED (Option 1 — Node Status extension; commits `3741b71`/`d61a478`/`b4bc9c1`, CI #115); §3.2 D1/D2/D4/D11 → delivered, D8/D9 noted delivered-via-Traffic, D10 deferred (service uptime only), D16 build_rev partial, D6 noted as a minor remaining gap; §3.3 is_live note updated; §6.4 reconciled (Contribution Advisor supersedes the original Manual/Assisted concept; Automatic → v0.3.0); §6 v0.2.0 status updated. Closure record added at `docs/closure/live-operations-closure.md`. No milestone renumbering. |
 | 1.9 | 2026-06-17 | CCC Development Team | **Approved Delivery Priority (USER-VALUE-FIRST) recorded** as a new authoritative section before §7, documenting the post-v0.2.0 execution order (1 Branding & Identity, 2 Personal Mode, 3 Ryve Claim / Identity, 4 Backup & Restore, 5 Update Center, 6 Automatic Mode, 7 Health Score) **without renumbering** §7/§8 — those sections are preserved as feature catalogues. D6 recorded as part of Personal Mode; **"Ryve Rewards" renamed to "Ryve Claim / Identity"** with rewards/points kept explicitly out-of-scope (§3.2 E6, §8, §9); Per-direction bandwidth display and Regional-Analytics scope filter explicitly preserved. Companion to the `APP_VERSION 0.1.0 → 0.2.0` consistency cleanup (CHANGELOG `[0.2.0]` stamp + version guard + `docs/release-checklist.md`). No milestone renumbering. |
+| 1.10 | 2026-06-19 | CCC Development Team | **Personal Mode epic CLOSED — DELIVERED and production-validated.** §3.2 matrix A1–A4 and D6 → ✅ DELIVERED (v0.4.0); §8 Personal Mode rows annotated DELIVERED (C4–C6 backend + Frontend Slices 1–4), with Regenerate/Restore **UI** recorded as deferred (C6c backend retained) and the Regional-Analytics **scope filter** as upstream-blocked (no personal-vs-common runtime metric). Production-validated on a Raspberry Pi 4 (C6e); EROFS production bug fixed in `39ba3eb` (`ReadWritePaths=/var/lib/conduit/data` + private-key `ReadOnlyPaths` carve-out + `After=conduit.service`, no `Wants=` pull-in). Closure record `docs/closure/PERSONAL_MODE_CLOSURE.md`; CHANGELOG `[Unreleased]` entry added. No milestone renumbering. |
 | 1.8 | 2026-06-17 | CCC Development Team | **Theme Support closure + v0.2.0 CLOSED.** §6.7 marked ✅ DELIVERED (TS4 Raspberry Pi validation; commits `46547c0`/`df49f42`/TS3, CI #117–#118) with server-rendered flash-free first paint and no localStorage; §6 v0.2.0 status updated to **CLOSED — all features delivered**. **D6 (`max_personal_clients`) reclassified** from a minor v0.2 gap to v0.4.0 Personal Mode in §3.2 and §6.1 (folds into "Personal client limit control", §8). §6.4 stale three-mode prose reconciled (superseded by the Contribution Advisor; Automatic → v0.3.0). Closure record added at `docs/closure/theme-support-closure.md`. No milestone renumbering. |
 
 ---

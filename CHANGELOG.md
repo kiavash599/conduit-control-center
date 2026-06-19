@@ -9,7 +9,38 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Added — Personal Mode (C4 / C5 / C6)
+
+- **Personal Mode** — create a personal Conduit identity for trusted contacts and
+  manage it entirely from **Settings → Personal mode**: a three-state status card
+  (Not set up / Created — inactive / Active · N personal clients), **create
+  identity** (display name, 1–32 chars), **View / share token** with a
+  **client-side QR**, and a **Max personal clients** control that enables /
+  adjusts / disables the personal-client limit. Setting the limit to **0 disables
+  Personal Mode but keeps the identity**.
+- **Backend** — helper (C4, runs as `conduit`, flock-serialised, single-depth
+  `.bak`, never opens the private key), adapter (C5), API (C6a:
+  `GET /personal/status`, `POST /personal/compartment`, `GET /personal/token`,
+  `PUT /personal/max-clients`), max-clients apply with restart → health-as-truth
+  verify → rollback (C6b), and regenerate / restore endpoints (C6c).
+- **QR** — vendored **Nayuki `qrcodegen` v1.8.0** (MIT), SHA-256-pinned and served
+  same-origin; the QR is drawn to a `<canvas>` (no `eval` / `Function` /
+  `document.write`, no DOM injection). **CSP unchanged.**
+- **Security / privacy** — the pairing token is never logged, stored, persisted,
+  placed in a URL, or written to `localStorage` / `sessionStorage` / cookies; the
+  token endpoint responds `Cache-Control: no-store`; token text + QR are cleared
+  from the DOM on close and on navigation. Aggregate-only is preserved (no IPs,
+  identities, or per-user data).
+- **Production fix (EROFS)** — Personal Mode status failed with `503` on the
+  Raspberry Pi because `ProtectSystem=strict` made the helper's lock path
+  read-only inside the CCC service namespace. Fixed in `deployment/conduit-cc.service`
+  by granting `ReadWritePaths=/var/lib/conduit/data` (narrow data dir), carving the
+  private key back to read-only via `ReadOnlyPaths=/var/lib/conduit/data/conduit_key.json`,
+  and ordering `After=conduit.service` (no `Wants=` pull-in). Commit `39ba3eb`.
+- **Deferred** — Regenerate / Restore **UI** (Slice 5; backend retained); a **live
+  connected personal-client count** (requires upstream Conduit metrics — not
+  exposed today). Production-validated on a Raspberry Pi 4 (C6e); see
+  `docs/closure/PERSONAL_MODE_CLOSURE.md`.
 
 ---
 
