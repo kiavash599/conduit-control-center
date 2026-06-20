@@ -15,6 +15,11 @@ from backend.backup.collector import (
     StagingSet,
     collect,
 )
+from backend.backup.crypto import (
+    BackupCryptoError,
+    decrypt_archive,
+    encrypt_archive,
+)
 from backend.backup.exclusion import (
     KeyExclusionError,
     assert_path_allowed,
@@ -39,4 +44,6 @@ __all__ = [
     "pack", "unpack", "read_manifest",
     "BackupArchiveError", "EXCLUDED", "FORMAT", "KIND", "MANIFEST_VERSION",
     "build_manifest", "parse_manifest", "serialize_manifest",
+    # S2B
+    "encrypt_archive", "decrypt_archive", "BackupCryptoError",
 ]
