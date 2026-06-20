@@ -251,6 +251,13 @@ server {
     # All other API routes
     # ------------------------------------------------------------------
     location /api/ {
+        # Backup restore/inspect upload encrypted .cccbak files (S4B-2.4). The
+        # app enforces its own 10 MiB per-endpoint guard; this is set just above
+        # it so an in-range upload reaches FastAPI and gets a clean app-level 413,
+        # while oversize bodies are rejected here. Bare directive (no add_header),
+        # so server-block security-header inheritance is preserved.
+        client_max_body_size 12m;
+
         proxy_pass         http://127.0.0.1:8000;
         proxy_set_header   Host              $host;
         proxy_set_header   X-Real-IP         $remote_addr;

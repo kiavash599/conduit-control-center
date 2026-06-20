@@ -68,12 +68,14 @@ router = APIRouter(tags=["backup"])
 _PASSPHRASE_MIN_LEN = 12
 _PASSPHRASE_MAX_LEN = 1024
 
-# Inspect upload guard. Conservative ceiling, deliberately *under* the nginx
-# default client_max_body_size of 1 MB. NOTE: nginx's 1 MB default remains the
-# effective production cap (it 413s before the request reaches FastAPI) until a
-# future deployment slice raises it; this app-level guard is defence in depth and
-# bounds how many bytes we read into memory before decryption.
-_MAX_INSPECT_BYTES = 900 * 1024  # 921_600 bytes (< 1 MB nginx default)
+# Inspect/restore upload guard (S4B-2.4). Sized from the backup-archive evidence:
+# the dominant term is the 90-day traffic_delta window, giving a steady-state
+# ccc.db of ~20-25 MB raw, which gzips (the archive is tar.gz) to a ~6-8 MB
+# encrypted upload in the worst realistic default-cadence case. 10 MB leaves
+# headroom while staying under nginx (client_max_body_size 12m in /api/) and the
+# helper's 16 MB MAX_BLOB_BYTES. Ordering: API (10M) <= nginx (12m) <= helper
+# (16M), so an in-range upload reaches FastAPI and gets a clean app-level 413.
+_MAX_INSPECT_BYTES = 10 * 1024 * 1024  # 10 MiB
 
 # ---------------------------------------------------------------------------
 # Restore (S4B-2.2) -- thin HTTP layer over the privileged helper.

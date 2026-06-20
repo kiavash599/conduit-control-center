@@ -74,6 +74,17 @@ RestartSec=5s
 ProtectSystem=strict
 ReadWritePaths=/etc/conduit-cc
 
+# Restore outcome state (S4B-2.4). systemd creates /var/lib/conduit-cc owned
+# conduit-cc:conduit-cc 0750 on start (and re-creates it if missing), surviving
+# restarts. The privileged restore helper (ccc-restore-apply, run via sudo and
+# detached to PID 1, OUTSIDE this namespace) writes restore-status.json there as
+# root and chowns it to conduit-cc; the web process only READS it for
+# GET /api/backup/restore/status. StateDirectory also makes the path writable by
+# the service under ProtectSystem=strict, which is harmless (the app never writes
+# it) and avoids a manual install -d.
+StateDirectory=conduit-cc
+StateDirectoryMode=0750
+
 # M2 config write: the conduit.service.d drop-in directory is re-granted write
 # access so the privileged helper (ccc-apply-conduit-config, run via sudo and
 # therefore INSIDE this service's mount namespace) can write the Environment-only

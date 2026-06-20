@@ -610,3 +610,16 @@ def test_status_requires_auth(client, monkeypatch, tmp_path):
     _set_outcome(monkeypatch, tmp_path, None)
     client.app.dependency_overrides.pop(get_current_user, None)
     assert client.get("/api/backup/restore/status").status_code == 401
+
+
+# --- upload-cap alignment (S4B-2.4) -----------------------------------------
+
+
+def test_upload_caps_value_and_alignment():
+    # Raised to 10 MiB in S4B-2.4; inspect and restore share the cap.
+    assert backup_api._MAX_INSPECT_BYTES == 10 * 1024 * 1024
+    assert backup_api._MAX_RESTORE_BYTES == backup_api._MAX_INSPECT_BYTES
+    # Must stay under the nginx /api/ cap (12 MiB) so the app produces the 413
+    # for the in-range band, and under the helper's 16 MiB outer bound.
+    assert backup_api._MAX_RESTORE_BYTES < 12 * 1024 * 1024
+    assert backup_api._MAX_RESTORE_BYTES < 16 * 1024 * 1024
