@@ -40,6 +40,11 @@ from backend.backup.manifest import (
     parse_manifest,
     serialize_manifest,
 )
+from backend.backup.restore import (
+    RestoreError,
+    RestoreResult,
+    restore_backup,
+)
 
 __all__ = [
     # S1
@@ -53,4 +58,6 @@ __all__ = [
     "encrypt_archive", "decrypt_archive", "BackupCryptoError",
     # S2C
     "create_backup", "open_backup", "OpenedBackup",
+    # S3
+    "restore_backup", "RestoreResult", "RestoreError",
 ]
