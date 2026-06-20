@@ -1528,9 +1528,7 @@
 <!-- Issue #43: DDNS status panel -->
 <script src="{{ static_url('js/ddns.js') }}"></script>
 
-<!-- Epic #4 S4A.2: Backup Create UI. Wiring placeholder only (S4A.2b) — the
-     live <script src="js/backup.js"> is added in S4A.2c together with the
-     module itself. Kept commented so this slice introduces no runtime 404 and
-     no behaviour. backup.js will load after api.js/app.js (base.html) and may
-     use the shared rawFetch() helper added to api.js in this slice. -->
+<!-- Epic #4 S4A.2c: Backup Create UI behaviour + download flow.
+     Wires the Create Backup card; uses the shared rawFetch() helper (api.js). -->
+<script src="{{ static_url('js/backup.js') }}"></script>
 {% endblock %}
