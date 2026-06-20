@@ -1,0 +1,513 @@
+#!/opt/conduit-cc/venv/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-restore-apply -- S4B-2.1 privileged restore helper (runs as root via ONE
+exact-path sudoers grant; the grant itself is added in a later deployment slice).
+
+Unlike the other CCC helpers, this one is NOT stdlib-only: it reuses the frozen,
+CI-green restore engine (open_backup / restore_backup) rather than re-implementing
+crypto as root. It therefore runs under the venv interpreter and imports
+backend.backup. Imports are LAZY (inside _load_backend) so the module loads for
+unit tests without pulling the backend package.
+
+Flow
+----
+  1. Read a framed payload (ciphertext + passphrase) from STDIN only.
+  2. PRE-FLIGHT, while still attached to the caller: validate the frame, take an
+     exclusive lock, and open_backup() to verify passphrase + compatibility +
+     key-exclusion. Any failure exits non-zero with a generic message and the
+     target is untouched (nothing has changed; no detach).
+  3. On success: print an "accepted <id>" ack, then DOUBLE-FORK + setsid to
+     detach a worker that outlives conduit-cc.
+  4. WORKER (detached): write in_progress -> stop conduit-cc -> take a
+     worker-owned checkpoint -> restore_backup() -> start conduit-cc -> require
+     systemctl active AND an HTTP health probe. On restore failure OR an
+     unhealthy restart, roll back to the worker checkpoint and restart. Write a
+     secret-free outcome file.
+
+Security
+--------
+  * Secrets (passphrase, ciphertext, decrypted bytes) arrive on stdin only and
+    live in memory; never in argv, env, the outcome file, or logs.
+  * Outcome/logs carry generic messages only.
+  * STATE_DIR is NOT created here (provisioning is deferred to S4B-2.4): if it is
+    missing the helper fails cleanly.
+  * Lock + atomic writes + hardcoded paths/unit mirror ccc-apply-conduit-config.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+
+try:
+    import fcntl
+except ImportError:                       # Linux-only in production; see _acquire_lock
+    fcntl = None
+
+# --- Locked constants (never overridable from argv/env) ---------------------
+VENV_PYTHON = "/opt/conduit-cc/venv/bin/python3"
+APP_DIR = "/opt/conduit-cc"               # sys.path root for `import backend...`
+CCC_DIR = "/etc/conduit-cc"               # restore target (conduit-cc owned)
+STATE_DIR = "/var/lib/conduit-cc"         # must pre-exist (provisioned in S4B-2.4)
+OUTCOME_PATH = "/var/lib/conduit-cc/restore-status.json"
+LOCK_PATH = "/var/lib/conduit-cc/.restore.lock"
+UNIT = "conduit-cc"
+HEALTH_URL = "http://127.0.0.1:8000/api/health"
+SYSTEMCTL = "/usr/bin/systemctl"
+
+# Checkpoint set (mirrors the S3 worker checkpoint; covers restart-health failure).
+CHECKPOINT_FILES = ("ccc.db", "ccc.db-wal", "ccc.db-shm", ".env", "config.json")
+DB_SIDECARS = ("ccc.db-wal", "ccc.db-shm")
+
+# Size guards (bytes). The blob ceiling is generous vs. a real ccc.db; the nginx
+# body cap (raised in a later slice) is the outer bound for uploads.
+MAX_BLOB_BYTES = 16 * 1024 * 1024
+MAX_PASSPHRASE_BYTES = 1024
+
+# Service wait/health budgets (seconds).
+STOP_TIMEOUT_S = 30
+START_TIMEOUT_S = 45
+HEALTH_TIMEOUT_S = 30
+POLL_INTERVAL_S = 0.5
+
+_RESTORE_ID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{7,63}$")
+
+# --- Exit codes (PRE-DETACH only; post-detach uses the outcome file) ---------
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_FS = 3
+EXIT_SYSTEMCTL = 4
+EXIT_BUSY = 5
+EXIT_PREFLIGHT = 6
+EXIT_INTERNAL = 7
+
+
+class FrameError(Exception):
+    """Malformed stdin frame. Carries only a generic, secret-free message."""
+
+
+def _log(message: str) -> None:
+    """Generic, secret-free log line to stderr (journald in production)."""
+    sys.stderr.write("ccc-restore-apply: " + message + "\n")
+    sys.stderr.flush()
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fail(code: int, message: str) -> None:
+    """Log a generic message and exit with a structured code (pre-detach)."""
+    _log(message)
+    raise SystemExit(code)
+
+
+# --------------------------------------------------------------------------- #
+# stdin frame                                                                 #
+# --------------------------------------------------------------------------- #
+def _read_exact(stream, n: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    if len(buf) != n:
+        raise FrameError("payload shorter than declared")
+    return bytes(buf)
+
+
+def parse_frame(stream):
+    """Parse the CCC-RESTORE/1 frame from a binary stream.
+
+    Returns (restore_id, blob, passphrase). Raises FrameError on any malformation.
+    Header is ASCII lines terminated by a blank line; then exactly
+    blob_len + passphrase_len bytes follow."""
+    magic = stream.readline()
+    if magic.strip() != b"CCC-RESTORE/1":
+        raise FrameError("bad frame magic")
+    header = {}
+    for _ in range(16):                   # bounded number of header lines
+        line = stream.readline()
+        if line in (b"", b"\n", b"\r\n"):
+            break
+        key, sep, value = line.partition(b":")
+        if not sep:
+            raise FrameError("malformed header line")
+        header[key.strip().decode("ascii", "replace")] = value.strip().decode("ascii", "replace")
+    else:
+        raise FrameError("header too long")
+
+    try:
+        restore_id = header["restore_id"]
+        blob_len = int(header["blob_len"])
+        pp_len = int(header["passphrase_len"])
+    except (KeyError, ValueError):
+        raise FrameError("missing or invalid header fields")
+
+    if not _RESTORE_ID_RE.match(restore_id):
+        raise FrameError("invalid restore_id")
+    if not (0 < blob_len <= MAX_BLOB_BYTES):
+        raise FrameError("blob_len out of range")
+    if not (0 < pp_len <= MAX_PASSPHRASE_BYTES):
+        raise FrameError("passphrase_len out of range")
+
+    payload = _read_exact(stream, blob_len + pp_len)
+    return restore_id, payload[:blob_len], payload[blob_len:]
+
+
+# --------------------------------------------------------------------------- #
+# state dir + lock                                                            #
+# --------------------------------------------------------------------------- #
+def _state_dir_ok() -> bool:
+    """True iff STATE_DIR exists and is a real directory. We never create it."""
+    try:
+        return os.path.isdir(STATE_DIR) and not os.path.islink(STATE_DIR)
+    except OSError:
+        return False
+
+
+def acquire_lock():
+    """Open + flock LOCK_PATH exclusively (non-blocking). Returns the fd.
+
+    Raises SystemExit(EXIT_BUSY) if held, SystemExit(EXIT_FS) on fs/locking error.
+    The fd is intentionally inheritable so the detached worker keeps the lock."""
+    if fcntl is None:
+        _fail(EXIT_FS, "file locking unavailable (fcntl missing) -- Linux required")
+    try:
+        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        _fail(EXIT_FS, f"cannot open lock file (rc={exc.errno})")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        _fail(EXIT_BUSY, "another restore is already in progress")
+    return fd
+
+
+# --------------------------------------------------------------------------- #
+# backend engine (lazy import)                                                #
+# --------------------------------------------------------------------------- #
+def _load_backend():
+    """Import the frozen restore engine. Returns
+    (open_backup, restore_backup, (BackupCryptoError, BackupArchiveError, KeyExclusionError)).
+    Raises ImportError if the venv/package is unavailable."""
+    if APP_DIR not in sys.path:
+        sys.path.insert(0, APP_DIR)
+    from backend.backup.archiver import open_backup
+    from backend.backup.restore import restore_backup
+    from backend.backup.crypto import BackupCryptoError
+    from backend.backup.exclusion import KeyExclusionError
+    from backend.backup.manifest import BackupArchiveError
+    return open_backup, restore_backup, (BackupCryptoError, BackupArchiveError, KeyExclusionError)
+
+
+def _emit_ack(restore_id: str) -> None:
+    sys.stdout.write("accepted " + restore_id + "\n")
+    sys.stdout.flush()
+
+
+# --------------------------------------------------------------------------- #
+# worker checkpoint                                                           #
+# --------------------------------------------------------------------------- #
+def make_checkpoint(ccc_dir: str):
+    """Copy current state files into an owner-only checkpoint dir on the same
+    filesystem. Returns (ckpt_dir, captured{name: path}). Covers the case S3
+    cannot: a successful restore whose new state fails the post-restart health
+    check."""
+    ckpt = tempfile.mkdtemp(prefix=".ccc-restore-wckpt-", dir=ccc_dir)
+    os.chmod(ckpt, 0o700)
+    captured = {}
+    for name in CHECKPOINT_FILES:
+        src = os.path.join(ccc_dir, name)
+        if os.path.exists(src):
+            dst = os.path.join(ckpt, name)
+            shutil.copy2(src, dst)
+            os.chmod(dst, 0o600)
+            captured[name] = dst
+    return ckpt, captured
+
+
+def restore_checkpoint(ccc_dir: str, captured: dict) -> None:
+    for name, ckpt_path in captured.items():
+        os.replace(ckpt_path, os.path.join(ccc_dir, name))
+    for side in DB_SIDECARS:
+        if side not in captured:
+            try:
+                os.unlink(os.path.join(ccc_dir, side))
+            except FileNotFoundError:
+                pass
+
+
+def _cleanup_checkpoint(ckpt_dir) -> None:
+    if ckpt_dir:
+        shutil.rmtree(ckpt_dir, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# service control + health                                                    #
+# --------------------------------------------------------------------------- #
+def _systemctl(*args: str) -> None:
+    import subprocess
+    try:
+        subprocess.run([SYSTEMCTL, *args], check=True, shell=False)  # noqa: S603
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"systemctl {' '.join(args)} failed (rc={exc.returncode})")
+    except OSError as exc:
+        raise RuntimeError(f"systemctl {' '.join(args)} not runnable (rc={exc.errno})")
+
+
+def is_active() -> bool:
+    import subprocess
+    try:
+        out = subprocess.run([SYSTEMCTL, "is-active", UNIT],
+                             capture_output=True, text=True, shell=False)  # noqa: S603
+        return out.stdout.strip() == "active"
+    except OSError:
+        return False
+
+
+def health_ok() -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(HEALTH_URL, timeout=5) as resp:  # noqa: S310 (fixed localhost)
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def _wait_until(predicate, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(POLL_INTERVAL_S)
+    return predicate()
+
+
+def stop_service() -> None:
+    _systemctl("stop", UNIT)
+    if not _wait_until(lambda: not is_active(), STOP_TIMEOUT_S):
+        raise RuntimeError("service did not stop in time")
+
+
+def start_service() -> None:
+    _systemctl("start", UNIT)
+    _wait_until(is_active, START_TIMEOUT_S)
+
+
+def restart_healthy() -> bool:
+    """Start the unit and confirm BOTH systemctl active AND an HTTP health probe."""
+    start_service()
+    return _wait_until(lambda: is_active() and health_ok(), HEALTH_TIMEOUT_S)
+
+
+# --------------------------------------------------------------------------- #
+# outcome file                                                                #
+# --------------------------------------------------------------------------- #
+def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, message) -> None:
+    """Atomically write the secret-free outcome JSON (0640, conduit-cc readable)."""
+    data = {
+        "schema": 1,
+        "restore_id": restore_id,
+        "state": state,
+        "started_utc": started_utc,
+        "finished_utc": finished_utc,
+        "restart_ok": restart_ok,
+        "message": message,
+    }
+    payload = json.dumps(data).encode("utf-8")
+    out_dir = os.path.dirname(OUTCOME_PATH)
+    fd, tmp = tempfile.mkstemp(prefix=".restore-status-", dir=out_dir)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o640)
+        try:
+            shutil.chown(tmp, "conduit-cc", "conduit-cc")
+        except (LookupError, PermissionError, OSError):
+            pass                          # account absent (tests) / insufficient priv
+        os.replace(tmp, OUTCOME_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# --------------------------------------------------------------------------- #
+# worker (detached)                                                           #
+# --------------------------------------------------------------------------- #
+def run_worker(opened, restore_backup, restore_id, started_utc, lockfd=None) -> str:
+    """Stop -> checkpoint -> restore_backup -> start+health, with rollback that
+    also covers restart-health failure. Writes the outcome and returns the final
+    state. Never raises; every path produces an outcome."""
+    write_outcome("in_progress", restore_id, started_utc, None, None,
+                  "Restore in progress; the dashboard is restarting.")
+    ckpt = None
+    captured = {}
+    try:
+        stop_service()
+        ckpt, captured = make_checkpoint(CCC_DIR)
+        result = restore_backup(opened, ccc_dir=CCC_DIR)
+
+        if result.status == "restored":
+            if restart_healthy():
+                _cleanup_checkpoint(ckpt)
+                _finish(restore_id, started_utc, "restored", True,
+                        "Restore complete; the dashboard restarted successfully.")
+                return "restored"
+            # New state prevents a healthy start -> revert to the checkpoint.
+            restore_checkpoint(CCC_DIR, captured)
+            healthy = restart_healthy()
+            _cleanup_checkpoint(ckpt)
+            _finish(restore_id, started_utc, "rolled_back", healthy,
+                    "Restore was applied but the dashboard did not return healthy; "
+                    "the previous state was restored.")
+            return "rolled_back"
+
+        # S3 already rolled back internally (or could not). Bring the service back.
+        healthy = restart_healthy()
+        _cleanup_checkpoint(ckpt)
+        _finish(restore_id, started_utc, result.status, healthy,
+                "Restore did not complete; the previous state is in place.")
+        return result.status
+
+    except BaseException:
+        # Best-effort recovery: revert to the checkpoint and restart.
+        recovered = False
+        try:
+            if captured:
+                restore_checkpoint(CCC_DIR, captured)
+            recovered = restart_healthy()
+        except BaseException:
+            recovered = False
+        _cleanup_checkpoint(ckpt)
+        state = "rolled_back" if recovered else "rollback_failed"
+        msg = ("Restore failed; the previous state was restored."
+               if recovered else
+               "Restore failed and automatic recovery did not fully succeed; "
+               "manual recovery may be required.")
+        _finish(restore_id, started_utc, state, recovered, msg)
+        return state
+    finally:
+        if lockfd is not None:
+            try:
+                os.close(lockfd)          # release the flock
+            except OSError:
+                pass
+
+
+def _finish(restore_id, started_utc, state, restart_ok, message) -> None:
+    write_outcome(state, restore_id, started_utc, _utcnow(), restart_ok, message)
+
+
+# --------------------------------------------------------------------------- #
+# detach                                                                      #
+# --------------------------------------------------------------------------- #
+def _redirect_worker_std() -> None:
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    if devnull > 2:
+        os.close(devnull)
+    try:
+        os.chdir("/")
+    except OSError:
+        pass
+
+
+def _detach_and_run(opened, restore_backup, restore_id, started_utc, lockfd) -> None:
+    """Double-fork + setsid so the worker is reparented to PID 1 and survives
+    conduit-cc stopping. The foreground returns to main (which exits EXIT_OK).
+    Stubbed in unit tests; the real fork path is exercised only on the Pi."""
+    pid = os.fork()
+    if pid > 0:
+        return                            # foreground -> main returns EXIT_OK
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)                       # intermediate exits
+    _redirect_worker_std()                # grandchild = worker (keeps lockfd)
+    try:
+        run_worker(opened, restore_backup, restore_id, started_utc, lockfd)
+    finally:
+        os._exit(0)
+
+
+# --------------------------------------------------------------------------- #
+# entry point                                                                 #
+# --------------------------------------------------------------------------- #
+def main(argv=None, stdin=None) -> int:
+    parser = argparse.ArgumentParser(prog="ccc-restore-apply", add_help=True)
+    parser.add_argument("command", choices=["apply"])
+    try:
+        args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit:
+        return EXIT_USAGE
+
+    os.umask(0o077)
+    stream = stdin if stdin is not None else sys.stdin.buffer
+
+    if not _state_dir_ok():
+        _log("state directory missing; provisioning is deferred to deployment")
+        return EXIT_FS
+
+    try:
+        restore_id, blob, passphrase = parse_frame(stream)
+    except FrameError as exc:
+        _log("invalid input frame: " + str(exc))
+        return EXIT_USAGE
+
+    try:
+        lockfd = acquire_lock()           # raises SystemExit(EXIT_BUSY/EXIT_FS) on failure
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_INTERNAL
+
+    try:
+        open_backup, restore_backup, validation_errors = _load_backend()
+    except Exception:
+        os.close(lockfd)
+        _log("restore engine unavailable")
+        return EXIT_INTERNAL
+
+    started_utc = _utcnow()
+    try:
+        opened = open_backup(blob, passphrase)
+    except validation_errors:
+        os.close(lockfd)
+        _log("backup failed pre-flight validation")
+        return EXIT_PREFLIGHT
+    except Exception:
+        os.close(lockfd)
+        _log("unexpected error during validation")
+        return EXIT_INTERNAL
+    finally:
+        # Drop secret references as soon as validation is done; `opened` holds the
+        # decrypted staging that the worker needs.
+        passphrase = None
+        blob = None
+
+    _emit_ack(restore_id)
+    _detach_and_run(opened, restore_backup, restore_id, started_utc, lockfd)
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except SystemExit as _exc:
+        raise
+    except BaseException:
+        _log("fatal internal error")
+        sys.exit(EXIT_INTERNAL)
