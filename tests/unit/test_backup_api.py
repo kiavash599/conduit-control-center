@@ -347,3 +347,266 @@ def test_inspect_missing_passphrase_maps_to_422(client):
         files={"file": ("backup.cccbak", _FAKE_BLOB, "application/octet-stream")},
     )
     assert r.status_code == 422
+
+
+# ===========================================================================
+# POST /api/backup/restore + GET /api/backup/restore/status  (S4B-2.2)
+# ===========================================================================
+import subprocess  # noqa: E402  (used only by restore tests below)
+
+
+def _restore_id_from_frame(frame: bytes) -> str:
+    header = frame.split(b"\n\n", 1)[0].decode("ascii")
+    for line in header.splitlines():
+        if line.startswith("restore_id:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _accept_helper(frame):
+    """Stub helper: echo a correct ack for the frame's restore_id (returncode 0)."""
+    return 0, "accepted " + _restore_id_from_frame(frame)
+
+
+def _ok_open(blob, pw):
+    return object()
+
+
+def _post_restore(client, blob=_FAKE_BLOB, passphrase=_VALID_PASSPHRASE, confirm="RESTORE"):
+    data = {"passphrase": passphrase}
+    if confirm is not None:
+        data["confirm"] = confirm
+    return client.post(
+        "/api/backup/restore",
+        files={"file": ("backup.cccbak", blob, "application/octet-stream")},
+        data=data,
+    )
+
+
+# --- request validation matrix ----------------------------------------------
+
+
+def test_restore_success_returns_202(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", _accept_helper)
+    r = _post_restore(client)
+    assert r.status_code == 202
+    body = r.json()
+    assert body["state"] == "scheduled"
+    # restore_id is a uuid4 string
+    import uuid as _uuid
+    assert _uuid.UUID(body["restore_id"]).version == 4
+
+
+def test_restore_wrong_confirm_422_no_work(client, monkeypatch):
+    called = {"open": False, "helper": False}
+    monkeypatch.setattr(backup_api, "open_backup",
+                        lambda b, p: called.__setitem__("open", True) or object())
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper",
+                        lambda f: called.__setitem__("helper", True) or (0, "x"))
+    r = _post_restore(client, confirm="restore")          # wrong case
+    assert r.status_code == 422
+    assert called == {"open": False, "helper": False}
+
+
+def test_restore_missing_confirm_422(client):
+    r = _post_restore(client, confirm=None)
+    assert r.status_code == 422
+
+
+def test_restore_missing_file_422(client):
+    r = client.post("/api/backup/restore",
+                    data={"passphrase": _VALID_PASSPHRASE, "confirm": "RESTORE"})
+    assert r.status_code == 422
+
+
+def test_restore_missing_passphrase_422(client):
+    r = client.post("/api/backup/restore",
+                    files={"file": ("b.cccbak", _FAKE_BLOB, "application/octet-stream")},
+                    data={"confirm": "RESTORE"})
+    assert r.status_code == 422
+
+
+def test_restore_oversize_413_before_validate(client, monkeypatch):
+    called = {"open": False, "helper": False}
+    monkeypatch.setattr(backup_api, "open_backup",
+                        lambda b, p: called.__setitem__("open", True) or object())
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper",
+                        lambda f: called.__setitem__("helper", True) or (0, "x"))
+    big = b"x" * (backup_api._MAX_RESTORE_BYTES + 1)
+    r = _post_restore(client, blob=big)
+    assert r.status_code == 413
+    assert called == {"open": False, "helper": False}
+
+
+def test_restore_prevalidate_wrong_passphrase_400_no_helper(client, monkeypatch):
+    helper_called = {"v": False}
+    monkeypatch.setattr(backup_api, "open_backup",
+                        lambda b, p: (_ for _ in ()).throw(BackupCryptoError("x")))
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper",
+                        lambda f: helper_called.__setitem__("v", True) or (0, "x"))
+    r = _post_restore(client)
+    assert r.status_code == 400
+    assert helper_called["v"] is False
+    assert _VALID_PASSPHRASE not in r.text
+
+
+def test_restore_prevalidate_key_exclusion_400(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup",
+                        lambda b, p: (_ for _ in ()).throw(KeyExclusionError("pem")))
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", _accept_helper)
+    r = _post_restore(client)
+    assert r.status_code == 400
+    assert "pem" not in r.text
+
+
+def test_restore_prevalidate_unexpected_500(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup",
+                        lambda b, p: (_ for _ in ()).throw(RuntimeError("/etc/conduit-cc secret")))
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", _accept_helper)
+    r = _post_restore(client)
+    assert r.status_code == 500
+    assert "conduit-cc secret" not in r.text
+
+
+# --- helper exit mapping matrix ---------------------------------------------
+
+
+@pytest.mark.parametrize("code,expected", [
+    (backup_api._EXIT_BUSY, 409),
+    (backup_api._EXIT_PREFLIGHT, 400),
+    (backup_api._EXIT_FS, 503),
+    (backup_api._EXIT_USAGE, 500),
+    (backup_api._EXIT_INTERNAL, 500),
+])
+def test_restore_exit_code_mapping(client, monkeypatch, code, expected):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: (code, ""))
+    r = _post_restore(client)
+    assert r.status_code == expected
+    assert _VALID_PASSPHRASE not in r.text
+
+
+def test_restore_helper_timeout_500(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+
+    def boom(frame):
+        raise subprocess.TimeoutExpired(cmd="ccc-restore-apply", timeout=30)
+
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", boom)
+    r = _post_restore(client)
+    assert r.status_code == 500
+
+
+def test_restore_helper_launch_failure_500(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+
+    def boom(frame):
+        raise OSError("sudo not found")
+
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", boom)
+    r = _post_restore(client)
+    assert r.status_code == 500
+    assert "sudo" not in r.text
+
+
+# --- ack validation matrix --------------------------------------------------
+
+
+def test_restore_ack_mismatch_500(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper",
+                        lambda f: (0, "accepted not-the-right-id"))
+    r = _post_restore(client)
+    assert r.status_code == 500
+
+
+def test_restore_ack_empty_500(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: (0, ""))
+    r = _post_restore(client)
+    assert r.status_code == 500
+
+
+# --- security: passphrase delivered on stdin, never leaked ------------------
+
+
+def test_restore_passphrase_on_stdin_not_in_response(client, monkeypatch):
+    captured = {}
+
+    def capture(frame):
+        captured["frame"] = frame
+        return 0, "accepted " + _restore_id_from_frame(frame)
+
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", capture)
+    r = _post_restore(client)
+    assert r.status_code == 202
+    # passphrase IS delivered to the helper on stdin (the frame) ...
+    assert _VALID_PASSPHRASE.encode() in captured["frame"]
+    # ... but never echoed back in the response.
+    assert _VALID_PASSPHRASE not in r.text
+
+
+# --- auth / csrf ------------------------------------------------------------
+
+
+def test_restore_requires_auth(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", _accept_helper)
+    client.app.dependency_overrides.pop(get_current_user, None)
+    assert _post_restore(client).status_code == 401
+
+
+def test_restore_requires_csrf(client, monkeypatch):
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", _accept_helper)
+    client.app.dependency_overrides.pop(require_csrf_token, None)
+    assert _post_restore(client).status_code == 403
+
+
+# --- status endpoint matrix -------------------------------------------------
+
+
+def _set_outcome(monkeypatch, tmp_path, payload):
+    path = tmp_path / "restore-status.json"
+    if payload is not None:
+        path.write_text(__import__("json").dumps(payload))
+    monkeypatch.setattr(backup_api, "_OUTCOME_PATH", str(path))
+    return path
+
+
+def test_status_idle_when_absent(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, None)
+    r = client.get("/api/backup/restore/status")
+    assert r.status_code == 200 and r.json()["state"] == "idle"
+
+
+@pytest.mark.parametrize("state", ["in_progress", "restored", "rolled_back", "rollback_failed"])
+def test_status_reports_helper_states(client, monkeypatch, tmp_path, state):
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": state,
+        "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
+        "message": "msg",
+    })
+    body = client.get("/api/backup/restore/status").json()
+    assert body["state"] == state and body["restore_id"] == "rid-1"
+    assert body["restart_ok"] is True
+
+
+def test_status_corrupt_json_is_unknown(client, monkeypatch, tmp_path):
+    path = tmp_path / "restore-status.json"
+    path.write_text("{ not json")
+    monkeypatch.setattr(backup_api, "_OUTCOME_PATH", str(path))
+    assert client.get("/api/backup/restore/status").json()["state"] == "unknown"
+
+
+def test_status_wrong_schema_is_unknown(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, {"schema": 99, "state": "restored"})
+    assert client.get("/api/backup/restore/status").json()["state"] == "unknown"
+
+
+def test_status_requires_auth(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, None)
+    client.app.dependency_overrides.pop(get_current_user, None)
+    assert client.get("/api/backup/restore/status").status_code == 401

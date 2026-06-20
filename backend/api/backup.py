@@ -40,6 +40,10 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import json
+import subprocess
+import uuid
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -70,6 +74,34 @@ _PASSPHRASE_MAX_LEN = 1024
 # future deployment slice raises it; this app-level guard is defence in depth and
 # bounds how many bytes we read into memory before decryption.
 _MAX_INSPECT_BYTES = 900 * 1024  # 921_600 bytes (< 1 MB nginx default)
+
+# ---------------------------------------------------------------------------
+# Restore (S4B-2.2) -- thin HTTP layer over the privileged helper.
+# ---------------------------------------------------------------------------
+# The restore *execution* runs out-of-process in the root helper
+# ccc-restore-apply (committed 1bf5ac7): the API pre-validates, then streams the
+# encrypted blob + passphrase to the helper over stdin and returns 202 as soon as
+# the helper acks + detaches. The actual stop/restore/restart happens in the
+# detached worker; its result is read back from the outcome file (the source of
+# truth), never from this request.
+#
+# NOTE: the sudoers grant for the helper, the nginx body-limit raise, and
+# /var/lib/conduit-cc provisioning are deferred to S4B-2.4, so this path is not
+# end-to-end on the Pi yet. The unit tests stub the helper invocation.
+_HELPER_PATH = "/opt/conduit-cc/bin/ccc-restore-apply"
+_OUTCOME_PATH = "/var/lib/conduit-cc/restore-status.json"
+_MAX_RESTORE_BYTES = _MAX_INSPECT_BYTES          # mirror the inspect cap
+_CONFIRM_TOKEN = "RESTORE"
+_HELPER_TIMEOUT_S = 30
+
+# Helper foreground (pre-detach) exit codes -- mirror of ccc-restore-apply.
+_EXIT_OK = 0
+_EXIT_USAGE = 2
+_EXIT_FS = 3
+_EXIT_SYSTEMCTL = 4
+_EXIT_BUSY = 5
+_EXIT_PREFLIGHT = 6
+_EXIT_INTERNAL = 7
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +342,208 @@ async def inspect_backup_endpoint(
         "excluded":         m.get("excluded", []),
         "compatibility":    _compatibility(m.get("app_version", "")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Restore helper plumbing (S4B-2.2)
+# ---------------------------------------------------------------------------
+
+
+def _build_restore_frame(restore_id: str, blob: bytes, passphrase: bytes) -> bytes:
+    """Build the CCC-RESTORE/1 stdin frame the helper parses. Secrets go on
+    stdin only -- never argv/env."""
+    header = (
+        "CCC-RESTORE/1\n"
+        f"restore_id: {restore_id}\n"
+        f"blob_len: {len(blob)}\n"
+        f"passphrase_len: {len(passphrase)}\n\n"
+    ).encode("ascii")
+    return header + blob + passphrase
+
+
+def _invoke_restore_helper(frame: bytes):
+    """Run the privileged helper, feeding the frame on stdin. Returns
+    (returncode, stdout_text). Raises subprocess.TimeoutExpired on timeout.
+
+    Stubbed in unit tests; real end-to-end requires the S4B-2.4 sudoers grant."""
+    proc = subprocess.run(
+        ["sudo", _HELPER_PATH, "apply"],
+        input=frame,
+        capture_output=True,
+        timeout=_HELPER_TIMEOUT_S,
+        shell=False,
+    )
+    return proc.returncode, proc.stdout.decode("ascii", "replace")
+
+
+def _map_helper_exit(returncode: int) -> HTTPException:
+    """Map a helper FOREGROUND (pre-detach) exit code to an HTTP error.
+
+    EXIT_SYSTEMCTL never appears here -- service control happens in the detached
+    worker and is surfaced via the outcome file, not this response."""
+    if returncode == _EXIT_BUSY:
+        return HTTPException(status_code=status.HTTP_409_CONFLICT,
+                             detail="A restore is already in progress.")
+    if returncode == _EXIT_PREFLIGHT:
+        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                             detail="Wrong passphrase or invalid backup file.")
+    if returncode == _EXIT_FS:
+        return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                             detail="Restore is not available on this server yet.")
+    # EXIT_USAGE / EXIT_INTERNAL / anything unexpected -> generic 500.
+    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                         detail="Could not start the restore.")
+
+
+def _read_outcome() -> dict:
+    """Read the helper's outcome file (the source of truth). Absent -> idle.
+    Unreadable/corrupt -> a safe generic state (never a secret, never a 500)."""
+    try:
+        with open(_OUTCOME_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {"state": "idle", "restore_id": None, "started_utc": None,
+                "finished_utc": None, "restart_ok": None,
+                "message": "No restore has been run."}
+    except (OSError, ValueError):
+        return {"state": "unknown", "restore_id": None, "started_utc": None,
+                "finished_utc": None, "restart_ok": None,
+                "message": "Restore status is unavailable."}
+    if not isinstance(data, dict) or data.get("schema") != 1:
+        return {"state": "unknown", "restore_id": None, "started_utc": None,
+                "finished_utc": None, "restart_ok": None,
+                "message": "Restore status is unavailable."}
+    return {
+        "state":        data.get("state", "unknown"),
+        "restore_id":   data.get("restore_id"),
+        "started_utc":  data.get("started_utc"),
+        "finished_utc": data.get("finished_utc"),
+        "restart_ok":   data.get("restart_ok"),
+        "message":      data.get("message", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/backup/restore
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/restore",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Restore CCC state from an encrypted backup (destructive; restarts the dashboard)",
+    responses={
+        202: {"description": "Restore scheduled; the dashboard will restart"},
+        400: {"description": "Wrong passphrase or invalid/incompatible backup"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token missing or invalid"},
+        409: {"description": "A restore is already in progress"},
+        413: {"description": "Uploaded file exceeds the restore size limit"},
+        422: {"description": "Missing fields or confirmation not provided"},
+        500: {"description": "Could not start the restore"},
+        503: {"description": "Restore is not available on this server yet"},
+    },
+)
+async def restore_backup_endpoint(
+    file:       UploadFile = File(...),
+    passphrase: str = Form(..., min_length=1, max_length=_PASSPHRASE_MAX_LEN),
+    confirm:    str = Form(...),
+    _user:      AuthenticatedUser = Depends(get_current_user),
+    _csrf:      None = Depends(require_csrf_token),
+) -> dict:
+    """Destructive restore. Pre-validates the upload in memory, then hands the
+    encrypted blob + passphrase to the privileged helper and returns 202 the
+    moment the helper acks + detaches. The real stop/restore/restart runs in the
+    detached worker; its outcome is read later via GET /api/backup/restore/status.
+
+    The passphrase is never logged, never placed in argv/env, and never echoed."""
+    if confirm != _CONFIRM_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f'Type {_CONFIRM_TOKEN} to confirm this destructive restore.',
+        )
+
+    try:
+        blob = await file.read(_MAX_RESTORE_BYTES + 1)
+    finally:
+        await file.close()
+    if len(blob) > _MAX_RESTORE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Backup file is too large to restore.",
+        )
+
+    # Fast-fail pre-validation in memory (the helper re-validates authoritatively).
+    try:
+        await run_in_threadpool(open_backup, blob, passphrase)
+    except (KeyExclusionError, BackupCryptoError, BackupArchiveError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Wrong passphrase or invalid backup file.",
+        )
+    except Exception:
+        logger.exception("backup/restore pre-validation failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the restore.",
+        )
+
+    restore_id = str(uuid.uuid4())
+    frame = _build_restore_frame(restore_id, blob, passphrase.encode("utf-8"))
+
+    try:
+        returncode, stdout = await run_in_threadpool(_invoke_restore_helper, frame)
+    except subprocess.TimeoutExpired:
+        logger.error("backup/restore helper timed out")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the restore.",
+        )
+    except Exception:
+        logger.exception("backup/restore helper could not be launched")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the restore.",
+        )
+    finally:
+        # Drop secret references promptly.
+        frame = None
+        blob = None
+
+    if returncode != _EXIT_OK:
+        raise _map_helper_exit(returncode)
+
+    # Strict ack match: returncode 0 must be accompanied by "accepted <restore_id>".
+    if stdout.strip() != f"accepted {restore_id}":
+        logger.error("backup/restore helper ack mismatch")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the restore.",
+        )
+
+    return {
+        "restore_id": restore_id,
+        "state": "scheduled",
+        "message": "Restore starting; the dashboard will restart and you will be signed out.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/backup/restore/status
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/restore/status",
+    summary="Read the most recent restore outcome",
+    responses={
+        200: {"description": "Restore status"},
+        401: {"description": "Not authenticated"},
+    },
+)
+async def restore_status_endpoint(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Return the most recent restore outcome from the helper's outcome file (the
+    source of truth). No clearing/acking: the next restore overwrites it."""
+    return _read_outcome()
