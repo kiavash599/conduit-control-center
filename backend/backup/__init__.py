@@ -9,6 +9,11 @@ from backend.backup.archive import (
     read_manifest,
     unpack,
 )
+from backend.backup.archiver import (
+    OpenedBackup,
+    create_backup,
+    open_backup,
+)
 from backend.backup.collector import (
     ALLOWLIST,
     StagedItem,
@@ -46,4 +51,6 @@ __all__ = [
     "build_manifest", "parse_manifest", "serialize_manifest",
     # S2B
     "encrypt_archive", "decrypt_archive", "BackupCryptoError",
+    # S2C
+    "create_backup", "open_backup", "OpenedBackup",
 ]
