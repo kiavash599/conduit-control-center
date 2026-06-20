@@ -1066,6 +1066,98 @@
             </div><!-- /#appearance-card -->
 
             <!--
+              Create Backup — Backup & Restore (Epic #4, slice S4A.2).
+              ------------------------------------------------------------
+              INERT in this slice (S4A.2b): markup + wiring only. No fetch,
+              no download, no create action. Behaviour is added in S4A.2c by
+              frontend/static/js/backup.js (loaded in the scripts block).
+
+              API (used later by backup.js, already shipped in S4A.1):
+                POST /api/backup/create  ->  application/octet-stream download
+
+              DOM IDs to be consumed by backup.js (S4A.2c):
+                backup-create-card        — the card container
+                backup-passphrase         — passphrase input
+                backup-confirm-passphrase — confirm passphrase input
+                backup-create-btn         — Create & download button
+                backup-error              — inline validation/error paragraph
+                backup-success            — inline success message paragraph
+
+              Not wrapped in a <form>: with no JS handler yet, a form would
+              submit (navigate) on Enter. A plain container + type="button"
+              guarantees zero behaviour until S4A.2c wires it.
+            -->
+            <div class="card" id="backup-create-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Create Backup</h2>
+                        <p class="card__subtitle">Download an encrypted backup of your settings</p>
+                    </div>
+                </div>
+
+                <p class="form-hint">
+                    Choose a passphrase to encrypt the backup. Store it somewhere safe &mdash;
+                    it cannot be recovered, and without it the backup cannot be restored.
+                </p>
+
+                <div class="form-group">
+                    <label class="label" for="backup-passphrase">
+                        Backup passphrase
+                    </label>
+                    <input class="input"
+                           type="password"
+                           id="backup-passphrase"
+                           name="passphrase"
+                           autocomplete="new-password"
+                           minlength="12"
+                           required>
+                    <p class="form-hint">Minimum 12 characters</p>
+                </div>
+
+                <div class="form-group">
+                    <label class="label" for="backup-confirm-passphrase">
+                        Confirm passphrase
+                    </label>
+                    <input class="input"
+                           type="password"
+                           id="backup-confirm-passphrase"
+                           name="confirm_passphrase"
+                           autocomplete="new-password"
+                           required>
+                </div>
+
+                <!--
+                  Inline validation/error (client-side; shown by backup.js in S4A.2c).
+                  textContent set by JS — no innerHTML. Hidden by default.
+                -->
+                <p class="form-error"
+                   id="backup-error"
+                   role="alert"
+                   hidden></p>
+
+                <!--
+                  Inline success message (shown by backup.js after a download).
+                  textContent set by JS — no innerHTML. Hidden by default.
+                -->
+                <p class="text-success text-sm mt-2"
+                   id="backup-success"
+                   role="status"
+                   hidden></p>
+
+                <div class="mt-4">
+                    <!-- type="button": inert until backup.js attaches a handler (S4A.2c). -->
+                    <button id="backup-create-btn"
+                            class="btn btn--primary"
+                            type="button"
+                            disabled>
+                        Create &amp; download
+                    </button>
+                </div>
+
+            </div><!-- /#backup-create-card -->
+
+            <!--
               Conduit Configuration (read-only) — M1 (§6.1).
               Shows configured (next-start) vs effective (running) values + drift.
               NO edit controls, NO apply button (write path is a later milestone).
@@ -1435,4 +1527,10 @@
 
 <!-- Issue #43: DDNS status panel -->
 <script src="{{ static_url('js/ddns.js') }}"></script>
+
+<!-- Epic #4 S4A.2: Backup Create UI. Wiring placeholder only (S4A.2b) — the
+     live <script src="js/backup.js"> is added in S4A.2c together with the
+     module itself. Kept commented so this slice introduces no runtime 404 and
+     no behaviour. backup.js will load after api.js/app.js (base.html) and may
+     use the shared rawFetch() helper added to api.js in this slice. -->
 {% endblock %}

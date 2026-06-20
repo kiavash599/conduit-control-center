@@ -188,9 +188,79 @@ async function apiFetch(path, opts = {}) {
 
 
 /* ============================================================================
+   rawFetch  (Epic #4, S4A.2 — Option B shared helper)
+   ============================================================================
+   Like apiFetch, but returns the *raw* Response instead of a parsed JSON body.
+   Needed for endpoints whose response (or request) is not JSON — e.g. the
+   binary backup download from POST /api/backup/create, which apiFetch cannot
+   handle because it always parses response.json().
+
+   Shared behaviour kept identical to apiFetch so callers do not re-implement it:
+   - Attaches X-CSRF-Token from the csrf_token cookie when present.
+   - 401 (not on /login)  -> redirect to /login?next=<current path>.
+   - 403                  -> toast "Session error — please reload the page." + throw.
+   - Network error        -> toast + re-throw.
+
+   Differences from apiFetch (intentional):
+   - Does NOT set Content-Type (the caller decides; the backup create body is
+     JSON, but other callers may send multipart/etc.).
+   - Does NOT parse or toast other non-2xx responses; it returns the Response so
+     the caller can inspect response.ok, read response.blob(), or pull an error
+     detail from a JSON error body itself.
+
+   @param {string}      path    - API path, e.g. '/api/backup/create'
+   @param {RequestInit} [opts]  - fetch() options (method, body, headers, …)
+   @returns {Promise<Response>} - the raw Response (2xx, or non-2xx other than 401/403)
+   @throws  on network error or 403
+   ============================================================================ */
+
+async function rawFetch(path, opts = {}) {
+    const csrfToken = getCsrfToken();
+
+    const headers = {
+        // X-CSRF-Token: sent only when the cookie is present (double-submit).
+        ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+        ...(opts.headers || {}),
+    };
+
+    let response;
+    try {
+        response = await fetch(path, { ...opts, headers });
+    } catch (err) {
+        Toast.show(`Network error: ${err.message}`);
+        throw err;
+    }
+
+    // 401 — session expired or never established (same semantics as apiFetch).
+    if (response.status === 401) {
+        if (window.location.pathname !== '/login') {
+            const next = encodeURIComponent(
+                window.location.pathname + window.location.search
+            );
+            window.location.href = `/login?next=${next}`;
+            // Never-resolving promise: the page is navigating away.
+            return new Promise(() => {});
+        }
+        return response;
+    }
+
+    // 403 — CSRF token mismatch or other forbidden (same semantics as apiFetch).
+    if (response.status === 403) {
+        Toast.show('Session error — please reload the page.');
+        throw new Error('403 Forbidden');
+    }
+
+    // Everything else (2xx and other non-2xx) is returned to the caller, which
+    // is responsible for inspecting response.ok and reading the body.
+    return response;
+}
+
+
+/* ============================================================================
    Globals (no module system in v0.1 — scripts loaded via <script> tags)
    api.js must be loaded before any script that calls apiFetch or Toast.
    ============================================================================ */
 
 window.apiFetch = apiFetch;
+window.rawFetch = rawFetch;
 window.Toast    = Toast;
