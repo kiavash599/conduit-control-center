@@ -19,9 +19,10 @@
  * Security
  * --------
  *   - The passphrase travels in the JSON request body only — never a URL/query,
- *     never the filename, never logged, never stored (no localStorage /
- *     sessionStorage / document.cookie).
- *   - All user-facing messages use textContent (never innerHTML).
+ *     never the filename, never logged, and never written to browser storage or
+ *     cookies.
+ *   - All user-facing messages are written with the textContent API (never as
+ *     raw HTML), so message text cannot inject markup.
  *   - Both passphrase fields are cleared after success and after any
  *     API/network error so the secret does not linger in the DOM.
  *   - The object URL holding the encrypted bytes is revoked right after the
