@@ -48,6 +48,7 @@ starlette>=1.3.1,<1.4.0
 python-multipart>=0.0.9,<1.0.0
 
 # Backup encryption (Epic #4, S2B) — AES-256-GCM + scrypt envelope.
-# Pi preflight OK: cryptography-45.0.7 cp37-abi3 manylinux_2_34_aarch64 wheel
-# (no Rust/source build); AESGCM + Scrypt import; scrypt n=2^15 latency ~251 ms.
-cryptography>=42.0.0,<46.0.0
+# Lower bound raised to >=48.0.1 to clear the security audit on older releases.
+# Pi preflight OK: cryptography-48.0.1 cp39-abi3 manylinux_2_34_aarch64 wheel
+# (no Rust/source build); AESGCM + Scrypt import.
+cryptography>=48.0.1,<49.0.0
