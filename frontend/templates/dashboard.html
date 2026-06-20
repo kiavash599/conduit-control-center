@@ -1158,6 +1158,89 @@
             </div><!-- /#backup-create-card -->
 
             <!--
+              Inspect Backup — Backup & Restore (Epic #4, slice S4B-1b).
+              ------------------------------------------------------------
+              Read-only PREVIEW of an encrypted backup: upload + passphrase ->
+              POST /api/backup/inspect -> manifest preview. It does NOT restore
+              anything and makes NO changes on disk or to any service. Restore/
+              apply is a future, deferred feature (S4B-2) and has no control here.
+
+              Behaviour: frontend/static/js/backup.js (onInspect).
+              DOM IDs consumed by backup.js:
+                backup-inspect-card       — card container
+                backup-inspect-file       — file input
+                backup-inspect-passphrase — passphrase input
+                backup-inspect-btn        — Inspect button
+                backup-inspect-error      — inline error paragraph
+                backup-inspect-preview    — hidden preview panel (filled by JS)
+            -->
+            <div class="card" id="backup-inspect-card">
+
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Inspect a Backup</h2>
+                        <p class="card__subtitle">Preview a backup file — this never restores or changes anything</p>
+                    </div>
+                </div>
+
+                <p class="form-hint">
+                    Inspecting a backup only reads it to show you what it contains. It does
+                    not restore anything and makes no changes. Restoring a backup is a
+                    future, deferred feature and is not available here.
+                </p>
+
+                <div class="form-group">
+                    <label class="label" for="backup-inspect-file">
+                        Backup file
+                    </label>
+                    <input class="input"
+                           type="file"
+                           id="backup-inspect-file"
+                           name="file"
+                           accept=".cccbak,.ccbak">
+                </div>
+
+                <div class="form-group">
+                    <label class="label" for="backup-inspect-passphrase">
+                        Passphrase
+                    </label>
+                    <input class="input"
+                           type="password"
+                           id="backup-inspect-passphrase"
+                           name="passphrase"
+                           autocomplete="off">
+                </div>
+
+                <!--
+                  Inline error (client-side; shown by backup.js via textContent).
+                  Hidden by default.
+                -->
+                <p class="form-error"
+                   id="backup-inspect-error"
+                   role="alert"
+                   hidden></p>
+
+                <div class="mt-4">
+                    <!-- type="button": enabled by backup.js once the handler is attached. -->
+                    <button id="backup-inspect-btn"
+                            class="btn btn--secondary"
+                            type="button"
+                            disabled>
+                        Inspect backup
+                    </button>
+                </div>
+
+                <!--
+                  Preview panel — populated by backup.js (createElement + textContent
+                  only). Hidden until a successful inspect; reset before each attempt.
+                  No restore/apply control is ever rendered here.
+                -->
+                <div id="backup-inspect-preview" class="mt-4" role="region"
+                     aria-label="Backup preview" hidden></div>
+
+            </div><!-- /#backup-inspect-card -->
+
+            <!--
               Conduit Configuration (read-only) — M1 (§6.1).
               Shows configured (next-start) vs effective (running) values + drift.
               NO edit controls, NO apply button (write path is a later milestone).

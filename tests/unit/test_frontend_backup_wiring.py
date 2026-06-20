@@ -158,3 +158,120 @@ def test_api_js_existing_exports_intact():
     js = _api_js()
     assert "window.apiFetch = apiFetch;" in js
     assert "window.Toast    = Toast;" in js
+
+
+# ===========================================================================
+# Inspect / Preview UI (S4B-1b)
+# ===========================================================================
+
+
+def test_inspect_card_ids_present():
+    html = _dashboard()
+    for needle in (
+        'id="backup-inspect-card"',
+        'id="backup-inspect-file"',
+        'id="backup-inspect-passphrase"',
+        'id="backup-inspect-btn"',
+        'id="backup-inspect-error"',
+        'id="backup-inspect-preview"',
+    ):
+        assert needle in html, needle
+
+
+def test_inspect_card_in_settings_section():
+    html = _dashboard()
+    assert html.index('id="backup-inspect-card"') > html.index('id="section-settings"')
+
+
+def test_inspect_card_says_no_restore_no_changes():
+    import re
+    html = _dashboard()
+    card = html[html.index('id="backup-inspect-card"'):html.index("/#backup-inspect-card")]
+    # Normalise whitespace: HTML collapses it, and the copy wraps across lines.
+    low = re.sub(r"\s+", " ", card).lower()
+    assert "does not restore" in low
+    assert "no changes" in low or "makes no changes" in low
+    # Restore/apply is framed as future/deferred only.
+    assert "future" in low or "deferred" in low
+
+
+def test_inspect_card_has_no_restore_or_destructive_control():
+    html = _dashboard()
+    card = html[html.index('id="backup-inspect-card"'):html.index("/#backup-inspect-card")]
+    low = card.lower()
+    # No actionable restore/apply/delete control in the markup.
+    for bad in ('id="backup-restore', 'id="restore-', '>restore<', 'apply backup', 'restore backup'):
+        assert bad not in low, bad
+
+
+def test_inspect_card_file_and_passphrase_inputs():
+    html = _dashboard()
+    card = html[html.index('id="backup-inspect-card"'):html.index("/#backup-inspect-card")]
+    assert 'type="file"' in card
+    assert 'type="password"' in card
+    # passphrase not autosaved/suggested by the browser
+    assert 'autocomplete="off"' in card
+
+
+# --- backup.js inspect behaviour -------------------------------------------
+
+
+def test_backup_js_inspect_uses_endpoint_and_formdata():
+    js = _backup_js()
+    assert "/api/backup/inspect" in js
+    assert "new FormData()" in js
+    assert "rawFetch(" in js
+
+
+def test_backup_js_inspect_does_not_set_multipart_content_type():
+    js = _backup_js()
+    # The inspect call must not hand-set a Content-Type (browser sets the
+    # multipart boundary). Guard against a multipart/form-data literal.
+    assert "multipart/form-data" not in js
+
+
+def test_backup_js_inspect_size_precheck():
+    js = _backup_js()
+    assert "MAX_INSPECT_BYTES" in js
+    assert "900 * 1024" in js
+    assert ".size >" in js or "file.size" in js
+
+
+def test_backup_js_inspect_handles_non_json_errors():
+    js = _backup_js()
+    # response.json() used, with a rejection/fallback handler for non-JSON bodies.
+    assert "response.json()" in js
+    # the .json() call has a second (onRejected) handler -> graceful fallback
+    assert "inspect-failed" in js
+
+
+def test_backup_js_inspect_renders_preview_with_dom_api():
+    js = _backup_js()
+    assert "createElement" in js
+    assert ".textContent" in js
+    assert "innerHTML" not in js
+
+
+def test_backup_js_inspect_references_compatibility():
+    js = _backup_js()
+    assert "compatibility" in js
+    assert "compatible" in js
+
+
+def test_backup_js_inspect_renders_items_and_excluded():
+    js = _backup_js()
+    assert "data.items" in js
+    assert "excluded" in js
+
+
+def test_backup_js_inspect_clears_passphrase():
+    js = _backup_js()
+    assert "backup-inspect-passphrase" in js
+    assert "inspectClearPassphrase" in js
+
+
+def test_backup_js_no_restore_apply_language():
+    js = _backup_js().lower()
+    # No destructive/apply wording or endpoint in the JS module.
+    assert "/api/backup/restore" not in js
+    assert "restore_backup" not in js
