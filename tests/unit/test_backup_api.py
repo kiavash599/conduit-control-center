@@ -13,6 +13,8 @@ suites). No real CCC dir is required.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -350,9 +352,10 @@ def test_inspect_missing_passphrase_maps_to_422(client):
 
 
 # ===========================================================================
-# POST /api/backup/restore + GET /api/backup/restore/status  (S4B-2.2)
+# POST /api/backup/restore + GET /api/backup/restore/status  (S4B-2.2 / 2.5c)
 # ===========================================================================
-import subprocess  # noqa: E402  (used only by restore tests below)
+# _invoke_restore_helper contract (S4B-2.5c): returns (result, payload) where
+# result is "ack" | "exit" | "mismatch" | "timeout".
 
 
 def _restore_id_from_frame(frame: bytes) -> str:
@@ -364,8 +367,8 @@ def _restore_id_from_frame(frame: bytes) -> str:
 
 
 def _accept_helper(frame):
-    """Stub helper: echo a correct ack for the frame's restore_id (returncode 0)."""
-    return 0, "accepted " + _restore_id_from_frame(frame)
+    """Stub helper: ack success for the frame's restore_id (new contract)."""
+    return "ack", "accepted " + _restore_id_from_frame(frame)
 
 
 def _ok_open(blob, pw):
@@ -480,20 +483,18 @@ def test_restore_prevalidate_unexpected_500(client, monkeypatch):
     (backup_api._EXIT_INTERNAL, 500),
 ])
 def test_restore_exit_code_mapping(client, monkeypatch, code, expected):
+    # "exit" = foreground exited before acking (pre-flight failure) -> map code.
     monkeypatch.setattr(backup_api, "open_backup", _ok_open)
-    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: (code, ""))
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: ("exit", code))
     r = _post_restore(client)
     assert r.status_code == expected
     assert _VALID_PASSPHRASE not in r.text
 
 
 def test_restore_helper_timeout_500(client, monkeypatch):
+    # "timeout" = no ack within the deadline (foreground already killed/reaped).
     monkeypatch.setattr(backup_api, "open_backup", _ok_open)
-
-    def boom(frame):
-        raise subprocess.TimeoutExpired(cmd="ccc-restore-apply", timeout=30)
-
-    monkeypatch.setattr(backup_api, "_invoke_restore_helper", boom)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: ("timeout", None))
     r = _post_restore(client)
     assert r.status_code == 500
 
@@ -513,17 +514,26 @@ def test_restore_helper_launch_failure_500(client, monkeypatch):
 # --- ack validation matrix --------------------------------------------------
 
 
-def test_restore_ack_mismatch_500(client, monkeypatch):
+def test_restore_ack_wrong_id_500(client, monkeypatch):
     monkeypatch.setattr(backup_api, "open_backup", _ok_open)
     monkeypatch.setattr(backup_api, "_invoke_restore_helper",
-                        lambda f: (0, "accepted not-the-right-id"))
+                        lambda f: ("ack", "accepted not-the-right-id"))
     r = _post_restore(client)
     assert r.status_code == 500
 
 
-def test_restore_ack_empty_500(client, monkeypatch):
+def test_restore_ack_mismatch_line_500(client, monkeypatch):
     monkeypatch.setattr(backup_api, "open_backup", _ok_open)
-    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: (0, ""))
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper", lambda f: ("mismatch", "garbage"))
+    r = _post_restore(client)
+    assert r.status_code == 500
+
+
+def test_restore_exit_zero_without_ack_500(client, monkeypatch):
+    # EOF with rc=0 but no ack -> _map_helper_exit(0) -> generic 500.
+    monkeypatch.setattr(backup_api, "open_backup", _ok_open)
+    monkeypatch.setattr(backup_api, "_invoke_restore_helper",
+                        lambda f: ("exit", backup_api._EXIT_OK))
     r = _post_restore(client)
     assert r.status_code == 500
 
@@ -536,7 +546,7 @@ def test_restore_passphrase_on_stdin_not_in_response(client, monkeypatch):
 
     def capture(frame):
         captured["frame"] = frame
-        return 0, "accepted " + _restore_id_from_frame(frame)
+        return "ack", "accepted " + _restore_id_from_frame(frame)
 
     monkeypatch.setattr(backup_api, "open_backup", _ok_open)
     monkeypatch.setattr(backup_api, "_invoke_restore_helper", capture)
@@ -582,12 +592,12 @@ def test_status_idle_when_absent(client, monkeypatch, tmp_path):
     assert r.status_code == 200 and r.json()["state"] == "idle"
 
 
-@pytest.mark.parametrize("state", ["in_progress", "restored", "rolled_back", "rollback_failed"])
-def test_status_reports_helper_states(client, monkeypatch, tmp_path, state):
+@pytest.mark.parametrize("state", ["restored", "rolled_back", "rollback_failed"])
+def test_status_reports_terminal_states(client, monkeypatch, tmp_path, state):
     _set_outcome(monkeypatch, tmp_path, {
         "schema": 1, "restore_id": "rid-1", "state": state,
         "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
-        "message": "msg",
+        "message": "msg", "pid": None,
     })
     body = client.get("/api/backup/restore/status").json()
     assert body["state"] == state and body["restore_id"] == "rid-1"
@@ -623,3 +633,94 @@ def test_upload_caps_value_and_alignment():
     # for the in-range band, and under the helper's 16 MiB outer bound.
     assert backup_api._MAX_RESTORE_BYTES < 12 * 1024 * 1024
     assert backup_api._MAX_RESTORE_BYTES < 16 * 1024 * 1024
+
+
+# --- D1: in_progress reconciliation (S4B-2.5c) ------------------------------
+
+
+def test_status_in_progress_live_pid_reported(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": "in_progress",
+        "started_utc": "t0", "finished_utc": None, "restart_ok": None,
+        "message": "Restore in progress.", "pid": 4321,
+    })
+    monkeypatch.setattr(backup_api, "_restore_worker_alive", lambda pid: True)
+    body = client.get("/api/backup/restore/status").json()
+    assert body["state"] == "in_progress"
+
+
+def test_status_in_progress_dead_pid_reconciled_unknown(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": "in_progress",
+        "started_utc": "t0", "finished_utc": None, "restart_ok": None,
+        "message": "Restore in progress.", "pid": 999999,
+    })
+    monkeypatch.setattr(backup_api, "_restore_worker_alive", lambda pid: False)
+    body = client.get("/api/backup/restore/status").json()
+    assert body["state"] == "unknown"
+    assert "did not complete" in body["message"].lower()
+
+
+def test_status_in_progress_missing_pid_reconciled_unknown(client, monkeypatch, tmp_path):
+    # No pid (e.g. legacy/interrupted record) -> probe returns False -> unknown.
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": "in_progress",
+        "started_utc": "t0", "finished_utc": None, "restart_ok": None,
+        "message": "Restore in progress.",
+    })
+    body = client.get("/api/backup/restore/status").json()
+    assert body["state"] == "unknown"
+
+
+def test_restore_worker_alive_rejects_bad_pids():
+    for bad in (None, 0, -1, "123", True):
+        assert backup_api._restore_worker_alive(bad) is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="os.kill/proc semantics; Linux-only")
+def test_restore_worker_alive_dead_pid_false():
+    import subprocess
+    p = subprocess.Popen(["true"])
+    p.wait()                                  # ensure it has exited + been reaped
+    assert backup_api._restore_worker_alive(p.pid) is False
+
+
+# --- A1: Popen early-return integration (no sudo; Linux-only) ----------------
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="select on pipes; Linux-only")
+def test_invoke_restore_helper_returns_on_ack_without_waiting(monkeypatch, tmp_path):
+    import sys as _sys
+    import time as _time
+    stub = tmp_path / "stub_helper.py"
+    stub.write_text(
+        "import sys\n"
+        "data = sys.stdin.buffer.read()\n"
+        "head = data.split(b'\\n\\n', 1)[0].decode('ascii','replace')\n"
+        "rid = ''\n"
+        "for ln in head.splitlines():\n"
+        "    if ln.startswith('restore_id:'): rid = ln.split(':',1)[1].strip()\n"
+        "sys.stdout.write('accepted ' + rid + '\\n'); sys.stdout.flush()\n"
+        "import time; time.sleep(3)\n"          # simulate the still-running worker
+    )
+    monkeypatch.setattr(backup_api, "_HELPER_ARGV", [_sys.executable, str(stub)])
+    frame = backup_api._build_restore_frame(
+        "11111111-2222-3333-4444-555555555555", b"CIPHER", b"secretpass")
+    start = _time.monotonic()
+    result, payload = backup_api._invoke_restore_helper(frame)
+    elapsed = _time.monotonic() - start
+    assert result == "ack"
+    assert payload == "accepted 11111111-2222-3333-4444-555555555555"
+    assert elapsed < 1.5            # returned at ack, did NOT wait for the 3 s sleep
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="select on pipes; Linux-only")
+def test_invoke_restore_helper_exit_before_ack(monkeypatch, tmp_path):
+    import sys as _sys
+    stub = tmp_path / "stub_busy.py"
+    stub.write_text("import sys; sys.exit(5)\n")     # EXIT_BUSY, no ack
+    monkeypatch.setattr(backup_api, "_HELPER_ARGV", [_sys.executable, str(stub)])
+    frame = backup_api._build_restore_frame(
+        "11111111-2222-3333-4444-555555555555", b"C", b"p")
+    result, payload = backup_api._invoke_restore_helper(frame)
+    assert result == "exit" and payload == 5

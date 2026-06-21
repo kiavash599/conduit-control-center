@@ -44,6 +44,16 @@ Type=simple
 User=conduit-cc
 Group=conduit-cc
 
+# KillMode=process (S4B-2.5c): on stop/restart, signal ONLY the main uvicorn
+# process, not the whole control group. The restore helper (ccc-restore-apply)
+# double-forks a detached worker that itself runs `systemctl stop conduit-cc`;
+# under the default KillMode=control-group that worker would be cgroup-killed by
+# the very stop it issued, leaving the service down and restore-status.json stuck
+# at in_progress. With KillMode=process the detached worker survives the stop and
+# completes restore -> start. The app's other children are short-lived sudo
+# helpers, so leaving them un-cgroup-killed is acceptable (and safer mid-write).
+KillMode=process
+
 WorkingDirectory=/opt/conduit-cc
 
 # Read configuration from .env.  EnvironmentFile is processed before ExecStart.

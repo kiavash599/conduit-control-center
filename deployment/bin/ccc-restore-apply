@@ -77,6 +77,11 @@ START_TIMEOUT_S = 45
 HEALTH_TIMEOUT_S = 30
 POLL_INTERVAL_S = 0.5
 
+# Grace delay (S4B-2.5c) between the worker writing in_progress and stopping
+# conduit-cc, so the API's 202 response has time to flush over the socket before
+# uvicorn is signalled. Pairs with the API's read-the-ack-and-return design.
+GRACE_BEFORE_STOP_S = 2
+
 _RESTORE_ID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{7,63}$")
 
 # --- Exit codes (PRE-DETACH only; post-detach uses the outcome file) ---------
@@ -314,7 +319,11 @@ def restart_healthy() -> bool:
 # outcome file                                                                #
 # --------------------------------------------------------------------------- #
 def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, message) -> None:
-    """Atomically write the secret-free outcome JSON (0640, conduit-cc readable)."""
+    """Atomically write the secret-free outcome JSON (0640, conduit-cc readable).
+
+    Additive `pid` field (S4B-2.5c, schema stays 1): the worker's PID is recorded
+    while a restore is in_progress so the API can reconcile a stale in_progress
+    (os.kill probe). Terminal states record pid=null."""
     data = {
         "schema": 1,
         "restore_id": restore_id,
@@ -323,6 +332,7 @@ def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, mess
         "finished_utc": finished_utc,
         "restart_ok": restart_ok,
         "message": message,
+        "pid": os.getpid() if state == "in_progress" else None,
     }
     payload = json.dumps(data).encode("utf-8")
     out_dir = os.path.dirname(OUTCOME_PATH)
@@ -358,6 +368,8 @@ def run_worker(opened, restore_backup, restore_id, started_utc, lockfd=None) -> 
     ckpt = None
     captured = {}
     try:
+        # Grace delay so the API's 202 can flush before we stop conduit-cc.
+        time.sleep(GRACE_BEFORE_STOP_S)
         stop_service()
         ckpt, captured = make_checkpoint(CCC_DIR)
         result = restore_backup(opened, ccc_dir=CCC_DIR)

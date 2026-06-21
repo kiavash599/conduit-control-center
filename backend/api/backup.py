@@ -41,7 +41,11 @@ import logging
 from datetime import datetime, timezone
 
 import json
+import os
+import select
 import subprocess
+import threading
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -91,10 +95,14 @@ _MAX_INSPECT_BYTES = 10 * 1024 * 1024  # 10 MiB
 # /var/lib/conduit-cc provisioning are deferred to S4B-2.4, so this path is not
 # end-to-end on the Pi yet. The unit tests stub the helper invocation.
 _HELPER_PATH = "/opt/conduit-cc/bin/ccc-restore-apply"
+# Invocation seam: overridable in tests to point at a no-sudo stub.
+_HELPER_ARGV = ["sudo", _HELPER_PATH, "apply"]
 _OUTCOME_PATH = "/var/lib/conduit-cc/restore-status.json"
 _MAX_RESTORE_BYTES = _MAX_INSPECT_BYTES          # mirror the inspect cap
 _CONFIRM_TOKEN = "RESTORE"
-_HELPER_TIMEOUT_S = 30
+# Deadline applied to the ACK read only (NOT the whole restore). Covers Pi
+# scrypt pre-flight + draining a ≤10 MiB frame.
+_ACK_DEADLINE_S = 30
 
 # Helper foreground (pre-detach) exit codes -- mirror of ccc-restore-apply.
 _EXIT_OK = 0
@@ -364,18 +372,84 @@ def _build_restore_frame(restore_id: str, blob: bytes, passphrase: bytes) -> byt
 
 
 def _invoke_restore_helper(frame: bytes):
-    """Run the privileged helper, feeding the frame on stdin. Returns
-    (returncode, stdout_text). Raises subprocess.TimeoutExpired on timeout.
+    """Launch the privileged helper and return AS SOON AS it acks, WITHOUT
+    waiting for the (detached) restore to complete.
 
-    Stubbed in unit tests; real end-to-end requires the S4B-2.4 sudoers grant."""
-    proc = subprocess.run(
-        ["sudo", _HELPER_PATH, "apply"],
-        input=frame,
-        capture_output=True,
-        timeout=_HELPER_TIMEOUT_S,
+    Returns one of:
+        ("ack", line)        -- helper printed "accepted <id>"; restore detached
+        ("exit", returncode) -- foreground exited before acking (pre-flight fail)
+        ("mismatch", line)   -- 2xx-ish but the ack line was unexpected
+        ("timeout", None)    -- no ack within the deadline (foreground killed)
+
+    The frame (ciphertext + passphrase) is written on stdin only. stderr is
+    inherited so helper logs reach journald and no stderr pipe can fill and
+    deadlock the helper before it detaches. A daemon thread reaps the short-lived
+    foreground; the detached worker is reparented to PID 1 (reaped by init).
+    Stubbed/seamed in unit tests; real end-to-end requires the S4B-2.4 grant."""
+    proc = subprocess.Popen(
+        list(_HELPER_ARGV),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,                     # inherit -> journald; no pipe to fill
         shell=False,
     )
-    return proc.returncode, proc.stdout.decode("ascii", "replace")
+
+    # Writer daemon: push the whole frame, close stdin, swallow BrokenPipe if the
+    # helper rejected pre-flight and exited before reading it all.
+    def _write_frame():
+        try:
+            proc.stdin.write(frame)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+    threading.Thread(target=_write_frame, daemon=True).start()
+
+    # Read exactly one ack line under a deadline (the ack only, not the restore).
+    deadline = time.monotonic() + _ACK_DEADLINE_S
+    line = b""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            try:
+                proc.kill()                  # pre-ack => pre-detach => pre-stop: safe
+            finally:
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+            return ("timeout", None)
+        rlist, _, _ = select.select([proc.stdout], [], [], remaining)
+        if not rlist:
+            continue
+        chunk = proc.stdout.readline()       # one line
+        line = chunk
+        break
+
+    text = (line or b"").decode("ascii", "replace").strip()
+
+    if text == "":
+        # EOF without an ack -> the foreground exited (pre-flight failure).
+        try:
+            rc = proc.wait(timeout=5)
+        except Exception:
+            rc = _EXIT_INTERNAL
+        return ("exit", rc)
+
+    if text.startswith("accepted "):
+        # Reap the short-lived foreground off the request path; do NOT wait for
+        # the detached restore worker.
+        threading.Thread(target=lambda: proc.wait(), daemon=True).start()
+        return ("ack", text)
+
+    # Unexpected stdout line.
+    threading.Thread(target=lambda: proc.wait(), daemon=True).start()
+    return ("mismatch", text)
 
 
 def _map_helper_exit(returncode: int) -> HTTPException:
@@ -397,9 +471,43 @@ def _map_helper_exit(returncode: int) -> HTTPException:
                          detail="Could not start the restore.")
 
 
+_STALE_RESTORE_MESSAGE = (
+    "A previous restore did not complete (interrupted or stale). "
+    "Verify your settings and try again."
+)
+
+
+def _restore_worker_alive(pid) -> bool:
+    """True iff `pid` is a live ccc-restore-apply worker. Used to reconcile a
+    stale in_progress outcome (D1). Defence-in-depth against PID reuse: confirm
+    the process exists AND its cmdline references the helper (best effort).
+    Injectable so the endpoint tests can drive both branches deterministically."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False                     # no such process -> dead/stale
+    except PermissionError:
+        pass                             # exists but root-owned -> alive
+    except OSError:
+        return False
+    # PID-reuse guard (best effort; skip if /proc is unreadable).
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            cmdline = fh.read().replace(b"\x00", b" ")
+        return b"ccc-restore-apply" in cmdline
+    except (FileNotFoundError, PermissionError, OSError):
+        return True                      # can't verify cmdline -> trust os.kill
+
+
 def _read_outcome() -> dict:
     """Read the helper's outcome file (the source of truth). Absent -> idle.
-    Unreadable/corrupt -> a safe generic state (never a secret, never a 500)."""
+    Unreadable/corrupt -> a safe generic state (never a secret, never a 500).
+
+    Reconciles a stale in_progress (D1): if the recorded worker pid is missing,
+    invalid, dead, or not clearly ccc-restore-apply, report `unknown` in memory
+    WITHOUT rewriting the file."""
     try:
         with open(_OUTCOME_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -415,7 +523,8 @@ def _read_outcome() -> dict:
         return {"state": "unknown", "restore_id": None, "started_utc": None,
                 "finished_utc": None, "restart_ok": None,
                 "message": "Restore status is unavailable."}
-    return {
+
+    out = {
         "state":        data.get("state", "unknown"),
         "restore_id":   data.get("restore_id"),
         "started_utc":  data.get("started_utc"),
@@ -423,6 +532,10 @@ def _read_outcome() -> dict:
         "restart_ok":   data.get("restart_ok"),
         "message":      data.get("message", ""),
     }
+    if out["state"] == "in_progress" and not _restore_worker_alive(data.get("pid")):
+        out["state"] = "unknown"
+        out["message"] = _STALE_RESTORE_MESSAGE
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -494,13 +607,7 @@ async def restore_backup_endpoint(
     frame = _build_restore_frame(restore_id, blob, passphrase.encode("utf-8"))
 
     try:
-        returncode, stdout = await run_in_threadpool(_invoke_restore_helper, frame)
-    except subprocess.TimeoutExpired:
-        logger.error("backup/restore helper timed out")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not start the restore.",
-        )
+        result, payload = await run_in_threadpool(_invoke_restore_helper, frame)
     except Exception:
         logger.exception("backup/restore helper could not be launched")
         raise HTTPException(
@@ -512,17 +619,25 @@ async def restore_backup_endpoint(
         frame = None
         blob = None
 
-    if returncode != _EXIT_OK:
-        raise _map_helper_exit(returncode)
-
-    # Strict ack match: returncode 0 must be accompanied by "accepted <restore_id>".
-    if stdout.strip() != f"accepted {restore_id}":
+    if result == "exit":
+        # Foreground exited before acking -> pre-flight failure; map the code.
+        raise _map_helper_exit(payload)
+    if result == "timeout":
+        logger.error("backup/restore helper timed out before ack")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not start the restore.",
+        )
+    if result != "ack" or payload != f"accepted {restore_id}":
+        # Strict ack match (mismatch or unexpected line).
         logger.error("backup/restore helper ack mismatch")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not start the restore.",
         )
 
+    # Returned as soon as the helper acked + detached; the restore runs out of
+    # band and reports via the outcome file (GET /api/backup/restore/status).
     return {
         "restore_id": restore_id,
         "state": "scheduled",

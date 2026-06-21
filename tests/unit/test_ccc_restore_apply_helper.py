@@ -217,6 +217,7 @@ def _wire_worker(mod, tmp_path, monkeypatch, *, restart_results, raise_in=None):
             raise RuntimeError("stop failed")
 
     monkeypatch.setattr(mod, "stop_service", _stop)
+    monkeypatch.setattr(mod.time, "sleep", lambda *a, **k: None)   # skip grace delay (S4B-2.5c)
     monkeypatch.setattr(mod, "make_checkpoint", lambda d: ("CKPT", {"ccc.db": "x"}))
     monkeypatch.setattr(mod, "_cleanup_checkpoint", lambda c: None)
     counters = {"restore_checkpoint": 0}
@@ -287,8 +288,42 @@ def test_write_outcome_schema_modes_and_no_secrets(mod, tmp_path, monkeypatch):
         "schema": 1, "restore_id": "rid-1", "state": "restored",
         "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
         "message": "Restore complete.",
+        "pid": None,                          # terminal state -> pid null (S4B-2.5c)
     }
     raw = out.read_text()
     for secret in ("CIPHERTEXT", "secretpass", "SESSION_SECRET", "CF_API_TOKEN"):
         assert secret not in raw
     assert (out.stat().st_mode & 0o777) == 0o640
+
+
+# --- S4B-2.5c: grace delay + pid in in_progress outcome ---------------------
+
+
+@_linux_only
+def test_write_outcome_in_progress_has_pid_terminal_null(mod, tmp_path, monkeypatch):
+    out = tmp_path / "restore-status.json"
+    monkeypatch.setattr(mod, "OUTCOME_PATH", str(out))
+    mod.write_outcome("in_progress", "rid-1", "t0", None, None, "Restore in progress.")
+    assert json.loads(out.read_text())["pid"] == os.getpid()   # schema 1, additive
+    mod.write_outcome("rolled_back", "rid-1", "t0", "t1", False, "reverted")
+    assert json.loads(out.read_text())["pid"] is None
+
+
+def test_worker_grace_delay_before_stop(mod, tmp_path, monkeypatch):
+    order = []
+    outcomes, counters, restore = _wire_worker(mod, tmp_path, monkeypatch, restart_results=[True])
+    restore.status = "restored"
+    # Re-stub time.sleep and stop_service to record call ordering.
+    monkeypatch.setattr(mod.time, "sleep", lambda *a, **k: order.append("sleep"))
+    monkeypatch.setattr(mod, "stop_service", lambda: order.append("stop"))
+    mod.run_worker(_Opened(), restore, "rid", "t0")
+    assert "sleep" in order and "stop" in order
+    assert order.index("sleep") < order.index("stop")   # grace BEFORE stop
+
+
+def test_service_unit_has_killmode_process():
+    unit = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "deployment" / "conduit-cc.service"
+    ).read_text()
+    assert "KillMode=process" in unit
