@@ -360,3 +360,24 @@ def test_post_validate_accepts_db_without_sessions_table(tmp_path):
     d = _target(tmp_path)
     res = restore_backup(_opened(tmp_path, db=p.read_bytes()), ccc_dir=str(d))
     assert res.status == "restored"
+
+
+# --- S4B-2.6: conduit_settings.json allowed but never written to disk --------
+
+def test_conduit_settings_item_allowed_and_not_written(tmp_path):
+    d = _target(tmp_path)
+    item = StagedItem("conduit_settings.json", b'{"schema": 1, "configured": false}')
+    # Presence must NOT KeyError the path-guard loop and must NOT be written.
+    res = restore_backup(_opened(tmp_path, extra=item), ccc_dir=str(d))
+    assert res.status == "restored"
+    assert not (d / "conduit_settings.json").exists()   # never a disk target
+
+
+def test_conduit_settings_configured_item_still_not_written(tmp_path):
+    d = _target(tmp_path)
+    item = StagedItem("conduit_settings.json", b'{"schema": 1, "configured": true,'
+                      b' "max_common_clients": 10, "bandwidth_mbps": 50,'
+                      b' "max_personal_clients": 0, "reduced": {"enabled": false}}')
+    res = restore_backup(_opened(tmp_path, extra=item), ccc_dir=str(d))
+    assert res.status == "restored"                     # restore_backup ignores it
+    assert not (d / "conduit_settings.json").exists()

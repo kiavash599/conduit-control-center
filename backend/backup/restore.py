@@ -37,7 +37,11 @@ from backend.backup.manifest import FORMAT, MANIFEST_VERSION, BackupArchiveError
 # Logical item name -> target filename within ccc_dir.
 _TARGET_NAME = {"ccc.db": "ccc.db", "env.subset": ".env", "config.json": "config.json"}
 _REQUIRED_ITEMS = ("ccc.db", "env.subset")
-_OPTIONAL_ITEMS = ("config.json",)
+# config.json -> disk; conduit_settings.json (S4B-2.6) is allowed in the archive
+# but is NOT a filesystem target: it is consumed out-of-band by the restore
+# worker (ccc-restore-apply) and never written under ccc_dir. It is therefore
+# absent from _TARGET_NAME, and the path-guard / apply loops skip non-target names.
+_OPTIONAL_ITEMS = ("config.json", "conduit_settings.json")
 _MODE = {"ccc.db": 0o600, ".env": 0o640, "config.json": 0o640}
 _DB_SIDECARS = ("ccc.db-wal", "ccc.db-shm")
 _CHECKPOINT_FILES = ("ccc.db", "ccc.db-wal", "ccc.db-shm", ".env", "config.json")
@@ -246,6 +250,8 @@ def restore_backup(opened: OpenedBackup, ccc_dir: str = CCC_DIR) -> RestoreResul
     for data in items.values():                  # re-scan before any disk write
         scan_content(data)
     for name in items:                           # path-guard computed targets
+        if name not in _TARGET_NAME:             # non-disk item (e.g. conduit_settings.json)
+            continue
         assert_path_allowed(os.path.join(ccc_dir, _TARGET_NAME[name]))
 
     ckpt, captured = _make_checkpoint(ccc_dir)

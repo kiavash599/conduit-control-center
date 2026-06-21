@@ -210,7 +210,13 @@ def _wire_worker(mod, tmp_path, monkeypatch, *, restart_results, raise_in=None):
     ccc.mkdir()
     monkeypatch.setattr(mod, "CCC_DIR", str(ccc))
     outcomes = []
-    monkeypatch.setattr(mod, "write_outcome", lambda *a: outcomes.append(a))
+    # S4B-2.6: _finish passes conduit_settings_state as a keyword; capture it as
+    # the trailing tuple element so existing positional indices stay valid.
+    monkeypatch.setattr(
+        mod, "write_outcome",
+        lambda *a, **k: outcomes.append(a + (k.get("conduit_settings_state"),)))
+    # Isolate worker-branch tests from the real apply path (overridden per-test).
+    monkeypatch.setattr(mod, "_apply_conduit_settings", lambda opened: ("skipped", ""))
 
     def _stop():
         if raise_in == "stop":
@@ -289,6 +295,7 @@ def test_write_outcome_schema_modes_and_no_secrets(mod, tmp_path, monkeypatch):
         "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
         "message": "Restore complete.",
         "pid": None,                          # terminal state -> pid null (S4B-2.5c)
+        "conduit_settings_state": None,       # S4B-2.6 additive, default null
     }
     raw = out.read_text()
     for secret in ("CIPHERTEXT", "secretpass", "SESSION_SECRET", "CF_API_TOKEN"):
@@ -327,3 +334,191 @@ def test_service_unit_has_killmode_process():
         / "deployment" / "conduit-cc.service"
     ).read_text()
     assert "KillMode=process" in unit
+
+
+# ===========================================================================
+# S4B-2.6: re-apply Conduit settings on a committed restore
+# ===========================================================================
+
+
+# --- _hhmm_to_min -----------------------------------------------------------
+
+
+def test_hhmm_to_min_ok(mod):
+    assert mod._hhmm_to_min("00:00") == 0
+    assert mod._hhmm_to_min("23:59") == 1439
+    assert mod._hhmm_to_min("06:30") == 390
+
+
+@pytest.mark.parametrize("bad", ["24:00", "12:60", "noon", "1230", "", ":", "12:", "-1:00"])
+def test_hhmm_to_min_rejects_malformed(mod, bad):
+    with pytest.raises(Exception):
+        mod._hhmm_to_min(bad)
+
+
+# --- _conduit_apply_argv (representation conversion only) --------------------
+
+
+def _cfg(**over):
+    base = {
+        "schema": 1, "configured": True,
+        "max_common_clients": 50, "bandwidth_mbps": 100, "max_personal_clients": 2,
+        "reduced": {"enabled": False},
+    }
+    base.update(over)
+    return base
+
+
+def test_conduit_apply_argv_no_reduced(mod):
+    assert mod._conduit_apply_argv(_cfg()) == [
+        "--max-common-clients", "50",
+        "--bandwidth-mbps", "100",
+        "--max-personal-clients", "2",
+    ]
+
+
+def test_conduit_apply_argv_with_reduced(mod):
+    cfg = _cfg(reduced={"enabled": True, "start": "23:00", "end": "06:00",
+                        "max_common": 10, "bandwidth_mbps": 20})
+    assert mod._conduit_apply_argv(cfg) == [
+        "--max-common-clients", "50",
+        "--bandwidth-mbps", "100",
+        "--max-personal-clients", "2",
+        "--reduced-start-min", "1380",      # 23*60
+        "--reduced-end-min", "360",         # 6*60
+        "--reduced-max-common", "10",
+        "--reduced-bandwidth-mbps", "20",
+    ]
+
+
+# --- _apply_conduit_settings branches ---------------------------------------
+
+
+class _Item:
+    def __init__(self, name, data):
+        self.name = name
+        self.data = data
+
+
+class _Staging:
+    def __init__(self, items):
+        self.items = items
+
+
+class _OpenedCS:
+    def __init__(self, items):
+        self.staging = _Staging(items)
+
+
+def _opened_with(payload: bytes):
+    return _OpenedCS([_Item("ccc.db", b"x"),
+                      _Item("conduit_settings.json", payload)])
+
+
+def test_apply_cs_absent_item_skipped(mod):
+    # Legacy (pre-2.6) backup: no conduit_settings.json item.
+    opened = _OpenedCS([_Item("ccc.db", b"x")])
+    assert mod._apply_conduit_settings(opened) == ("skipped", "")
+
+
+def test_apply_cs_configured_false_skipped(mod, monkeypatch):
+    called = {"v": False}
+    monkeypatch.setattr(mod, "_run_apply_helper",
+                        lambda argv: called.__setitem__("v", True) or 0)
+    opened = _opened_with(b'{"schema": 1, "configured": false}')
+    assert mod._apply_conduit_settings(opened) == ("skipped", "")
+    assert called["v"] is False               # helper never invoked
+
+
+def test_apply_cs_applied_on_helper_success(mod, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mod, "_run_apply_helper",
+                        lambda argv: seen.__setitem__("argv", argv) or 0)
+    payload = json.dumps(_cfg()).encode()
+    state, note = mod._apply_conduit_settings(_opened_with(payload))
+    assert state == "applied" and note.strip()
+    assert seen["argv"][:2] == ["--max-common-clients", "50"]
+
+
+def test_apply_cs_failed_on_helper_nonzero(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_run_apply_helper", lambda argv: 3)
+    assert mod._apply_conduit_settings(_opened_with(json.dumps(_cfg()).encode()))[0] == "failed"
+
+
+def test_apply_cs_failed_on_malformed_json(mod, monkeypatch):
+    called = {"v": False}
+    monkeypatch.setattr(mod, "_run_apply_helper",
+                        lambda argv: called.__setitem__("v", True) or 0)
+    assert mod._apply_conduit_settings(_opened_with(b"{ not json"))[0] == "failed"
+    assert called["v"] is False               # never reaches the helper
+
+
+def test_apply_cs_failed_on_unrecognised_schema(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_run_apply_helper", lambda argv: 0)
+    opened = _opened_with(b'{"schema": 99, "configured": true}')
+    assert mod._apply_conduit_settings(opened)[0] == "failed"
+
+
+def test_apply_cs_failed_on_bad_reduced_time(mod, monkeypatch):
+    called = {"v": False}
+    monkeypatch.setattr(mod, "_run_apply_helper",
+                        lambda argv: called.__setitem__("v", True) or 0)
+    cfg = _cfg(reduced={"enabled": True, "start": "bad", "end": "06:00",
+                        "max_common": 10, "bandwidth_mbps": 20})
+    assert mod._apply_conduit_settings(_opened_with(json.dumps(cfg).encode()))[0] == "failed"
+    assert called["v"] is False               # conversion failed before the helper
+
+
+def test_apply_cs_failed_on_helper_exception(mod, monkeypatch):
+    def boom(argv):
+        raise OSError("helper missing")
+
+    monkeypatch.setattr(mod, "_run_apply_helper", boom)
+    assert mod._apply_conduit_settings(_opened_with(json.dumps(_cfg()).encode()))[0] == "failed"
+
+
+# --- run_worker threads conduit_settings_state ------------------------------
+
+
+def test_worker_restored_threads_conduit_settings_state(mod, tmp_path, monkeypatch):
+    outcomes, counters, restore = _wire_worker(mod, tmp_path, monkeypatch, restart_results=[True])
+    restore.status = "restored"
+    monkeypatch.setattr(mod, "_apply_conduit_settings", lambda opened: ("applied", " note"))
+    assert mod.run_worker(_Opened(), restore, "rid", "t0") == "restored"
+    assert outcomes[-1][0] == "restored"
+    assert outcomes[-1][-1] == "applied"          # threaded into write_outcome
+
+
+def test_worker_non_restored_records_skipped(mod, tmp_path, monkeypatch):
+    outcomes, counters, restore = _wire_worker(mod, tmp_path, monkeypatch, restart_results=[True])
+    restore.status = "rolled_back"
+    # Settings must NOT be applied on a non-committed restore.
+    monkeypatch.setattr(mod, "_apply_conduit_settings",
+                        lambda opened: pytest.fail("must not apply on non-restored"))
+    assert mod.run_worker(_Opened(), restore, "rid", "t0") == "rolled_back"
+    assert outcomes[-1][-1] == "skipped"
+
+
+def test_worker_unhealthy_restore_records_skipped(mod, tmp_path, monkeypatch):
+    # restored-but-unhealthy -> rollback; settings never applied.
+    outcomes, counters, restore = _wire_worker(mod, tmp_path, monkeypatch,
+                                               restart_results=[False, True])
+    restore.status = "restored"
+    monkeypatch.setattr(mod, "_apply_conduit_settings",
+                        lambda opened: pytest.fail("must not apply when unhealthy"))
+    assert mod.run_worker(_Opened(), restore, "rid", "t0") == "rolled_back"
+    assert outcomes[-1][-1] == "skipped"
+
+
+# --- write_outcome carries the field ----------------------------------------
+
+
+@_linux_only
+def test_write_outcome_carries_conduit_settings_state(mod, tmp_path, monkeypatch):
+    out = tmp_path / "restore-status.json"
+    monkeypatch.setattr(mod, "OUTCOME_PATH", str(out))
+    mod.write_outcome("restored", "rid", "t0", "t1", True, "done",
+                      conduit_settings_state="applied")
+    assert json.loads(out.read_text())["conduit_settings_state"] == "applied"
+    mod.write_outcome("restored", "rid", "t0", "t1", True, "done")   # default null
+    assert json.loads(out.read_text())["conduit_settings_state"] is None

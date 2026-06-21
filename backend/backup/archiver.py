@@ -17,13 +17,19 @@ error wrapper is introduced.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from backend._version import APP_VERSION as _DEFAULT_APP_VERSION
 from backend.backup.archive import pack, read_manifest, unpack
-from backend.backup.collector import CCC_DIR, StagingSet, collect
+from backend.backup.collector import CCC_DIR, StagedItem, StagingSet, collect
 from backend.backup.crypto import decrypt_archive, encrypt_archive
 from backend.backup.exclusion import scan_content
+
+# S4B-2.6: logical, synthetic backup item carrying the applied Conduit operator
+# settings. ALWAYS present in a new backup (configured true/false); absence on
+# restore therefore means a legacy (pre-2.6) backup. Never read from disk.
+CONDUIT_SETTINGS_NAME = "conduit_settings.json"
 
 
 @dataclass
@@ -34,15 +40,28 @@ class OpenedBackup:
     manifest: dict
 
 
-def create_backup(passphrase, ccc_dir: str = CCC_DIR, app_version: str | None = None) -> bytes:
+def create_backup(passphrase, ccc_dir: str = CCC_DIR, app_version: str | None = None,
+                  conduit_settings: dict | None = None) -> bytes:
     """Collect CCC state, archive it, and return the encrypted backup bytes.
 
     Fail-closed: a key-grade item makes collect() raise KeyExclusionError and no
     backup is produced. Nothing is written to disk; the plaintext tar.gz exists
-    only in memory."""
+    only in memory.
+
+    `conduit_settings` (S4B-2.6) is a synthetic, non-secret dict captured by the
+    async caller from the configured systemd environment. It is ALWAYS added as
+    conduit_settings.json; a None/missing value defaults to {"schema": 1,
+    "configured": False} so every new backup contains the item."""
     if app_version is None:
         app_version = _DEFAULT_APP_VERSION
+    if conduit_settings is None:
+        conduit_settings = {"schema": 1, "configured": False}
     staging = collect(ccc_dir)                  # S1: allowlist + fail-closed exclusion
+    # Append the synthetic Conduit-settings item (not a filesystem source).
+    staging.items.append(
+        StagedItem(CONDUIT_SETTINGS_NAME,
+                   json.dumps(conduit_settings).encode("utf-8"))
+    )
     plain = pack(staging, app_version)          # S2A: tar.gz (in memory)
     return encrypt_archive(plain, passphrase)   # S2B: encrypted envelope
 

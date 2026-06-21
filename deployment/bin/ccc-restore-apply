@@ -61,6 +61,10 @@ LOCK_PATH = "/var/lib/conduit-cc/.restore.lock"
 UNIT = "conduit-cc"
 HEALTH_URL = "http://127.0.0.1:8000/api/health"
 SYSTEMCTL = "/usr/bin/systemctl"
+# S4B-2.6: existing M2 helper used to re-apply the backup's Conduit settings.
+# The worker is already root, so it execs this directly (no sudo, no new grant);
+# the helper remains the single validation source for the settings values.
+APPLY_HELPER_PATH = "/opt/conduit-cc/bin/ccc-apply-conduit-config"
 
 # Checkpoint set (mirrors the S3 worker checkpoint; covers restart-health failure).
 CHECKPOINT_FILES = ("ccc.db", "ccc.db-wal", "ccc.db-shm", ".env", "config.json")
@@ -318,12 +322,16 @@ def restart_healthy() -> bool:
 # --------------------------------------------------------------------------- #
 # outcome file                                                                #
 # --------------------------------------------------------------------------- #
-def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, message) -> None:
+def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, message,
+                  conduit_settings_state=None) -> None:
     """Atomically write the secret-free outcome JSON (0640, conduit-cc readable).
 
     Additive `pid` field (S4B-2.5c, schema stays 1): the worker's PID is recorded
     while a restore is in_progress so the API can reconcile a stale in_progress
-    (os.kill probe). Terminal states record pid=null."""
+    (os.kill probe). Terminal states record pid=null.
+
+    Additive `conduit_settings_state` (S4B-2.6, schema stays 1): applied | skipped
+    | failed | null -- the result of re-applying the backup's Conduit settings."""
     data = {
         "schema": 1,
         "restore_id": restore_id,
@@ -333,6 +341,7 @@ def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, mess
         "restart_ok": restart_ok,
         "message": message,
         "pid": os.getpid() if state == "in_progress" else None,
+        "conduit_settings_state": conduit_settings_state,
     }
     payload = json.dumps(data).encode("utf-8")
     out_dir = os.path.dirname(OUTCOME_PATH)
@@ -359,10 +368,84 @@ def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, mess
 # --------------------------------------------------------------------------- #
 # worker (detached)                                                           #
 # --------------------------------------------------------------------------- #
+def _hhmm_to_min(value) -> int:
+    """Convert an "HH:MM" (UTC, 24h) string to minutes-since-midnight. Raises
+    ValueError on anything malformed (caught by the caller -> 'failed')."""
+    hh, mm = str(value).split(":")
+    h, m = int(hh), int(mm)
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError("time out of range")
+    return h * 60 + m
+
+
+def _conduit_apply_argv(cfg) -> list:
+    """Map the logical conduit_settings.json (configured=true) to the M2 helper's
+    argv. Value-range validation is left to the helper (single source of truth);
+    this only converts representation (HH:MM -> minutes). Raises on malformed."""
+    argv = [
+        "--max-common-clients", str(int(cfg["max_common_clients"])),
+        "--bandwidth-mbps", str(int(cfg["bandwidth_mbps"])),
+        "--max-personal-clients", str(int(cfg.get("max_personal_clients", 0))),
+    ]
+    red = cfg.get("reduced") or {}
+    if red.get("enabled"):
+        argv += [
+            "--reduced-start-min", str(_hhmm_to_min(red["start"])),
+            "--reduced-end-min", str(_hhmm_to_min(red["end"])),
+            "--reduced-max-common", str(int(red["max_common"])),
+            "--reduced-bandwidth-mbps", str(int(red["bandwidth_mbps"])),
+        ]
+    # Disabled reduced window -> rely on the helper argparse defaults (-1,-1,0,0).
+    return argv
+
+
+def _run_apply_helper(argv) -> int:
+    """Exec the M2 apply helper directly (we are root). Returns its exit code."""
+    import subprocess
+    proc = subprocess.run([APPLY_HELPER_PATH, "apply", *argv],
+                          capture_output=True, shell=False)
+    return proc.returncode
+
+
+def _apply_conduit_settings(opened):
+    """Best-effort re-apply of the backup's Conduit settings (S4B-2.6) via the M2
+    helper. Returns (conduit_settings_state, message_suffix). Never raises.
+      absent item / configured=false   -> ("skipped", "")
+      configured=true + helper success  -> ("applied", " Conduit settings re-applied.")
+      malformed / invalid / helper fail -> ("failed",  "...")"""
+    try:
+        item = None
+        for it in opened.staging.items:
+            if it.name == "conduit_settings.json":
+                item = it
+                break
+        if item is None:
+            return "skipped", ""                       # legacy (pre-2.6) backup
+        cfg = json.loads(item.data.decode("utf-8", "replace"))
+        if not isinstance(cfg, dict) or cfg.get("schema") != 1:
+            return "failed", " Conduit settings were not re-applied (unrecognised format)."
+        if not cfg.get("configured"):
+            return "skipped", ""                       # nothing was configured
+        argv = _conduit_apply_argv(cfg)                # may raise on malformed
+    except Exception:
+        return "failed", " Conduit settings were not re-applied (malformed)."
+    try:
+        rc = _run_apply_helper(argv)
+    except Exception:
+        return "failed", " Conduit settings were not re-applied (helper error)."
+    if rc == 0:
+        return "applied", " Conduit settings re-applied."
+    return "failed", " Conduit settings were not re-applied (validation/apply error)."
+
+
 def run_worker(opened, restore_backup, restore_id, started_utc, lockfd=None) -> str:
     """Stop -> checkpoint -> restore_backup -> start+health, with rollback that
     also covers restart-health failure. Writes the outcome and returns the final
-    state. Never raises; every path produces an outcome."""
+    state. Never raises; every path produces an outcome.
+
+    On a committed (healthy) restore, re-applies the backup's Conduit settings via
+    the M2 helper (best-effort) and records conduit_settings_state. All other
+    terminal paths record conduit_settings_state="skipped"."""
     write_outcome("in_progress", restore_id, started_utc, None, None,
                   "Restore in progress; the dashboard is restarting.")
     ckpt = None
@@ -376,9 +459,13 @@ def run_worker(opened, restore_backup, restore_id, started_utc, lockfd=None) -> 
 
         if result.status == "restored":
             if restart_healthy():
+                # Committed to "restored": re-apply Conduit settings (best-effort)
+                # only now, so a later core rollback can never leave them applied.
+                cs_state, cs_note = _apply_conduit_settings(opened)
                 _cleanup_checkpoint(ckpt)
                 _finish(restore_id, started_utc, "restored", True,
-                        "Restore complete; the dashboard restarted successfully.")
+                        "Restore complete; the dashboard restarted successfully." + cs_note,
+                        conduit_settings_state=cs_state)
                 return "restored"
             # New state prevents a healthy start -> revert to the checkpoint.
             restore_checkpoint(CCC_DIR, captured)
@@ -421,8 +508,10 @@ def run_worker(opened, restore_backup, restore_id, started_utc, lockfd=None) -> 
                 pass
 
 
-def _finish(restore_id, started_utc, state, restart_ok, message) -> None:
-    write_outcome(state, restore_id, started_utc, _utcnow(), restart_ok, message)
+def _finish(restore_id, started_utc, state, restart_ok, message,
+            conduit_settings_state="skipped") -> None:
+    write_outcome(state, restore_id, started_utc, _utcnow(), restart_ok, message,
+                  conduit_settings_state=conduit_settings_state)
 
 
 # --------------------------------------------------------------------------- #

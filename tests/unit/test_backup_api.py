@@ -77,13 +77,53 @@ def client():
     return TestClient(app)
 
 
+# --- S4B-2.6: fake conduit config view for the create-capture path ----------
+
+
+class _FakeNum:
+    def __init__(self, configured):
+        self.configured = configured
+
+
+class _FakeReduced:
+    def __init__(self, enabled=False, start=None, end=None,
+                 max_common_clients=None, bandwidth_mbps=None):
+        self.enabled = enabled
+        self.start = start
+        self.end = end
+        self.max_common_clients = max_common_clients
+        self.bandwidth_mbps = bandwidth_mbps
+
+
+class _FakeView:
+    def __init__(self, *, mcc=None, bw=None, mpc=None, reduced=None):
+        self.max_common_clients = _FakeNum(mcc)
+        self.bandwidth_mbps = _FakeNum(bw)
+        self.max_personal_clients = _FakeNum(mpc)
+        self.reduced = reduced or _FakeReduced()
+
+
+def _stub_view(view):
+    async def _coro():
+        return view
+    return _coro
+
+
+@pytest.fixture(autouse=True)
+def _default_conduit_view(monkeypatch):
+    # Default: an unconfigured view (mcc/bw None) so _capture_conduit_settings()
+    # yields {"schema":1,"configured":false}. The real read-only adapter is never
+    # invoked from a unit test. Individual tests override as needed.
+    monkeypatch.setattr(backup_api, "get_conduit_config_view", _stub_view(_FakeView()))
+
+
 # --- success path -----------------------------------------------------------
 
 
 def test_create_success_returns_octet_stream(client, monkeypatch):
     captured = {}
 
-    def fake_create_backup(passphrase):
+    def fake_create_backup(passphrase, conduit_settings=None):     # S4B-2.6 kwarg
         captured["passphrase"] = passphrase
         return _FAKE_BLOB
 
@@ -99,7 +139,8 @@ def test_create_success_returns_octet_stream(client, monkeypatch):
 
 
 def test_create_response_headers(client, monkeypatch):
-    monkeypatch.setattr(backup_api, "create_backup", lambda passphrase: _FAKE_BLOB)
+    monkeypatch.setattr(backup_api, "create_backup",
+                        lambda passphrase, conduit_settings=None: _FAKE_BLOB)
     r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
 
     assert r.status_code == 200
@@ -116,7 +157,8 @@ def test_create_response_headers(client, monkeypatch):
 
 
 def test_create_requires_auth(client, monkeypatch):
-    monkeypatch.setattr(backup_api, "create_backup", lambda passphrase: _FAKE_BLOB)
+    monkeypatch.setattr(backup_api, "create_backup",
+                        lambda passphrase, conduit_settings=None: _FAKE_BLOB)
     client.app.dependency_overrides.pop(get_current_user, None)   # real dependency -> 401
     r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
     assert r.status_code == 401
@@ -126,7 +168,8 @@ def test_create_requires_auth(client, monkeypatch):
 
 
 def test_create_requires_csrf(client, monkeypatch):
-    monkeypatch.setattr(backup_api, "create_backup", lambda passphrase: _FAKE_BLOB)
+    monkeypatch.setattr(backup_api, "create_backup",
+                        lambda passphrase, conduit_settings=None: _FAKE_BLOB)
     client.app.dependency_overrides.pop(require_csrf_token, None)  # real dependency -> 403
     r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
     assert r.status_code == 403
@@ -149,7 +192,7 @@ def test_create_rejects_missing_passphrase(client):
 
 
 def test_create_key_exclusion_maps_to_500_generic(client, monkeypatch):
-    def boom(passphrase):
+    def boom(passphrase, conduit_settings=None):
         raise KeyExclusionError("pem")            # marker text, must not leak
 
     monkeypatch.setattr(backup_api, "create_backup", boom)
@@ -161,7 +204,7 @@ def test_create_key_exclusion_maps_to_500_generic(client, monkeypatch):
 
 
 def test_create_unexpected_error_maps_to_500_generic(client, monkeypatch):
-    def boom(passphrase):
+    def boom(passphrase, conduit_settings=None):
         raise OSError("/etc/conduit-cc/ccc.db missing")   # path/detail must not leak
 
     monkeypatch.setattr(backup_api, "create_backup", boom)
@@ -170,6 +213,62 @@ def test_create_unexpected_error_maps_to_500_generic(client, monkeypatch):
     detail = r.json()["detail"]
     assert detail == "Backup creation failed."
     assert _VALID_PASSPHRASE not in detail and "ccc.db" not in detail
+
+
+# --- S4B-2.6: create captures + passes the conduit settings -----------------
+
+
+def test_create_captures_and_passes_configured_settings(client, monkeypatch):
+    view = _FakeView(
+        mcc=50, bw=100, mpc=2,
+        reduced=_FakeReduced(enabled=True, start="23:00", end="06:00",
+                             max_common_clients=10, bandwidth_mbps=20),
+    )
+    monkeypatch.setattr(backup_api, "get_conduit_config_view", _stub_view(view))
+    captured = {}
+
+    def fake_create_backup(passphrase, conduit_settings=None):
+        captured["cs"] = conduit_settings
+        return _FAKE_BLOB
+
+    monkeypatch.setattr(backup_api, "create_backup", fake_create_backup)
+    r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
+    assert r.status_code == 200
+    assert captured["cs"] == {
+        "schema": 1, "configured": True,
+        "max_common_clients": 50, "bandwidth_mbps": 100, "max_personal_clients": 2,
+        "reduced": {"enabled": True, "start": "23:00", "end": "06:00",
+                    "max_common": 10, "bandwidth_mbps": 20},
+    }
+
+
+def test_create_captures_unconfigured_when_view_incomplete(client, monkeypatch):
+    # Autouse default view has mcc/bw None -> configured false.
+    captured = {}
+    monkeypatch.setattr(
+        backup_api, "create_backup",
+        lambda passphrase, conduit_settings=None:
+            captured.__setitem__("cs", conduit_settings) or _FAKE_BLOB)
+    r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
+    assert r.status_code == 200
+    assert captured["cs"] == {"schema": 1, "configured": False}
+
+
+def test_create_capture_failure_defaults_unconfigured(client, monkeypatch):
+    # If the adapter view raises, capture falls back to configured false and the
+    # backup is still produced (capture never blocks a backup).
+    async def _boom():
+        raise RuntimeError("adapter down")
+
+    monkeypatch.setattr(backup_api, "get_conduit_config_view", _boom)
+    captured = {}
+    monkeypatch.setattr(
+        backup_api, "create_backup",
+        lambda passphrase, conduit_settings=None:
+            captured.__setitem__("cs", conduit_settings) or _FAKE_BLOB)
+    r = client.post("/api/backup/create", json={"passphrase": _VALID_PASSPHRASE})
+    assert r.status_code == 200
+    assert captured["cs"] == {"schema": 1, "configured": False}
 
 
 # ===========================================================================
@@ -620,6 +719,38 @@ def test_status_requires_auth(client, monkeypatch, tmp_path):
     _set_outcome(monkeypatch, tmp_path, None)
     client.app.dependency_overrides.pop(get_current_user, None)
     assert client.get("/api/backup/restore/status").status_code == 401
+
+
+# --- S4B-2.6: conduit_settings_state surfaced in status ---------------------
+
+
+@pytest.mark.parametrize("cs_state", ["applied", "skipped", "failed", None])
+def test_status_reports_conduit_settings_state(client, monkeypatch, tmp_path, cs_state):
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": "restored",
+        "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
+        "message": "msg", "pid": None, "conduit_settings_state": cs_state,
+    })
+    body = client.get("/api/backup/restore/status").json()
+    assert body["conduit_settings_state"] == cs_state
+
+
+def test_status_conduit_settings_state_null_when_absent(client, monkeypatch, tmp_path):
+    # Legacy record without the field -> null (never a KeyError).
+    _set_outcome(monkeypatch, tmp_path, {
+        "schema": 1, "restore_id": "rid-1", "state": "restored",
+        "started_utc": "t0", "finished_utc": "t1", "restart_ok": True,
+        "message": "msg", "pid": None,
+    })
+    body = client.get("/api/backup/restore/status").json()
+    assert body["conduit_settings_state"] is None
+
+
+def test_status_idle_includes_null_conduit_settings_state(client, monkeypatch, tmp_path):
+    _set_outcome(monkeypatch, tmp_path, None)
+    body = client.get("/api/backup/restore/status").json()
+    assert body["state"] == "idle"
+    assert body["conduit_settings_state"] is None
 
 
 # --- upload-cap alignment (S4B-2.4) -----------------------------------------

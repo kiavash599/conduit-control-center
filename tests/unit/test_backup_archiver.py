@@ -54,7 +54,10 @@ def test_full_round_trip(tmp_path):
         blob = create_backup(_PW, ccc_dir=str(d), app_version="0.4.0")
         opened = open_backup(blob, _PW)
         assert isinstance(opened, OpenedBackup)
-        assert opened.staging.names() == {"ccc.db", "env.subset", "config.json"}
+        # S4B-2.6: conduit_settings.json is always present (defaults to
+        # configured=false here since no conduit_settings dict was passed).
+        assert opened.staging.names() == {
+            "ccc.db", "env.subset", "config.json", "conduit_settings.json"}
         db = next(i for i in opened.staging.items if i.name == "ccc.db").data
         out = tmp_path / "r.db"
         out.write_bytes(db)
@@ -164,5 +167,45 @@ def test_no_disk_artifact(tmp_path):
         blob = create_backup(_PW, ccc_dir=str(d))
         open_backup(blob, _PW)
         assert _snaps() == before                    # S1 transient snapshot cleaned up
+    finally:
+        con.close()
+
+
+# --- S4B-2.6: synthetic conduit_settings.json item --------------------------
+
+import json as _json  # noqa: E402
+
+
+def _conduit_item(opened):
+    return next(i for i in opened.staging.items if i.name == "conduit_settings.json")
+
+
+# 11
+def test_conduit_settings_default_configured_false(tmp_path):
+    d, con = _make_ccc_dir(tmp_path)
+    try:
+        # No conduit_settings passed -> item still present, configured=false.
+        opened = open_backup(create_backup(_PW, ccc_dir=str(d)), _PW)
+        assert "conduit_settings.json" in opened.staging.names()
+        cfg = _json.loads(_conduit_item(opened).data.decode())
+        assert cfg == {"schema": 1, "configured": False}
+    finally:
+        con.close()
+
+
+# 12
+def test_conduit_settings_configured_passthrough(tmp_path):
+    d, con = _make_ccc_dir(tmp_path)
+    try:
+        settings = {
+            "schema": 1, "configured": True,
+            "max_common_clients": 50, "bandwidth_mbps": 100, "max_personal_clients": 2,
+            "reduced": {"enabled": True, "start": "23:00", "end": "06:00",
+                        "max_common": 10, "bandwidth_mbps": 20},
+        }
+        opened = open_backup(
+            create_backup(_PW, ccc_dir=str(d), conduit_settings=settings), _PW)
+        cfg = _json.loads(_conduit_item(opened).data.decode())
+        assert cfg == settings                         # round-trips unchanged
     finally:
         con.close()

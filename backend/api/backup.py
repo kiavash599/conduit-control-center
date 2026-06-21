@@ -40,6 +40,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import functools
 import json
 import os
 import select
@@ -58,6 +59,7 @@ from backend.backup.archiver import create_backup, open_backup
 from backend.backup.crypto import BackupCryptoError
 from backend.backup.exclusion import KeyExclusionError
 from backend.backup.manifest import BackupArchiveError
+from backend.conduit.adapter import get_conduit_config_view
 from backend.dependencies import (
     AuthenticatedUser,
     get_current_user,
@@ -133,6 +135,38 @@ class CreateBackupRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+async def _capture_conduit_settings() -> dict:
+    """Synthesize the logical conduit_settings.json (S4B-2.6) from the configured
+    systemd environment via the read-only adapter view. Best-effort and never
+    raising: any failure -> {"schema": 1, "configured": False}. Never reads the
+    drop-in file directly and never widens the collector allowlist. Values are
+    operational integers + HH:MM strings -- no secrets."""
+    try:
+        view = await get_conduit_config_view()
+        mcc = view.max_common_clients.configured
+        bw = view.bandwidth_mbps.configured
+        if mcc is None or bw is None:
+            return {"schema": 1, "configured": False}
+        red = view.reduced
+        return {
+            "schema": 1,
+            "configured": True,
+            "max_common_clients": mcc,
+            "bandwidth_mbps": bw,
+            "max_personal_clients": view.max_personal_clients.configured or 0,
+            "reduced": {
+                "enabled": bool(red.enabled),
+                "start": red.start if red.enabled else None,
+                "end": red.end if red.enabled else None,
+                "max_common": red.max_common_clients if red.enabled else None,
+                "bandwidth_mbps": red.bandwidth_mbps if red.enabled else None,
+            },
+        }
+    except Exception:
+        logger.warning("backup/create: conduit settings capture failed; recording configured=false")
+        return {"schema": 1, "configured": False}
+
+
 def _download_filename() -> str:
     """A timestamped, secret-free attachment filename, e.g.
     ``ccc-backup-20260620T140501Z.cccbak``."""
@@ -169,10 +203,17 @@ async def create_backup_endpoint(
     The encrypted bytes are built entirely in memory and streamed back with a
     Content-Disposition attachment header; nothing is written to disk. On any
     failure the response carries a generic message with no secret material."""
+    # S4B-2.6: capture the applied Conduit settings (read-only adapter view) here,
+    # in the async context, and hand them to the synchronous create_backup. The
+    # item is ALWAYS included (configured true/false) so absence => legacy backup.
+    conduit_settings = await _capture_conduit_settings()
     try:
         # create_backup is synchronous and CPU-bound (scrypt); run it off the
         # event loop. The passphrase is passed positionally and never logged.
-        blob = await run_in_threadpool(create_backup, body.passphrase)
+        blob = await run_in_threadpool(
+            functools.partial(create_backup, body.passphrase,
+                              conduit_settings=conduit_settings)
+        )
     except KeyExclusionError:
         # Fail-closed: the source contained key-grade material where none is
         # allowed. No backup was produced. Generic message; details only to logs.
@@ -514,15 +555,15 @@ def _read_outcome() -> dict:
     except FileNotFoundError:
         return {"state": "idle", "restore_id": None, "started_utc": None,
                 "finished_utc": None, "restart_ok": None,
-                "message": "No restore has been run."}
+                "message": "No restore has been run.", "conduit_settings_state": None}
     except (OSError, ValueError):
         return {"state": "unknown", "restore_id": None, "started_utc": None,
                 "finished_utc": None, "restart_ok": None,
-                "message": "Restore status is unavailable."}
+                "message": "Restore status is unavailable.", "conduit_settings_state": None}
     if not isinstance(data, dict) or data.get("schema") != 1:
         return {"state": "unknown", "restore_id": None, "started_utc": None,
                 "finished_utc": None, "restart_ok": None,
-                "message": "Restore status is unavailable."}
+                "message": "Restore status is unavailable.", "conduit_settings_state": None}
 
     out = {
         "state":        data.get("state", "unknown"),
@@ -531,6 +572,7 @@ def _read_outcome() -> dict:
         "finished_utc": data.get("finished_utc"),
         "restart_ok":   data.get("restart_ok"),
         "message":      data.get("message", ""),
+        "conduit_settings_state": data.get("conduit_settings_state"),  # S4B-2.6 (null if absent)
     }
     if out["state"] == "in_progress" and not _restore_worker_alive(data.get("pid")):
         out["state"] = "unknown"
