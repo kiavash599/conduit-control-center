@@ -7,7 +7,46 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.3.0] - 2026-06-21
+
+> First public release. Bundles the Personal Mode, Ryve Claim, and Backup &
+> Restore milestones on top of the v0.2.0 Smart Conduit Control base; all
+> production-validated on a Raspberry Pi 4 (Ubuntu 22.04 ARM64). `APP_VERSION`
+> is bumped to match this heading; the `test_version` guard keeps the two in
+> lock-step.
+
+### Added — Backup & Restore (Epic #4)
+
+- **Encrypted backups** — create a single-file, password-protected backup of CCC
+  state (`ccc.db`, a redacted `.env` subset, `config.json`, and the applied
+  Conduit settings) from **Settings → Backup**. The archive is sealed with
+  **AES-256-GCM** using a key derived from the operator passphrase via **scrypt**;
+  the cleartext header is authenticated as AES-GCM associated data.
+- **Fail-closed key exclusion** — the collector refuses to include key-grade or
+  secret material (private keys, session secret, Cloudflare token, TLS paths);
+  the same scan runs again when a backup is opened (defense in depth).
+- **Inspect before restore** — upload a backup to preview its manifest
+  (app version, contents, compatibility) without writing anything.
+- **Guided restore** — a destructive, confirmation-gated restore runs through a
+  privileged worker (`ccc-restore-apply`) with a pre-apply checkpoint and
+  automatic rollback on failure; the dashboard restarts and is verified healthy,
+  and the applied Conduit settings are re-applied through the validated config
+  helper only after the core restore commits.
+- **API** — `POST /api/backup/create`, `POST /api/backup/inspect`,
+  `POST /api/backup/restore`, `GET /api/backup/restore/status` (auth + CSRF;
+  `Cache-Control: no-store`). Passphrases are never logged, placed in argv/env,
+  or echoed in responses.
+
+### Added — Ryve Claim QR (Epic #3)
+
+- **Ryve Claim** — generate a Ryve claim QR to adopt the station in the Ryve
+  mobile app. The QR is treated as **private-key-grade**: produced by the
+  `ccc-ryve-claim` helper (runs as `conduit`, never root), written only to a
+  unique `0600` tmpfs path that is unlinked immediately after being read into
+  memory, and never persisted or logged.
+- **API** — `POST /ryve/claim`, `GET /ryve/claim/image/{claim_id}` (PNG,
+  `no-store`), `DELETE /ryve/claim/{claim_id}` (auth + CSRF); claims live in an
+  in-memory store and are not written to disk.
 
 ### Added — Personal Mode (C4 / C5 / C6)
 

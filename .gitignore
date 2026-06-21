@@ -172,6 +172,25 @@ cython_debug/
 
 # Application runtime database — never commit live data
 ccc.db
+ccc.db-wal
+ccc.db-shm
+*.sqlite
+*.sqlite3
+
+# Local runtime config — only the *.example.json templates are tracked
+/config.json
+
+# Encrypted backup archives and one-shot helper .bak files — never commit
+*.cccbak
+*.bak
+
+# TLS / key material — never commit (lives in /etc/conduit-cc/tls on the host)
+*.pem
+*.key
+*.crt
+*.cer
+*.pfx
+*.p12
 
 # PyPI configuration file
 .pypirc

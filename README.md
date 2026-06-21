@@ -3,35 +3,83 @@
 [![CI](https://github.com/kiavash599/conduit-control-center/actions/workflows/ci.yml/badge.svg)](https://github.com/kiavash599/conduit-control-center/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%204%20%7C%20ARM64-lightgrey.svg)](docs/dev-setup.md)
+[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%204%20%7C%20ARM64-lightgrey.svg)](docs/architecture.md)
 
-A lightweight, open-source web dashboard for managing a [Psiphon Conduit](https://conduit.psiphon.ca) node on a Raspberry Pi 4.
+**Conduit Control Center (CCC)** is a lightweight, open-source web dashboard that turns a Raspberry Pi into a managed [Psiphon Conduit](https://conduit.psiphon.ca) node — helping people in censored regions reach the open internet. Install it once, then run, monitor, configure, and back up your node from any browser. No command line required.
 
-Psiphon Conduit lets you share your internet bandwidth to help people in censored regions access the open internet. This dashboard replaces complex command-line operations with a clean, beginner-friendly web interface — install it once, then manage your node from any browser.
+CCC is **aggregate-only by design**: it never sees or stores who uses your node, their identity, their IP, or their traffic.
 
----
+<!-- Hero screenshot pending — see the Screenshots section for the planned asset list. -->
 
-## Screenshot
-
-> _Screenshot will be added after the v0.1.0 release._
+> **New here?** → [What is this?](#what-is-this) · [Install](#quick-install) · [Privacy](#privacy) · [Documentation](#documentation)
 
 ---
 
-## Features (v0.1)
+## What is this?
 
-| Feature | Description |
-|---------|-------------|
-| Node control | Start, stop, and restart your Conduit node with one click |
-| Live status | Real-time status badge: Running / Stopped / Starting / Stopping / Error |
-| System health | CPU %, RAM %, CPU temperature, and disk usage — updated every 10 seconds |
-| Traffic counters | Bytes uploaded and downloaded since the last service start |
-| Log viewer | Last 200 lines of Conduit logs with auto-refresh every 30 seconds |
-| DDNS status | Current public IP and last Cloudflare DNS update result |
-| Pairing | Not available in v0.1.0; planned for future Personal Mode work |
-| Configuration viewer | Read-only view of current Conduit configuration |
-| Secure login | Password-protected with account lockout after failed attempts |
-| Change password | Update your admin password from the settings page |
-| HTTPS | Full TLS via Cloudflare Proxy + Origin Certificate (recommended) |
+[Psiphon Conduit](https://conduit.psiphon.ca) lets volunteers donate a slice of their home internet so that people living under censorship can get online. Running a Conduit node normally means working on the Linux command line.
+
+**Conduit Control Center replaces that with a clean web dashboard.** You install it once on a Raspberry Pi, then everything — starting your node, watching its health, adjusting limits, backing it up — happens in your browser.
+
+**Who is it for?** Ordinary people who want to help, not only system administrators. If you can flash an SD card and follow a checklist, you can run a node.
+
+---
+
+## Mission
+
+Internet censorship is a daily reality in many countries, cutting people off from news, communication, and the open web. Psiphon Conduit exists so that volunteers anywhere can contribute connectivity and help close that gap.
+
+But contributing has been harder than it should be — it has assumed comfort with Linux and the terminal. **CCC exists to remove that barrier.** It makes operating a Conduit node significantly easier, so that running one is realistic for everyday users, not just experienced administrators. The more people who can comfortably run a node, the more resilient the network becomes for those who depend on it.
+
+---
+
+## Privacy
+
+Helping people behind censorship only works if their privacy is protected. CCC is built so that operating a node never exposes the people using it. Specifically, CCC provides:
+
+- **Aggregate-only metrics** — totals such as bytes transferred, never anything per-person.
+- **No per-user statistics.**
+- **No user identity tracking.**
+- **No visibility into any user's IP address.**
+- **No inspection of user traffic** of any kind.
+- **No user activity history.**
+
+CCC also never stores your own secrets in plain sight: passphrases, API tokens, pairing links, and private keys are never logged, committed, or placed in URLs. See [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md) for details.
+
+---
+
+## Features
+
+| Feature | Description | Status | Default |
+|---|---|---|---|
+| **Dashboard** | One-click start / stop / restart, live status badge, system health (CPU, RAM, temperature, disk), log viewer, and light / dark / system themes | Shipped | On |
+| **Contribution Advisor** | A read-only, aggregate guidance card that helps you understand how well your node is contributing | Shipped | On |
+| **Traffic Collector** | A persistent, aggregate-only byte ledger with history and configurable retention | Optional | Off |
+| **Conduit Configuration** | Adjust bandwidth, maximum clients, and a reduced-bandwidth time window — read and write | Shipped | On |
+| **Personal Mode** | Create a personal Conduit identity for trusted contacts, with a pairing token and shareable QR code | Optional | Off |
+| **Ryve QR Claim** | Claim your station in the Ryve mobile app by scanning a QR code; the private key is never exposed | Optional | Off |
+| **Backup / Restore** | Create an encrypted backup of your CCC state and restore it through a guided flow | Shipped | On |
+| **DDNS** | Automatically keeps your Cloudflare DNS record pointed at your changing public IP | Shipped | On |
+| **Secure access** | Password login with account lockout, full HTTPS, CSRF protection, secrets never stored | Shipped | On |
+
+> "Optional / Off" features ship disabled until you turn them on — nothing aggregate-or-personal is collected or enabled without your action.
+
+---
+
+## Screenshots
+
+_Screenshots are being prepared and will be added before/after the public documentation pass._
+
+<!--
+Planned screenshot assets (store under docs/brand/screenshots/):
+  dashboard-overview.png — Hero: full dashboard, status badge + system health
+  advisor-card.png       — Contribution Advisor card (aggregate guidance only)
+  traffic-history.png    — Optional aggregate traffic history over time
+  conduit-config.png     — Conduit configuration: bandwidth / clients / reduced window
+  personal-mode.png      — Personal Mode status card with pairing QR
+  backup-restore.png     — Encrypted backup / guided restore screen
+Redact any real domain, IP, or token in every capture.
+-->
 
 ---
 
@@ -43,19 +91,19 @@ Psiphon Conduit lets you share your internet bandwidth to help people in censore
 - Ubuntu 22.04 LTS ARM64
 - A stable internet connection with a public IP address
 
-### Cloudflare (Recommended Deployment)
+### Cloudflare (recommended deployment)
 
 This project is designed to run behind the Cloudflare proxy. Before installing, you need:
 
-- A domain managed by Cloudflare (e.g. `rockysystem.net`)
-- A DNS A record for your dashboard hostname (e.g. `conduit.yourdomain.com`) with **Proxy enabled** (orange cloud ON)
+- A domain managed by Cloudflare (e.g. `example.com`)
+- A DNS A record for your dashboard hostname (e.g. `conduit.example.com`) with **Proxy enabled** (orange cloud ON)
 - Cloudflare SSL/TLS mode set to **Full (strict)**
 - A Cloudflare Origin Certificate (created in the Cloudflare dashboard)
 - A Cloudflare API token with `Zone:DNS:Edit` and `Zone:Zone:Read` permissions
 
 > **New to Cloudflare?** Read [docs/pre-install.md](docs/pre-install.md) first — it walks you through every step in the Cloudflare dashboard before you run the installer. The whole process takes about 10 minutes.
 
-### Alternative: Direct IP (Let's Encrypt)
+### Alternative: direct IP (Let's Encrypt)
 
 If you are not using the Cloudflare proxy, Let's Encrypt is supported. See [docs/tls-setup.md](docs/tls-setup.md).
 
@@ -84,14 +132,56 @@ The installer will:
 2. Prompt for your Cloudflare API token, zone name, and hostname
 3. **Validate all inputs via the Cloudflare API** before making any system changes
 4. Prompt for your Origin Certificate and private key file paths
-5. Set up Nginx, systemd, UFW firewall, and the DDNS cron job automatically
+5. Set up Nginx, systemd, the UFW firewall, and the DDNS cron job automatically
 6. Print your dashboard URL when complete
 
 > If any validation step fails, the installer exits cleanly with a plain-English explanation. No system changes are made until all inputs are verified.
 
+### First login
+
+Open the dashboard URL printed by the installer, sign in with the admin password you set during installation, and change it from **Settings** if you'd like. You're ready to start your node.
+
+---
+
+## Updating & Uninstalling
+
+```bash
+sudo ./update.sh      # pull and apply the latest version
+sudo ./uninstall.sh   # cleanly remove CCC from the system
+```
+
+---
+
+## Architecture
+
+CCC is a small FastAPI backend behind Nginx, talking to Conduit through a thin adapter. Privileged actions go through narrowly-scoped helpers rather than giving the app broad system access.
+
+```mermaid
+flowchart LR
+    A[Browser] -- HTTPS --> B[Nginx]
+    B --> C[FastAPI backend]
+    C --> D[Conduit adapter]
+    D --> E[Conduit CLI / service]
+    C --> F[Privileged helpers<br/>least-privilege sudoers]
+```
+
+Two principles run throughout:
+
+- **Aggregate-only / privacy-preserving** — no per-user data is ever collected or stored (see [Privacy](#privacy)).
+- **Least privilege** — helpers run with the minimum rights they need (scoped `sudoers`, exact command paths), TLS keys and secrets are tightly permissioned and never committed.
+
+Full details: [docs/architecture.md](docs/architecture.md).
+
 ---
 
 ## Documentation
+
+### مستندات فارسی (اصلی) — Persian Documentation (Primary)
+
+> راهنمای کامل نصب و راه‌اندازی به زبان فارسی در حال تهیه است.
+> A complete Persian installation and setup guide is in preparation and will be linked here. Follow progress in [Discussions](https://github.com/kiavash599/conduit-control-center/discussions).
+
+### English Documentation (Translation)
 
 | Document | Description |
 |----------|-------------|
@@ -99,33 +189,20 @@ The installer will:
 | [docs/tls-setup.md](docs/tls-setup.md) | TLS certificate configuration (Cloudflare Origin Cert and Let's Encrypt) |
 | [docs/dev-setup.md](docs/dev-setup.md) | Local development environment setup |
 | [docs/architecture.md](docs/architecture.md) | System architecture overview |
-| API reference | Interactive OpenAPI docs served by your running instance at `/api/docs` (Swagger UI), `/api/redoc` (ReDoc), and `/api/openapi.json` (raw schema) |
+| API reference | Interactive OpenAPI docs from your running instance at `/api/docs` (Swagger UI), `/api/redoc` (ReDoc), and `/api/openapi.json` (raw schema) |
 
 ---
 
 ## Roadmap
 
-| Version | Theme | Status |
-|---------|-------|--------|
-| **v0.1** | MVP — install, login, control, monitor, DDNS | 🔧 In development |
-| v1.0 | Stable — charts, alerts, cert automation | 📋 Planned |
-| v1.1 | Developer experience — dark mode, i18n, log filters | 📋 Planned |
-| v1.2 | API & automation — JWT, backup/restore, webhooks | 📋 Planned |
-| v1.3 | Security hardening — TOTP/2FA, session revocation | 📋 Planned |
-| v2.0 | Multi-node — RBAC, Prometheus, Docker | 📋 Planned |
+CCC is actively maintained. Near-term directions:
 
----
+- Expanded documentation, including the Persian installation guide
+- Further analytics and Advisor refinements
+- User-interface polish
+- Smoother installation and deployment
 
-## Known Limitations in v0.1
-
-These are deliberate decisions, not bugs. Each is planned for a future version.
-
-- No time-series charts (planned for v1.0)
-- No email or webhook alerts (planned for v1.1)
-- Conduit configuration is read-only — no editor yet (planned for v1.1)
-- No two-factor authentication (planned for v1.3)
-- No multi-node support (planned for v2.0)
-- Let's Encrypt renewal is documented but not automated by the installer (planned for v1.0)
+We deliberately avoid promising large speculative features. Substantial new directions are discussed openly in [Discussions](https://github.com/kiavash599/conduit-control-center/discussions) first.
 
 ---
 
@@ -145,4 +222,4 @@ Do not open a public issue for security vulnerabilities. See [SECURITY.md](SECUR
 
 ## Licence
 
-[MIT](LICENSE) — Copyright © 2026 Conduit Control Center Contributors
+[MIT](LICENSE) — Copyright © 2026 Kiavash
