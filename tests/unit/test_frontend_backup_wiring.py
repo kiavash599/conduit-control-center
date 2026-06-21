@@ -279,11 +279,63 @@ def test_backup_js_inspect_clears_passphrase():
     assert "inspectClearPassphrase" in js
 
 
-def test_backup_js_no_restore_apply_language():
-    js = _backup_js().lower()
-    # Step A adds NO restore behaviour: no endpoint, no logic in the JS module.
-    assert "/api/backup/restore" not in js
-    assert "restore_backup" not in js
+def test_backup_js_step_b_wires_restore_endpoints():
+    # S4B-2.3b: backup.js now drives the restore flow + status banner.
+    js = _backup_js()
+    assert "/api/backup/restore" in js
+    assert "/api/backup/restore/status" in js
+    assert "restore_backup" not in js          # never references the helper symbol
+
+
+def test_backup_js_restore_request_shape():
+    js = _backup_js()
+    assert "new FormData()" in js
+    assert "'confirm'" in js and "'RESTORE'" in js
+    assert "rawFetch(" in js
+    assert "multipart/form-data" not in js     # browser sets the boundary
+
+
+def test_backup_js_restore_state_machine_functions_present():
+    js = _backup_js()
+    for fn in (
+        "_inspectSeq", "_verdictFor", "invalidateVerdict", "revealRestoreZone",
+        "hideRestoreZone", "recomputeRestoreGates", "onRestore",
+        "enterScheduledState", "stopAllPollers", "loadRestoreStatus",
+        "renderRestoreBanner", "pollInProgress", "dismissBanner",
+    ):
+        assert fn in js, fn
+
+
+def test_backup_js_restore_race_guard_and_gates():
+    js = _backup_js()
+    # race guard: capture + compare the inspect token; reveal only when unchanged
+    assert "inspectSeq === _inspectSeq" in js
+    # strict compatibility gate before reveal
+    assert "compatibility.compatible === true" in js
+    # four gates reference the markup ids and the exact token
+    for needle in ("backup-restore-ack", "backup-restore-passphrase",
+                   "backup-restore-token", "'RESTORE'"):
+        assert needle in js, needle
+
+
+def test_backup_js_uses_authoritative_poller_registry():
+    js = _backup_js()
+    # stopAllPollers must use the app's window.CCC.pollers registry + stopPolling
+    assert "window.CCC" in js and "pollers" in js
+    assert "stopPolling(" in js
+
+
+def test_backup_js_restore_no_auto_redirect():
+    js = _backup_js()
+    # Post-202 must NOT navigate; rely on natural 401 handling later.
+    # (create's create flow has no redirect either; assert no location write
+    #  was introduced by the restore code.)
+    assert "window.location" not in js
+
+
+def test_backup_js_restore_uses_size_cap():
+    js = _backup_js()
+    assert "file.size > MAX_UPLOAD_BYTES" in js
 
 
 # --- S4B-2.3a: inert restore-zone + banner markup + 10 MiB cap --------------

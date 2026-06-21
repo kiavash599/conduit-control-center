@@ -42,6 +42,12 @@
     // nginx limit and the helper's 16 MiB). Replaces the stale 900 KB inspect cap.
     var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;   // 10 MiB
 
+    // Restore state machine (S4B-2.3b).
+    var _inspectSeq = 0;        // monotonic token; bumped to invalidate a verdict
+    var _verdictFor = null;     // file signature the current compatible verdict is bound to
+    var _inProgressPoller = null;
+    var _restoreScheduled = false;
+
     /* ------------------------------------------------------------------
        DOM helpers
     ------------------------------------------------------------------ */
@@ -316,6 +322,7 @@
     function onInspect() {
         inspectClearError();
         inspectResetPreview();               // no stale preview while we work
+        invalidateVerdict();                 // tear down any prior restore eligibility
 
         var fileEl = el('backup-inspect-file');
         var passEl = el('backup-inspect-passphrase');
@@ -338,6 +345,12 @@
             return;
         }
 
+        // Capture the verdict token + file signature at request time. The
+        // restore zone is revealed on success only if neither changed during the
+        // round trip (race guard) and the backup is strictly compatible.
+        var inspectSeq = _inspectSeq;
+        var inspectSig = _fileSignature(fileEl);
+
         var form = new FormData();
         form.append('file', file);
         form.append('passphrase', passphrase);
@@ -359,6 +372,13 @@
             return response.json().then(function (data) {
                 renderPreview(data);
                 inspectClearPassphrase();    // success: do not retain the secret
+                // Reveal restore only if nothing changed during the round trip
+                // (race guard) and the backup is strictly compatible.
+                if (inspectSeq === _inspectSeq &&
+                    data && data.compatibility && data.compatibility.compatible === true) {
+                    _verdictFor = inspectSig;
+                    revealRestoreZone();
+                }
             });
         })
         .catch(function (err) {
@@ -377,6 +397,244 @@
         });
     }
 
+    /* ==================================================================
+       Restore (S4B-2.3b) — gated, destructive. Revealed only after a
+       compatible inspect of the current file; four gates; terminal after
+       a 202. POST /api/backup/restore restarts the dashboard out of band.
+    ================================================================== */
+
+    function _fileSignature(fileEl) {
+        var f = fileEl && fileEl.files && fileEl.files[0];
+        return f ? (f.name + '|' + f.size + '|' + f.lastModified) : '';
+    }
+
+    function restoreShowError(message) {
+        var e = el('backup-restore-error');
+        if (e) { e.textContent = message; e.hidden = false; }   // textContent only
+    }
+
+    function restoreClearError() {
+        var e = el('backup-restore-error');
+        if (e) { e.textContent = ''; e.hidden = true; }
+    }
+
+    function clearRestorePassphrase() {
+        var p = el('backup-restore-passphrase');
+        if (p) p.value = '';
+    }
+
+    function hideRestoreZone() {
+        var zone = el('backup-restore-zone');
+        if (zone) zone.hidden = true;
+        var ack = el('backup-restore-ack'); if (ack) ack.checked = false;
+        clearRestorePassphrase();
+        var tok = el('backup-restore-token'); if (tok) tok.value = '';
+        restoreClearError();
+        var btn = el('backup-restore-btn'); if (btn) btn.disabled = true;
+    }
+
+    function invalidateVerdict() {
+        _inspectSeq += 1;                    // stale any in-flight inspect's token
+        _verdictFor = null;
+        hideRestoreZone();
+    }
+
+    function recomputeRestoreGates() {
+        var fileEl = el('backup-inspect-file');
+        var g1 = !!_verdictFor && _verdictFor === _fileSignature(fileEl);          // verdict fresh
+        var g2 = !!(el('backup-restore-ack') && el('backup-restore-ack').checked); // consequences
+        var g3 = !!((el('backup-restore-passphrase') || {}).value || '');          // passphrase
+        var g4 = ((el('backup-restore-token') || {}).value || '') === 'RESTORE';    // typed token
+        var btn = el('backup-restore-btn');
+        if (btn) btn.disabled = !(g1 && g2 && g3 && g4);
+    }
+
+    function revealRestoreZone() {
+        var zone = el('backup-restore-zone');
+        if (!zone) return;
+        zone.hidden = false;
+        recomputeRestoreGates();             // starts disabled until gates pass
+        if (typeof zone.focus === 'function') {
+            zone.setAttribute('tabindex', '-1');
+            zone.focus();                    // a11y: move focus into the danger zone
+        }
+    }
+
+    function stopAllPollers() {
+        if (window.CCC && window.CCC.pollers) {
+            window.CCC.pollers.forEach(function (h) { stopPolling(h); });
+            window.CCC.pollers = [];
+        }
+        if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
+    }
+
+    function enterScheduledState() {
+        _restoreScheduled = true;
+        ['backup-create-btn', 'backup-passphrase', 'backup-confirm-passphrase',
+         'backup-inspect-btn', 'backup-inspect-file', 'backup-inspect-passphrase',
+         'backup-restore-btn', 'backup-restore-ack', 'backup-restore-passphrase',
+         'backup-restore-token'].forEach(function (id) {
+            var e = el(id); if (e) e.disabled = true;
+        });
+        clearPassphrases();                  // create-card fields
+        clearRestorePassphrase();
+        var ip = el('backup-inspect-passphrase'); if (ip) ip.value = '';
+        var st = el('backup-restore-status');
+        if (st) {
+            st.textContent = 'Restore started — the dashboard is restarting and you will be '
+                + 'signed out. Please sign in again in about 30–60 seconds.';
+            st.hidden = false;
+        }
+        stopAllPollers();
+        // No redirect: the session becomes invalid when the service restarts.
+    }
+
+    function onRestore() {
+        restoreClearError();
+        var fileEl = el('backup-inspect-file');
+        var file = fileEl && fileEl.files && fileEl.files[0];
+        var pp = (el('backup-restore-passphrase') || {}).value || '';
+        var token = (el('backup-restore-token') || {}).value || '';
+        var ack = !!(el('backup-restore-ack') && el('backup-restore-ack').checked);
+
+        // Defence-in-depth: re-check verdict freshness + the four gates.
+        if (!_verdictFor || _verdictFor !== _fileSignature(fileEl) || !file) {
+            hideRestoreZone();
+            restoreShowError('Inspect a compatible backup again before restoring.');
+            return;
+        }
+        if (!ack || !pp || token !== 'RESTORE') {
+            restoreShowError('Complete all confirmation steps before restoring.');
+            return;
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+            restoreShowError('This file is too large to restore (over 10 MB).');
+            return;
+        }
+
+        var btn = el('backup-restore-btn');
+        if (btn) btn.disabled = true;        // synchronous: prevent double-submit
+
+        var form = new FormData();
+        form.append('file', file);
+        form.append('passphrase', pp);
+        form.append('confirm', 'RESTORE');
+
+        // No Content-Type header: the browser sets the multipart boundary.
+        rawFetch('/api/backup/restore', { method: 'POST', body: form })
+        .then(function (response) {
+            if (response.status === 202) {
+                enterScheduledState();
+                return;
+            }
+            // Non-202: drain JSON or non-JSON (nginx 413 HTML) and signal by code.
+            return response.json().then(function () {
+                throw new Error('http-' + response.status);
+            }, function () {
+                throw new Error('http-' + response.status);
+            });
+        })
+        .catch(function (err) {
+            if (_restoreScheduled) return;   // 202 already handled; controls disabled
+            // rawFetch already handled 401 (redirect) and 403 (toast).
+            var code = (err && err.message ? err.message : '').replace('http-', '');
+            var msg;
+            if (code === '409') msg = 'A restore is already in progress. Check the restore status banner.';
+            else if (code === '400') msg = 'Wrong passphrase or invalid backup file.';
+            else if (code === '413') msg = 'This file is too large to restore.';
+            else if (code === '422') msg = 'Type RESTORE to confirm.';
+            else if (code === '503') msg = 'Restore is not available on this server yet.';
+            else msg = 'Could not start the restore. Please try again.';
+            restoreShowError(msg);
+        })
+        .then(function () {
+            if (_restoreScheduled) return;   // leave controls intentionally disabled
+            clearRestorePassphrase();        // re-enter to retry
+            recomputeRestoreGates();         // button re-disabled until gates pass
+        });
+    }
+
+    /* ==================================================================
+       Restore status banner (S4B-2.3b) — sourced from GET .../status.
+    ================================================================== */
+
+    function _restoreLabel(state) {
+        return {
+            in_progress: 'Restore in progress',
+            restored: 'Restore complete',
+            rolled_back: 'Restore failed — previous state restored',
+            rollback_failed: 'Restore failed — manual recovery may be required'
+        }[state] || 'Restore status';
+    }
+
+    function renderRestoreBanner(data) {
+        var banner = el('restore-status-banner');
+        var msg = el('restore-status-message');
+        if (!banner || !msg) return;
+        var badgeClass = {
+            in_progress: 'badge--neutral',
+            restored: 'badge--success',
+            rolled_back: 'badge--warning',
+            rollback_failed: 'badge--danger'
+        }[data.state] || 'badge--neutral';
+
+        while (msg.firstChild) msg.removeChild(msg.firstChild);   // reset via DOM only
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + badgeClass;
+        badge.textContent = _restoreLabel(data.state);
+        msg.appendChild(badge);
+        var detail = [];
+        if (data.message) detail.push(data.message);
+        if (data.restore_id) detail.push('(' + data.restore_id + ')');
+        if (detail.length) {
+            var span = document.createElement('span');
+            span.className = 'text-sm text-dim';
+            span.textContent = ' ' + detail.join(' ');
+            msg.appendChild(span);
+        }
+        banner.setAttribute('role',
+            (data.state === 'rolled_back' || data.state === 'rollback_failed') ? 'alert' : 'status');
+        banner.hidden = false;
+    }
+
+    function _readStatusOnce() {
+        return rawFetch('/api/backup/restore/status', { method: 'GET' })
+            .then(function (r) {
+                if (!r || !r.ok) return null;
+                return r.json().then(function (d) { return d; }, function () { return null; });
+            });
+    }
+
+    function pollInProgress() {
+        if (_inProgressPoller) return;       // single instance
+        var started = Date.now();
+        _inProgressPoller = startPolling(function () {
+            return _readStatusOnce().then(function (d) {
+                if (!d) return;              // tolerate transient/non-JSON (restart window)
+                if (d.state && d.state !== 'in_progress') {
+                    renderRestoreBanner(d);
+                    if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
+                } else if (Date.now() - started > 120000) {   // ~2 min cap
+                    if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
+                }
+            });
+        }, 5000);
+    }
+
+    function loadRestoreStatus() {
+        _readStatusOnce().then(function (d) {
+            if (!d || !d.state || d.state === 'idle' || d.state === 'unknown') return;  // no banner
+            renderRestoreBanner(d);
+            if (d.state === 'in_progress') pollInProgress();
+        });
+    }
+
+    function dismissBanner() {
+        var banner = el('restore-status-banner');
+        if (banner) banner.hidden = true;    // in-memory only; reappears on reload
+        if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
+    }
+
     /* ------------------------------------------------------------------
        Wire up
     ------------------------------------------------------------------ */
@@ -392,6 +650,24 @@
             inspectBtn.disabled = false;
             inspectBtn.addEventListener('click', onInspect);
         }
+
+        // S4B-2.3b restore wiring (button stays disabled until gates pass).
+        var fileEl = el('backup-inspect-file');
+        if (fileEl) fileEl.addEventListener('change', invalidateVerdict);
+        var inspPp = el('backup-inspect-passphrase');
+        if (inspPp) inspPp.addEventListener('input', invalidateVerdict);
+        ['backup-restore-ack', 'backup-restore-passphrase', 'backup-restore-token']
+            .forEach(function (id) {
+                var e = el(id);
+                if (e) e.addEventListener(id === 'backup-restore-ack' ? 'change' : 'input',
+                                          recomputeRestoreGates);
+            });
+        var restoreBtn = el('backup-restore-btn');
+        if (restoreBtn) restoreBtn.addEventListener('click', onRestore);
+        var dismiss = el('restore-status-banner-dismiss');
+        if (dismiss) dismiss.addEventListener('click', dismissBanner);
+
+        loadRestoreStatus();                 // one-shot on dashboard load
     });
 
 }());
