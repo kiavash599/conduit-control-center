@@ -37,7 +37,10 @@
 
     var MIN_PASSPHRASE_LEN = 12;          // mirrors the server-side floor (S4A.1)
     var FALLBACK_FILENAME = 'ccc-backup.cccbak';
-    var MAX_INSPECT_BYTES = 900 * 1024;   // mirrors the server-side inspect cap (S4B-1a)
+    // Shared client-side upload ceiling for inspect AND restore (S4B-2.3a).
+    // Aligned to the server-side cap raised in S4B-2.4 (10 MiB, under the 12m
+    // nginx limit and the helper's 16 MiB). Replaces the stale 900 KB inspect cap.
+    var MAX_UPLOAD_BYTES = 10 * 1024 * 1024;   // 10 MiB
 
     /* ------------------------------------------------------------------
        DOM helpers
@@ -330,8 +333,8 @@
         }
         // Size pre-check mirrors the server cap; avoids a pointless upload + a
         // raw nginx 413 for oversize files.
-        if (file.size > MAX_INSPECT_BYTES) {
-            inspectShowError('This file is too large to inspect here (over 900 KB).');
+        if (file.size > MAX_UPLOAD_BYTES) {
+            inspectShowError('This file is too large to inspect here (over 10 MB).');
             return;
         }
 

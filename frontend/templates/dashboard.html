@@ -136,6 +136,21 @@
     ================================================================ -->
     <main class="main-content" id="main-content">
 
+        <!--
+          Restore status banner (S4B-2.3). INERT in Step A (S4B-2.3a): hidden
+          markup only. Step B (S4B-2.3b) fills #restore-status-message via
+          textContent from a one-shot GET /api/backup/restore/status on load,
+          sets the severity class, and reveals it for non-idle states. Dismiss is
+          in-memory only (no storage).
+        -->
+        <div id="restore-status-banner" class="banner" role="status" hidden>
+            <span id="restore-status-message"></span>
+            <button id="restore-status-banner-dismiss" type="button"
+                    class="btn btn--ghost" aria-label="Dismiss restore status">
+                Dismiss
+            </button>
+        </div>
+
         <!-- Page header (section title updated by JS) -->
         <div class="page-header">
             <h1 class="page-title" id="page-title">Dashboard</h1>
@@ -1161,9 +1176,10 @@
               Inspect Backup — Backup & Restore (Epic #4, slice S4B-1b).
               ------------------------------------------------------------
               Read-only PREVIEW of an encrypted backup: upload + passphrase ->
-              POST /api/backup/inspect -> manifest preview. It does NOT restore
-              anything and makes NO changes on disk or to any service. Restore/
-              apply is a future, deferred feature (S4B-2) and has no control here.
+              POST /api/backup/inspect -> manifest preview. Inspecting itself does
+              NOT restore anything and makes NO changes. The destructive restore
+              flow lives in the separate #backup-restore-zone below (S4B-2.3),
+              revealed only after a compatible inspect and gated by confirmation.
 
               Behaviour: frontend/static/js/backup.js (onInspect).
               DOM IDs consumed by backup.js:
@@ -1184,9 +1200,8 @@
                 </div>
 
                 <p class="form-hint">
-                    Inspecting a backup only reads it to show you what it contains. It does
-                    not restore anything and makes no changes. Restoring a backup is a
-                    future, deferred feature and is not available here.
+                    Inspecting a backup only reads it to show you what it contains — it does
+                    not restore anything and makes no changes.
                 </p>
 
                 <div class="form-group">
@@ -1237,6 +1252,89 @@
                 -->
                 <div id="backup-inspect-preview" class="mt-4" role="region"
                      aria-label="Backup preview" hidden></div>
+
+                <!--
+                  Restore danger-zone (S4B-2.3). INERT in Step A (S4B-2.3a):
+                  markup only, hidden, no handlers. Behaviour (reveal-after-
+                  compatible-inspect, four-gate confirmation, POST /api/backup/
+                  restore, post-202 terminal state) is added in Step B (S4B-2.3b).
+                  Restoring REPLACES current settings, signs the operator out, and
+                  restarts the dashboard.
+                  DOM IDs consumed by backup.js (S4B-2.3b):
+                    backup-restore-zone        — the revealed danger panel
+                    backup-restore-ack         — consequences acknowledgement
+                    backup-restore-passphrase  — passphrase re-entry
+                    backup-restore-token       — typed RESTORE confirmation
+                    backup-restore-error       — inline error
+                    backup-restore-btn         — explicit danger button
+                    backup-restore-status      — post-202 terminal message
+                -->
+                <div id="backup-restore-zone" class="mt-4 card--danger" role="region"
+                     aria-label="Restore this backup" hidden>
+
+                    <p class="form-error">
+                        Restoring replaces your current settings with this backup,
+                        signs you out, and restarts the dashboard. This cannot be undone.
+                    </p>
+
+                    <div class="form-group">
+                        <label class="label">
+                            <input type="checkbox" id="backup-restore-ack">
+                            I understand this replaces current settings, signs me out,
+                            and restarts the dashboard.
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="label" for="backup-restore-passphrase">
+                            Re-enter passphrase
+                        </label>
+                        <input class="input"
+                               type="password"
+                               id="backup-restore-passphrase"
+                               name="restore_passphrase"
+                               autocomplete="off">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="label" for="backup-restore-token">
+                            Type RESTORE to confirm
+                        </label>
+                        <input class="input"
+                               type="text"
+                               id="backup-restore-token"
+                               name="restore_token"
+                               autocomplete="off">
+                    </div>
+
+                    <!--
+                      Inline error (shown by backup.js via textContent in Step B).
+                    -->
+                    <p class="form-error"
+                       id="backup-restore-error"
+                       role="alert"
+                       hidden></p>
+
+                    <div class="mt-4">
+                        <!-- type="button" + disabled: inert in Step A; enabled by
+                             backup.js only when all four gates pass (Step B). -->
+                        <button id="backup-restore-btn"
+                                class="btn btn--danger"
+                                type="button"
+                                disabled>
+                            Restore backup
+                        </button>
+                    </div>
+
+                    <!--
+                      Terminal post-202 message (shown by backup.js in Step B).
+                    -->
+                    <p class="text-sm mt-2"
+                       id="backup-restore-status"
+                       role="status"
+                       hidden></p>
+
+                </div><!-- /#backup-restore-zone -->
 
             </div><!-- /#backup-inspect-card -->
 

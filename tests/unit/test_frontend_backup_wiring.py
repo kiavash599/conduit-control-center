@@ -183,25 +183,31 @@ def test_inspect_card_in_settings_section():
     assert html.index('id="backup-inspect-card"') > html.index('id="section-settings"')
 
 
-def test_inspect_card_says_no_restore_no_changes():
+def test_inspect_card_inspect_is_read_only_copy():
     import re
     html = _dashboard()
     card = html[html.index('id="backup-inspect-card"'):html.index("/#backup-inspect-card")]
-    # Normalise whitespace: HTML collapses it, and the copy wraps across lines.
     low = re.sub(r"\s+", " ", card).lower()
+    # Inspecting itself is read-only; the (separate, gated) restore zone carries
+    # its own destructive warning. The stale "restore is not available" copy is
+    # gone now that the inert restore-zone markup exists (S4B-2.3a).
     assert "does not restore" in low
     assert "no changes" in low or "makes no changes" in low
-    # Restore/apply is framed as future/deferred only.
-    assert "future" in low or "deferred" in low
 
 
-def test_inspect_card_has_no_restore_or_destructive_control():
+def test_inspect_card_restore_control_is_inert_in_step_a():
+    # S4B-2.3a adds the restore danger-zone markup, but it must be hidden and the
+    # restore button non-actionable (type=button + disabled) with no handler.
     html = _dashboard()
     card = html[html.index('id="backup-inspect-card"'):html.index("/#backup-inspect-card")]
-    low = card.lower()
-    # No actionable restore/apply/delete control in the markup.
-    for bad in ('id="backup-restore', 'id="restore-', '>restore<', 'apply backup', 'restore backup'):
-        assert bad not in low, bad
+    zone = card[card.index('id="backup-restore-zone"'):card.index("/#backup-restore-zone")]
+    assert "hidden" in card[card.index('id="backup-restore-zone"'):
+                            card.index('id="backup-restore-zone"') + 200]
+    assert 'type="button"' in zone
+    assert "disabled" in zone
+    assert "<form" not in zone
+    for handler in ("onclick", "onsubmit", "oninput", "onchange", "onload"):
+        assert handler not in zone, handler
 
 
 def test_inspect_card_file_and_passphrase_inputs():
@@ -232,8 +238,11 @@ def test_backup_js_inspect_does_not_set_multipart_content_type():
 
 def test_backup_js_inspect_size_precheck():
     js = _backup_js()
-    assert "MAX_INSPECT_BYTES" in js
-    assert "900 * 1024" in js
+    # S4B-2.3a: stale 900 KB inspect cap retired in favour of the shared 10 MiB
+    # upload cap (aligned to the server-side cap raised in S4B-2.4).
+    assert "MAX_INSPECT_BYTES" not in js
+    assert "900 * 1024" not in js
+    assert "MAX_UPLOAD_BYTES = 10 * 1024 * 1024" in js
     assert ".size >" in js or "file.size" in js
 
 
@@ -272,6 +281,60 @@ def test_backup_js_inspect_clears_passphrase():
 
 def test_backup_js_no_restore_apply_language():
     js = _backup_js().lower()
-    # No destructive/apply wording or endpoint in the JS module.
+    # Step A adds NO restore behaviour: no endpoint, no logic in the JS module.
     assert "/api/backup/restore" not in js
     assert "restore_backup" not in js
+
+
+# --- S4B-2.3a: inert restore-zone + banner markup + 10 MiB cap --------------
+
+
+def test_restore_zone_ids_present():
+    html = _dashboard()
+    for needle in (
+        'id="backup-restore-zone"',
+        'id="backup-restore-ack"',
+        'id="backup-restore-passphrase"',
+        'id="backup-restore-token"',
+        'id="backup-restore-error"',
+        'id="backup-restore-btn"',
+        'id="backup-restore-status"',
+    ):
+        assert needle in html, needle
+
+
+def test_restore_zone_hidden_and_safe_defaults():
+    html = _dashboard()
+    zone_start = html.index('id="backup-restore-zone"')
+    head = html[zone_start:zone_start + 200]
+    assert "hidden" in head                          # zone hidden by default
+    zone = html[zone_start:html.index("/#backup-restore-zone")]
+    # restore passphrase must not be browser-saved/suggested
+    pp = zone[zone.index('id="backup-restore-passphrase"') - 200:
+              zone.index('id="backup-restore-passphrase"') + 60]
+    assert 'type="password"' in pp
+    assert 'autocomplete="off"' in zone
+    # error + status panels hidden by default
+    assert html[html.index('id="backup-restore-error"'):
+                html.index('id="backup-restore-error"') + 120].count("hidden") >= 1
+    assert html[html.index('id="backup-restore-status"'):
+                html.index('id="backup-restore-status"') + 120].count("hidden") >= 1
+
+
+def test_restore_status_banner_present_hidden_with_dismiss():
+    html = _dashboard()
+    assert 'id="restore-status-banner"' in html
+    assert 'id="restore-status-banner-dismiss"' in html
+    head = html[html.index('id="restore-status-banner"'):
+                html.index('id="restore-status-banner"') + 200]
+    assert "hidden" in head
+    # dismiss is a non-submitting button (no behaviour in Step A)
+    dz = html[html.index('id="restore-status-banner-dismiss"') - 80:
+              html.index('id="restore-status-banner-dismiss"') + 60]
+    assert 'type="button"' in dz
+
+
+def test_backup_js_defines_shared_upload_cap():
+    js = _backup_js()
+    assert "MAX_UPLOAD_BYTES = 10 * 1024 * 1024" in js
+    assert "MAX_INSPECT_BYTES" not in js
