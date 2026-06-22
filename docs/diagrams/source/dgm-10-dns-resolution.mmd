@@ -1,0 +1,5 @@
+%% DGM-10 dns-resolution — the browser asks DNS for the IP of a name, then connects to it
+flowchart LR
+  B[Browser] -->|What is the IP of example.com?| DNS[DNS]
+  DNS -->|203.0.113.10| B
+  B -->|connects to| S[Web server<br/>203.0.113.10]

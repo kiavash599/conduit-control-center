@@ -1,0 +1,11 @@
+%% DGM-03 network-private-ip — private IPs are valid only inside the home network
+flowchart TD
+  R[Home Router]
+  subgraph LAN[Home network · private · not routable on the Internet]
+    L[Laptop&nbsp;·&nbsp;192.168.1.10]
+    P[Phone&nbsp;·&nbsp;192.168.1.20]
+    Pi[Raspberry Pi&nbsp;·&nbsp;192.168.1.50]
+  end
+  R --> L
+  R --> P
+  R --> Pi

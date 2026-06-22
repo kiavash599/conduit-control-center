@@ -1,21 +1,31 @@
 # Diagrams
 
+Diagram specifications and Mermaid sources for the CCC user guide, derived from [`../visual-assets-manifest.md`](../visual-assets-manifest.md) and the Persian chapters (source of truth). Generic teaching values only — no real domains, IPs, tokens, QR codes, or credentials.
+
 > [!NOTE]
-> Extracted from `docs/fa/user-guide/*.md` (source of truth). These are **placeholders to be produced** — no SVG/PNG files exist yet. Filenames are recorded exactly as referenced. See [`../visual-assets-manifest.md`](../visual-assets-manifest.md).
+> **Rendering status: pending.** No Mermaid renderer (`mmdc` / mermaid-cli) is available in this environment, so `svg/` and `png/` are empty. Each `.mmd` renders on GitHub directly, and SVG/PNG can be generated later (target SVG filename = the manifest name in the last column, e.g. `svg/network-ip-address.svg`).
 
-| ID | Referenced file | Source chapter | Context (section) | Status |
-|----|-----------------|----------------|-------------------|--------|
-| DGM-01 | `network-ip-address.svg` | 04-networking-fundamentals.md | 4.1 آدرس IP چیست؟ | pending |
-| DGM-02 | `network-public-ip.svg` | 04-networking-fundamentals.md | 4.2 Public IP چیست؟ | pending |
-| DGM-03 | `network-private-ip.svg` | 04-networking-fundamentals.md | 4.3 Private IP چیست؟ | pending |
-| DGM-04 | `network-public-ip-conduit.svg` | 04-networking-fundamentals.md | 4.3 Private IP چیست؟ (Conduit) | pending |
-| DGM-05 | `network-nat.svg` | 04-networking-fundamentals.md | 4.4 NAT چیست؟ | pending |
-| DGM-06 | `network-dhcp.svg` | 04a-understanding-home-internet-equipment.md | 4.5 DHCP چیست؟ | pending |
-| DGM-07 | `network-dhcp-reservation.svg` | 04a-understanding-home-internet-equipment.md | 4.7 DHCP Reservation چیست؟ | pending |
-| DGM-08 | `network-port-forwarding.svg` | 04a-understanding-home-internet-equipment.md | 4.9 Port Forwarding چیست؟ | pending |
-| DGM-09 | `domain-name-concept.svg` | 05-domains-dns-and-cloudflare.md | 5.1 Domain چیست؟ | pending |
-| DGM-10 | `dns-resolution.svg` | 05-domains-dns-and-cloudflare.md | 5.2 DNS چیست؟ | pending |
-| DGM-11 | `subdomain-concept.svg` | 05-domains-dns-and-cloudflare.md | 5.3 Subdomain چیست؟ | pending |
-| DGM-12 | `cloudflare-ddns-flow.svg` | 05-domains-dns-and-cloudflare.md | 5.5 & 5.16 Dynamic DNS (referenced twice) | ambiguous |
+## Layout
 
-12 unique diagrams (DGM-12 referenced twice). No diagram files created.
+- `specifications/` — one spec per diagram (`dgm-NN-*.md`).
+- `source/` — Mermaid source per diagram (`dgm-NN-*.mmd`).
+- `svg/`, `png/` — rendered output (pending).
+
+## Index
+
+| ID | Diagram | Spec | Source (.mmd) | Manifest asset | Render |
+|----|---------|------|---------------|----------------|--------|
+| DGM-01 | IP address on home network | [spec](specifications/dgm-01-network-ip-address.md) | [mmd](source/dgm-01-network-ip-address.mmd) | `network-ip-address.svg` | pending |
+| DGM-02 | Public IP | [spec](specifications/dgm-02-network-public-ip.md) | [mmd](source/dgm-02-network-public-ip.mmd) | `network-public-ip.svg` | pending |
+| DGM-03 | Private IP | [spec](specifications/dgm-03-network-private-ip.md) | [mmd](source/dgm-03-network-private-ip.mmd) | `network-private-ip.svg` | pending |
+| DGM-04 | Public IP & Conduit reachability | [spec](specifications/dgm-04-network-public-ip-conduit.md) | [mmd](source/dgm-04-network-public-ip-conduit.mmd) | `network-public-ip-conduit.svg` | pending |
+| DGM-05 | NAT | [spec](specifications/dgm-05-network-nat.md) | [mmd](source/dgm-05-network-nat.mmd) | `network-nat.svg` | pending |
+| DGM-06 | DHCP | [spec](specifications/dgm-06-network-dhcp.md) | [mmd](source/dgm-06-network-dhcp.mmd) | `network-dhcp.svg` | pending |
+| DGM-07 | DHCP reservation | [spec](specifications/dgm-07-network-dhcp-reservation.md) | [mmd](source/dgm-07-network-dhcp-reservation.mmd) | `network-dhcp-reservation.svg` | pending |
+| DGM-08 | Port forwarding | [spec](specifications/dgm-08-network-port-forwarding.md) | [mmd](source/dgm-08-network-port-forwarding.mmd) | `network-port-forwarding.svg` | pending |
+| DGM-09 | Domain name concept | [spec](specifications/dgm-09-domain-name-concept.md) | [mmd](source/dgm-09-domain-name-concept.mmd) | `domain-name-concept.svg` | pending |
+| DGM-10 | DNS resolution | [spec](specifications/dgm-10-dns-resolution.md) | [mmd](source/dgm-10-dns-resolution.mmd) | `dns-resolution.svg` | pending |
+| DGM-11 | Subdomain concept | [spec](specifications/dgm-11-subdomain-concept.md) | [mmd](source/dgm-11-subdomain-concept.mmd) | `subdomain-concept.svg` | pending |
+| DGM-12 | Cloudflare DDNS flow | [spec](specifications/dgm-12-cloudflare-ddns-flow.md) | [mmd](source/dgm-12-cloudflare-ddns-flow.mmd) | `cloudflare-ddns-flow.svg` | pending |
+
+12 diagrams (DGM-12's asset is referenced in two chapter sections — produced once; see the manifest).

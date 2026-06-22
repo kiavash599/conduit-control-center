@@ -1,0 +1,4 @@
+%% DGM-07 network-dhcp-reservation — reservation ties a device MAC to a fixed IP
+flowchart LR
+  MAC[Device MAC<br/>B8:27:EB:12:34:56] --> D[Router · DHCP reservation]
+  D -->|Always assigns| IP[192.168.1.50]
