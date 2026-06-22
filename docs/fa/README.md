@@ -5,4 +5,4 @@
 - [راهنمای کاربری](user-guide/README.md)
 
 > [!NOTE]
-> این مستندات از فایل‌های DOCX تبدیل شده‌اند (منبع: `CCC Docs.zip`). نسخهٔ انگلیسی (مرجع آینده) در [docs/user-guide/](../user-guide/README.md) خواهد بود.
+> این مستندات، ترجمهٔ فارسی مستندات Conduit Control Center است. مرجع رسمی (Source of Truth) نسخهٔ انگلیسی در [docs/user-guide/](../user-guide/README.md) است. در صورت وجود مغایرت میان دو نسخه، نسخهٔ انگلیسی اولویت دارد.
