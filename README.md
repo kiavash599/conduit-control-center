@@ -176,12 +176,14 @@ Full details: [docs/architecture.md](docs/architecture.md).
 
 ## Documentation
 
-### مستندات فارسی (اصلی) — Persian Documentation (Primary)
+### User Guide
 
-> راهنمای کامل نصب و راه‌اندازی به زبان فارسی در حال تهیه است.
-> A complete Persian installation and setup guide is in preparation and will be linked here. Follow progress in [Discussions](https://github.com/kiavash599/conduit-control-center/discussions).
+The complete CCC user guide is a 17-chapter walkthrough covering hardware, networking, installation, the dashboard, and day-to-day operation. It is published in two editions:
 
-### English Documentation (Translation)
+- **[English User Guide (Source of Truth)](docs/user-guide/README.md)** — 17 chapters. The official, authoritative documentation for CCC.
+- **[راهنمای کاربری فارسی — Persian User Guide (Translation)](docs/fa/user-guide/README.md)** — 17 chapters. A translated edition of the English guide. If any discrepancy exists between the two, the English documentation takes precedence.
+
+### Reference
 
 | Document | Description |
 |----------|-------------|
@@ -197,7 +199,7 @@ Full details: [docs/architecture.md](docs/architecture.md).
 
 CCC is actively maintained. Near-term directions:
 
-- Expanded documentation, including the Persian installation guide
+- Continued documentation refinements across the English and Persian guides
 - Further analytics and Advisor refinements
 - User-interface polish
 - Smoother installation and deployment
