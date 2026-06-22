@@ -193,11 +193,7 @@ Expiration Extended
 
 جلوگیری از درخواست‌های جعلی.
 
-CCC از:
-
-Double Submit Cookie
-
-استفاده می‌کند.
+CCC از Double Submit Cookie استفاده می‌کند.
 
 **اجزا**
 
@@ -384,11 +380,7 @@ Identity در Backup قرار نمی‌گیرد.
 
 درک حساسیت Token.
 
-QR شخصی:
-
-Sensitive Credential
-
-است.
+QR شخصی Sensitive Credential است.
 
 **توصیه**
 
@@ -400,11 +392,7 @@ Sensitive Credential
 
 محافظت از Claim QR.
 
-Ryve QR:
-
-Private-Key-Grade Data
-
-دارد.
+Ryve QR Private-Key-Grade Data دارد.
 
 **رفتار سیستم**
 

@@ -102,11 +102,7 @@ domain-name-concept.svg
 
 **DNS به زبان ساده**
 
-DNS مخفف:
-
-Domain Name System
-
-است.
+DNS مخفف Domain Name System است.
 
 می‌توان DNS را دفترچه تلفن اینترنت در نظر گرفت.
 
@@ -675,11 +671,7 @@ CCC باید بتواند:
 
 **اصل امنیتی**
 
-CCC از اصل:
-
-Least Privilege
-
-استفاده می‌کند.
+CCC از اصل Least Privilege استفاده می‌کند.
 
 **دسترسی‌های مورد نیاز**
 

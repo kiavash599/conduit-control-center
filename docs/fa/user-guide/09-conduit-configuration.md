@@ -187,11 +187,7 @@ Maximum 40 Megabits Per Second
 
 -1
 
-به معنی:
-
-Unlimited
-
-است.
+به معنی Unlimited است.
 
 **هشدار**
 
@@ -266,11 +262,7 @@ No
 
 **چرا؟**
 
-زیرا مالک این تنظیم:
-
-Personal Mode
-
-است.
+زیرا مالک این تنظیم Personal Mode است.
 
 برای تغییر آن باید به بخش Personal Mode مراجعه کنید.
 
@@ -346,11 +338,7 @@ CCC منتظر می‌ماند تا Conduit دوباره سالم شود.
 
 موفقیت فقط به معنی اجرای Helper Script نیست.
 
-موفقیت واقعی:
-
-Conduit Healthy
-
-است.
+موفقیت واقعی Conduit Healthy است.
 
 ## 9.13 Rollback خودکار
 

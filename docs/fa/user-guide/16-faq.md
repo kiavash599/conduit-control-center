@@ -244,11 +244,7 @@ Automatic Rollback
 
 **چرا فقط یک Administrator وجود دارد؟**
 
-نسخه v0.3.0 از مدل:
-
-Single Administrator
-
-استفاده می‌کند.
+نسخه v0.3.0 از مدل Single Administrator استفاده می‌کند.
 
 **آیا رمز عبور به صورت Plain Text ذخیره می‌شود؟**
 

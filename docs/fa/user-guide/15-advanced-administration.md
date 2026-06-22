@@ -276,11 +276,7 @@ systemd drop-in
 
 ## 15.13 مدیریت کاربران
 
-نسخه v0.3.0 از مدل:
-
-Single Administrator
-
-استفاده می‌کند.
+نسخه v0.3.0 از مدل Single Administrator استفاده می‌کند.
 
 **نکته**
 

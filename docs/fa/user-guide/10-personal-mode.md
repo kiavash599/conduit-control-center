@@ -84,11 +84,7 @@ Max Personal Clients
 
 Identity یک شناسه منحصر‌به‌فرد است که توسط Conduit ایجاد می‌شود.
 
-این شناسه:
-
-Compartment
-
-نامیده می‌شود.
+این شناسه Compartment نامیده می‌شود.
 
 **محل ذخیره‌سازی**
 

@@ -260,11 +260,7 @@ CCC فایل Backup را روی Pi ذخیره نمی‌کند.
 
 بررسی Backup قبل از Restore.
 
-یکی از حرفه‌ای‌ترین قابلیت‌های CCC:
-
-Inspect
-
-است.
+یکی از حرفه‌ای‌ترین قابلیت‌های CCC Inspect است.
 
 Inspect:
 
@@ -368,11 +364,7 @@ Background Worker
 
 موفقیت Restore فقط به معنی اجرای Worker نیست.
 
-موفقیت واقعی:
-
-System Healthy
-
-است.
+موفقیت واقعی System Healthy است.
 
 CCC بررسی می‌کند:
 

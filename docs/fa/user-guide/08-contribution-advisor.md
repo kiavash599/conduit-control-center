@@ -12,11 +12,7 @@ audience: operator
 
 در فصل قبل با Dashboard آشنا شدیم.
 
-یکی از مهم‌ترین بخش‌های Dashboard:
-
-Contribution Advisor
-
-است.
+یکی از مهم‌ترین بخش‌های Dashboard Contribution Advisor است.
 
 Advisor به شما کمک می‌کند وضعیت ایستگاه خود را بهتر درک کنید و تصمیم‌های آگاهانه‌تری بگیرید.
 

@@ -176,11 +176,7 @@ conduit.example.com
 
 آماده‌سازی گواهی مورد نیاز.
 
-CCC به صورت پیش‌فرض از:
-
-Cloudflare Origin Certificate
-
-استفاده می‌کند.
+CCC به صورت پیش‌فرض از Cloudflare Origin Certificate استفاده می‌کند.
 
 **فایل‌های مورد نیاز**
 
