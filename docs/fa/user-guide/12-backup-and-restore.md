@@ -2,8 +2,8 @@
 title: فصل ۱۲ — Backup & Restore
 category: user-guide
 language: fa
-source: CCC Docs.zip
-status: converted-from-docx
+version: v0.3
+audience: operator
 ---
 
 # فصل ۱۲ — Backup & Restore

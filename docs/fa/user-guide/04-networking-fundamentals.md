@@ -2,8 +2,8 @@
 title: فصل ۴ — مفاهیم پایه شبکه (بخش اول)
 category: user-guide
 language: fa
-source: CCC Docs.zip
-status: converted-from-docx
+version: v0.3
+audience: operator
 ---
 
 # فصل ۴ — مفاهیم پایه شبکه (بخش اول)

@@ -2,8 +2,8 @@
 title: فصل ۷ — اولین ورود و آشنایی با Dashboard
 category: user-guide
 language: fa
-source: CCC Docs.zip
-status: converted-from-docx
+version: v0.3
+audience: operator
 ---
 
 # فصل ۷ — اولین ورود و آشنایی با Dashboard

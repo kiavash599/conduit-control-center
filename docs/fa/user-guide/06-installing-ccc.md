@@ -2,8 +2,8 @@
 title: فصل ۶ — نصب Conduit Control Center
 category: user-guide
 language: fa
-source: CCC Docs.zip
-status: converted-from-docx
+version: v0.3
+audience: operator
 ---
 
 # فصل ۶ — نصب Conduit Control Center
