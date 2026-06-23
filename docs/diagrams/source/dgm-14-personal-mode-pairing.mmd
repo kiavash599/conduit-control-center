@@ -1,0 +1,14 @@
+%% DGM-14 personal-mode-pairing -- after Personal Mode is active, a trusted device pairs by scanning the QR built from the Identity
+flowchart LR
+  ID["Identity"] --> QR["CCC generates pairing QR"]
+  QR --> SC["Trusted device scans QR"]
+  SC --> CN["Personal connection established"]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class ID primary;
+  class QR,SC neutral;
+  class CN success;

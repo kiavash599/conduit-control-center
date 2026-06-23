@@ -184,6 +184,10 @@ After creating an Identity, CCC can generate a QR Code. This QR is used for Pair
 
 The QR is built from the Identity.
 
+![Personal Mode pairing: the Identity yields a pairing QR that a trusted device scans to establish a personal connection](../diagrams/svg/personal-mode-pairing.svg)
+
+*After Personal Mode is active, CCC turns the Identity into a pairing QR; a trusted device scans it to establish a personal connection.*
+
 ## 10.8 What information does the QR Code contain?
 
 **Purpose**

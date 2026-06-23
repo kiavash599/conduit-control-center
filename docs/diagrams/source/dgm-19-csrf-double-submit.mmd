@@ -1,0 +1,16 @@
+%% DGM-19 csrf-double-submit -- CCC compares the csrf_token cookie with the X-CSRF-Token header; match is allowed, mismatch returns 403
+flowchart TD
+  R["Browser request"] --> T["Cookie (csrf_token)<br/>+ Header (X-CSRF-Token)"]
+  T --> M{"Match?"}
+  M -->|"Yes"| A["Allowed"]
+  M -->|"No"| F["403 Forbidden"]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class R,T neutral;
+  class M warning;
+  class A success;
+  class F warning;

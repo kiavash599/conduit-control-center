@@ -175,13 +175,9 @@ X-CSRF-Token
 
 **Process**
 
-Cookie
-↓
-Header
-↓
-Comparison
-↓
-Allowed
+![CSRF double-submit: the csrf_token cookie and the X-CSRF-Token header are compared; a match is allowed, a mismatch returns 403](../diagrams/svg/csrf-double-submit.svg)
+
+*CCC compares the csrf_token cookie against the X-CSRF-Token header on each request; if they match the request is allowed, otherwise it is rejected with 403 Forbidden.*
 
 In case of a mismatch, the request is rejected with:
 

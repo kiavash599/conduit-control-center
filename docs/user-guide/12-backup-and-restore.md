@@ -200,21 +200,11 @@ Backup & Restore
 
 Create Backup
 
-Then enter the Passphrase. CCC performs:
+Then enter the Passphrase. CCC performs the following steps:
 
-Collect
+![Backup creation: CCC collects the configuration, packages it, encrypts it, and downloads the file](../diagrams/svg/backup-create-flow.svg)
 
-↓
-
-Package
-
-↓
-
-Encrypt
-
-↓
-
-Download
+*CCC collects the configuration, packages the data, encrypts it with AES-256-GCM (key derived via scrypt), and sends the backup file to your browser for download.*
 
 ## 12.7 Where is the Backup file stored?
 
