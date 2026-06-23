@@ -57,9 +57,9 @@ Raspberry Pi  192.168.1.50
 
 An IP can be thought of as a house address: just as the address on a letter determines where it is delivered, data on the network is sent to the correct destination using the IP.
 
-**Diagram needed**
+![Every device on the home network has its own IP address](../diagrams/svg/network-ip-address.svg)
 
-network-ip-address.svg
+*Every device on the home network has its own IP address, which the router uses to deliver data to the right device.*
 
 ## 4.2 What is a Public IP?
 
@@ -93,9 +93,9 @@ The destination server usually sees the Public IP of your internet connection â€
 
 Most homes have only one Public IP, even though dozens of devices may be connected to the network.
 
-**Diagram needed**
+![Your home is reached through a single public IP assigned by your ISP](../diagrams/svg/network-public-ip.svg)
 
-network-public-ip.svg
+*From the internet's perspective, your whole home is reached through a single public IP assigned by your ISP.*
 
 **Internet**
 
@@ -166,9 +166,9 @@ This causes no problem, because these addresses are valid only on the local netw
 | Assigned by the Router | No | Yes |
 | Globally unique | Yes | No |
 
-**Diagram needed**
+![Private IP addresses are used only inside the home network](../diagrams/svg/network-private-ip.svg)
 
-network-private-ip.svg
+*Private IP addresses are used only inside your home network and are not routable on the internet.*
 
 **Router**
 
@@ -218,9 +218,9 @@ Some ISPs use technologies such as **CGNAT**.
 
 Having a Public IP is one of the most important prerequisites for successfully setting up many internet services. The following chapters examine how to determine it.
 
-**Diagram needed**
+![A remote user reaches your Conduit node through your public IP](../diagrams/svg/network-public-ip-conduit.svg)
 
-network-public-ip-conduit.svg
+*A user on the internet reaches your Conduit node through your public IP and your router.*
 
 ## 4.4 What is NAT?
 
@@ -284,9 +284,9 @@ Suppose a company has a single main phone number.
 
 all use that same main number. NAT works in a similar way.
 
-**Diagram needed**
+![NAT lets many devices share one public IP](../diagrams/svg/network-nat.svg)
 
-network-nat.svg
+*NAT on the router lets many private devices share one public IP when communicating with the internet.*
 
 **Laptop**
 

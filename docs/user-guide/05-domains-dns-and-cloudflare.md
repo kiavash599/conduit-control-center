@@ -78,9 +78,9 @@ or:
 
 A contact name is easier for a human, and a Domain plays a similar role for the internet.
 
-**Diagram needed**
+![A domain name is a human-friendly label for an IP address](../diagrams/svg/domain-name-concept.svg)
 
-domain-name-concept.svg
+*A domain name is a human-friendly label that stands in for a numeric IP address.*
 
 ## 5.2 What is DNS?
 
@@ -120,9 +120,9 @@ You would have to memorize the IP of every website — for example:
 
 which is practically impossible.
 
-**Diagram needed**
+![DNS translates a domain name into an IP address](../diagrams/svg/dns-resolution.svg)
 
-dns-resolution.svg
+*DNS translates a domain name into an IP address, which the browser then connects to.*
 
 Browser
 
@@ -188,9 +188,9 @@ support.example.com
 
 conduit.example.com
 
-**Diagram needed**
+![Subdomains are named units under one parent domain](../diagrams/svg/subdomain-concept.svg)
 
-subdomain-concept.svg
+*Subdomains are named units organized under a single parent domain.*
 
 ## 5.4 What is Cloudflare?
 
@@ -265,9 +265,9 @@ conduit.example.com
 
 will always point to the correct IP.
 
-**Diagram needed**
+![Dynamic DNS keeps your domain pointed at your current public IP](../diagrams/svg/cloudflare-ddns-flow.svg)
 
-cloudflare-ddns-flow.svg
+*Dynamic DNS keeps your domain pointed at your home's current public IP as it changes.*
 
 Public IP Changed
 
@@ -717,9 +717,9 @@ updated
 
 is recorded.
 
-**Diagram needed**
+![CCC updates the Cloudflare DNS record when the public IP changes](../diagrams/svg/cloudflare-ddns-flow.svg)
 
-cloudflare-ddns-flow.svg
+*CCC periodically checks the public IP and updates the Cloudflare DNS record whenever it changes.*
 
 Public IP
 

@@ -76,9 +76,9 @@ the Router provides an IP to the Raspberry Pi.
 - No need to set IP manually
 - Fewer configuration errors
 
-**Diagram needed**
+![The router's DHCP server assigns an IP address on request](../diagrams/svg/network-dhcp.svg)
 
-network-dhcp.svg
+*The router's DHCP server automatically assigns an IP address to a device when it joins the network.*
 
 ## 4.6 Why do device IPs change?
 
@@ -162,9 +162,9 @@ always assign the following IP:
 
 Each time the Raspberry Pi powers on, it will receive 192.168.1.50.
 
-**Diagram needed**
+![A DHCP reservation ties a device's MAC address to a fixed IP](../diagrams/svg/network-dhcp-reservation.svg)
 
-network-dhcp-reservation.svg
+*A DHCP reservation ties a device's MAC address to a fixed IP so it always receives the same address.*
 
 MAC Address
 
@@ -272,9 +272,9 @@ Port 443
 
 Suppose you have a large building. All mail first arrives at the building's front desk, and the desk must know which unit to send each letter to. Port Forwarding plays a similar role.
 
-**Diagram needed**
+![Port forwarding sends inbound traffic on a port to the Raspberry Pi](../diagrams/svg/network-port-forwarding.svg)
 
-network-port-forwarding.svg
+*Port forwarding tells the router to send inbound traffic on a given port to the Raspberry Pi.*
 
 ## 4.10 Connection validation
 
