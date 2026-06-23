@@ -124,26 +124,6 @@ which is practically impossible.
 
 *DNS translates a domain name into an IP address, which the browser then connects to.*
 
-Browser
-
-│
-
-▼
-
-DNS Query
-
-│
-
-▼
-
-DNS Server
-
-│
-
-▼
-
-IP Address
-
 ## 5.3 What is a Subdomain?
 
 **Purpose**
@@ -268,26 +248,6 @@ will always point to the correct IP.
 ![Dynamic DNS keeps your domain pointed at your current public IP](../diagrams/svg/cloudflare-ddns-flow.svg)
 
 *Dynamic DNS keeps your domain pointed at your home's current public IP as it changes.*
-
-Public IP Changed
-
-│
-
-▼
-
-CCC DDNS
-
-│
-
-▼
-
-Cloudflare DNS
-
-│
-
-▼
-
-Updated Record
 
 ## 5.6 What is an API Token?
 
@@ -720,26 +680,6 @@ is recorded.
 ![CCC updates the Cloudflare DNS record when the public IP changes](../diagrams/svg/cloudflare-ddns-flow.svg)
 
 *CCC periodically checks the public IP and updates the Cloudflare DNS record whenever it changes.*
-
-Public IP
-
-│
-
-▼
-
-CCC DDNS
-
-│
-
-▼
-
-Cloudflare
-
-│
-
-▼
-
-Updated DNS Record
 
 ## 5.17 Validation
 

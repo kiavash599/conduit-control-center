@@ -97,20 +97,6 @@ Most homes have only one Public IP, even though dozens of devices may be connect
 
 *From the internet's perspective, your whole home is reached through a single public IP assigned by your ISP.*
 
-**Internet**
-
-│
-
-▼
-
-185.201.45.123
-
-│
-
-▼
-
-**Router**
-
 ## 4.3 What is a Private IP?
 
 **Purpose**
@@ -169,20 +155,6 @@ This causes no problem, because these addresses are valid only on the local netw
 ![Private IP addresses are used only inside the home network](../diagrams/svg/network-private-ip.svg)
 
 *Private IP addresses are used only inside your home network and are not routable on the internet.*
-
-**Router**
-
-│
-
-┌──┼───────────────┐
-
-▼  ▼               ▼
-
-192.168.1.10
-
-192.168.1.20
-
-192.168.1.50
 
 ### 4.3.5 Why is Public IP important for Conduit?
 
@@ -287,34 +259,6 @@ all use that same main number. NAT works in a similar way.
 ![NAT lets many devices share one public IP](../diagrams/svg/network-nat.svg)
 
 *NAT on the router lets many private devices share one public IP when communicating with the internet.*
-
-**Laptop**
-
-**Phone**
-
-**TV**
-
-**Raspberry Pi**
-
-│
-
-▼
-
-**Router (NAT)**
-
-│
-
-▼
-
-**Public IP**
-
-185.201.45.123
-
-│
-
-▼
-
-**Internet**
 
 **Section validation**
 

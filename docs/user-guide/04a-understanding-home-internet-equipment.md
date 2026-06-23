@@ -46,29 +46,7 @@ Without DHCP, you would have to set an IP manually for each device. DHCP does th
 
 **Real-world example**
 
-When the Raspberry Pi powers on:
-
-Raspberry Pi
-
-│
-
-▼
-
-Request IP Address
-
-│
-
-▼
-
-Router DHCP Server
-
-│
-
-▼
-
-192.168.1.50
-
-the Router provides an IP to the Raspberry Pi.
+When the Raspberry Pi powers on, the Router provides an IP to the Raspberry Pi.
 
 **Advantages**
 
@@ -166,22 +144,6 @@ Each time the Raspberry Pi powers on, it will receive 192.168.1.50.
 
 *A DHCP reservation ties a device's MAC address to a fixed IP so it always receives the same address.*
 
-MAC Address
-
-│
-
-▼
-
-Router DHCP
-
-│
-
-▼
-
-Always Assign
-
-192.168.1.50
-
 ## 4.8 Why must the Raspberry Pi always have a fixed IP?
 
 **Purpose**
@@ -192,13 +154,7 @@ Understanding the most important reason for using DHCP Reservation.
 
 Suppose you have configured Port Forwarding like this:
 
-Port 443
-
-│
-
-▼
-
-192.168.1.50
+Port forwarding is configured so that incoming traffic on TCP port 443 is forwarded to 192.168.1.50.
 
 Everything works correctly. But a few days later DHCP changes this IP:
 
@@ -252,21 +208,7 @@ send it to the Raspberry Pi
 
 **Example**
 
-Internet
-
-│
-
-▼
-
-Router
-
-Port 443
-
-│
-
-▼
-
-192.168.1.50
+Incoming traffic from the internet on TCP port 443 reaches the router, which forwards it to the Raspberry Pi at 192.168.1.50.
 
 **Simple analogy**
 
