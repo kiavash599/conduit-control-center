@@ -1,11 +1,23 @@
-%% DGM-03 network-private-ip — private IPs are valid only inside the home network
+﻿%% DGM-03 network-private-ip - private IPs are valid only inside the home network
 flowchart TD
   R[Home Router]
-  subgraph LAN[Home network · private · not routable on the Internet]
-    L[Laptop&nbsp;·&nbsp;192.168.1.10]
-    P[Phone&nbsp;·&nbsp;192.168.1.20]
-    Pi[Raspberry Pi&nbsp;·&nbsp;192.168.1.50]
+  subgraph LAN[Home network - private - not routable on the Internet]
+    L[Laptop - 192.168.1.10]
+    P[Phone - 192.168.1.20]
+    Pi[Raspberry Pi - 192.168.1.50]
   end
   R --> L
   R --> P
   R --> Pi
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class Pi primary;
+  class R,L,P neutral;
+
+
+
+

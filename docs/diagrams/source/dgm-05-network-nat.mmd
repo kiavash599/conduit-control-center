@@ -1,13 +1,25 @@
-%% DGM-05 network-nat — many private devices share one public IP through NAT on the router
+﻿%% DGM-05 network-nat - many private devices share one public IP through NAT on the router
 flowchart LR
   subgraph LAN[Home network]
     L[Laptop]
     P[Phone]
     T[TV]
-    Pi[Raspberry Pi&nbsp;·&nbsp;192.168.1.50]
+    Pi[Raspberry Pi - 192.168.1.50]
   end
   L --> R
   P --> R
   T --> R
   Pi --> R
-  R[Router · NAT] --> PUB[Public IP<br/>185.201.45.123] --> I[Internet]
+  R[Router - NAT] --> PUB[Public IP<br/>185.201.45.123] --> I[Internet]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class Pi primary;
+  class L,P,T,R,PUB,I neutral;
+
+
+
+

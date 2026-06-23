@@ -1,0 +1,21 @@
+{
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "Inter, \"Segoe UI\", Arial, sans-serif",
+    "fontSize": "14px",
+    "lineColor": "#6B7280",
+    "primaryColor": "#F9FAFB",
+    "primaryBorderColor": "#6B7280",
+    "primaryTextColor": "#374151",
+    "tertiaryColor": "#FFFFFF"
+  },
+  "flowchart": {
+    "htmlLabels": true,
+    "curve": "linear",
+    "nodeSpacing": 50,
+    "rankSpacing": 60,
+    "padding": 12,
+    "useMaxWidth": true
+  },
+  "themeCSS": ".node rect, .node polygon { stroke-width: 2px; } .edgeLabel { background-color: #FFFFFF; color: #374151; font-size: 13px; } .cluster rect { fill: none; stroke: #6B7280; stroke-dasharray: 4 3; }"
+}

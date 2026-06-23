@@ -1,4 +1,17 @@
-%% DGM-06 network-dhcp — the router's DHCP server assigns an IP to a device on request
+﻿%% DGM-06 network-dhcp - the router's DHCP server assigns an IP to a device on request
 flowchart LR
-  Pi[Raspberry Pi] -->|Requests an IP| D[Router · DHCP server]
+  Pi[Raspberry Pi] -->|Requests an IP| D[Router - DHCP server]
   D -->|Assigns| IP[192.168.1.50]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class Pi primary;
+  class D neutral;
+  class IP success;
+
+
+
+

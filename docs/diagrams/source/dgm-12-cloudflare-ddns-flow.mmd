@@ -1,6 +1,19 @@
-%% DGM-12 cloudflare-ddns-flow — CCC keeps the DNS record pointed at the current public IP
+﻿%% DGM-12 cloudflare-ddns-flow - CCC keeps the DNS record pointed at the current public IP
 flowchart TD
   A[CCC checks the public IP periodically] --> B{Public IP changed?}
   B -->|No| C[No change]
   B -->|Yes| D[Update Cloudflare DNS record]
   D --> E[conduit.example.com points to the current IP]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class A primary;
+  class B,D warning;
+  class C,E success;
+
+
+
+

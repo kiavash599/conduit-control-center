@@ -1,5 +1,17 @@
-%% DGM-10 dns-resolution — the browser asks DNS for the IP of a name, then connects to it
+﻿%% DGM-10 dns-resolution - the browser asks DNS for the IP of a name, then connects to it
 flowchart LR
-  B[Browser] -->|What is the IP of example.com?| DNS[DNS]
-  DNS -->|203.0.113.10| B
-  B -->|connects to| S[Web server<br/>203.0.113.10]
+  B[Browser] -->|1 - What is the IP of example.com?| DNS[DNS]
+  DNS -->|2 - 203.0.113.10| B
+  B -->|3 - connects to| S[Web server<br/>203.0.113.10]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class DNS primary;
+  class B,S neutral;
+
+
+
+
