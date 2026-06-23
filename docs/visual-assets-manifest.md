@@ -1,12 +1,12 @@
 # Visual Assets Manifest
 
 > [!NOTE]
-> This manifest is **extracted** from the existing Persian user-guide Markdown (`docs/fa/user-guide/*.md`), which is the source of truth. No images, screenshots, SVG, or PNG files were created, and no chapter content was modified. Every referenced asset is a **placeholder to be produced later**; none exist on disk yet.
+> This manifest was originally **extracted** from the Persian user-guide Markdown (`docs/fa/user-guide/*.md`). The core dashboard/feature screenshots are now **captured** (Status `available`) under `docs/screenshots/`; the remaining screenshot entries are still **placeholders to be produced later**.
 
 ## Summary
 
 - Diagrams: **12 unique** (`cloudflare-ddns-flow.svg` is referenced twice → 13 references).
-- Screenshots: **11**.
+- Screenshots: **14** (4 captured under `docs/screenshots/`, 10 pending).
 - Educational images: **0** (none found).
 - Total references: **24** (23 unique assets).
 - Prose mention of "Screenshot" that is **not** an asset reference: 1 (ch11) — see Ambiguities.
@@ -39,8 +39,14 @@ All asset filenames are recorded **exactly** as written in the source. Status `p
 | SCR-08 | Screenshot | `cloudflare-orange-cloud.png` | 05-domains-dns-and-cloudflare.md (L661) | 5.13 چرا رکورد باید Proxied باشد؟ | pending |
 | SCR-09 | Screenshot | `cloudflare-token-permissions.png` | 05-domains-dns-and-cloudflare.md (L732) | 5.14 ساخت API Token | pending |
 | SCR-10 | Screenshot | `login-page.png` | 07-first-login-and-dashboard-tour.md (L65) | 7.1 اولین ورود | pending |
-| SCR-11 | Screenshot | `dashboard-navigation.png` | 07-first-login-and-dashboard-tour.md (L133) | 7.3 ساختار Dashboard | pending |
+| SCR-11 | Screenshot | `dashboard-overview.png` | 07-first-login-and-dashboard-tour.md | 7.3 Dashboard structure / 7.4 The Dashboard section | available |
+| — | Screenshot | `advisor-card.png` | 08-contribution-advisor.md | 8.4 Recommendation severity levels | available |
+| — | Screenshot | `conduit-config.png` | 09-conduit-configuration.md | 9.2 Configured and Effective | available |
+| — | Screenshot | `backup-restore.png` | 12-backup-and-restore.md | 12.8 Inspect Before Restore | available |
 | ALT-01 | Unknown visual placeholder | _no filename — prose mention_ | 11-ryve-integration.md (L321) | "از Screenshotهای غیرضروری خودداری کنید." | ambiguous |
+
+> [!NOTE]
+> SCR-11 was previously the placeholder `dashboard-navigation.png`; it is now covered by the canonical `dashboard-overview.png` (no file rename — the placeholder was never produced). The three rows marked `—` are core-UI screenshots identified by filename rather than a new SCR-ID.
 
 ## Per-chapter coverage
 

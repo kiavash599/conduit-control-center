@@ -224,6 +224,10 @@ Inspecting the Backup before Restore.
 
 One of CCC's most professional capabilities is Inspect.
 
+![Backup & Restore showing an Inspect result with compatibility status and backup contents](../screenshots/backup-restore.png)
+
+*Inspect previews a backup's compatibility and contents; it never restores or changes anything.*
+
 Inspect:
 
 ✓ Opens the Backup.

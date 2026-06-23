@@ -9,7 +9,11 @@
 
 CCC is **aggregate-only by design**: it never sees or stores who uses your node, their identity, their IP, or their traffic.
 
-<!-- Hero screenshot pending — see the Screenshots section for the planned asset list. -->
+<p align="center">
+  <a href="docs/user-guide/07-first-login-and-dashboard-tour.md">
+    <img src="docs/screenshots/dashboard-overview.png" alt="The CCC dashboard after login — node status, Contribution Advisor, traffic, and aggregate regions" width="800">
+  </a>
+</p>
 
 > **New here?** → [What is this?](#what-is-this) · [Install](#quick-install) · [Privacy](#privacy) · [Documentation](#documentation)
 
@@ -68,18 +72,13 @@ CCC also never stores your own secrets in plain sight: passphrases, API tokens, 
 
 ## Screenshots
 
-_Screenshots are being prepared and will be added before/after the public documentation pass._
+| Screen | What it shows |
+|--------|---------------|
+| [![Contribution Advisor](docs/screenshots/advisor-card.png)](docs/user-guide/08-contribution-advisor.md) | The **Contribution Advisor** — aggregate guidance with a severity level. |
+| [![Conduit Configuration](docs/screenshots/conduit-config.png)](docs/user-guide/09-conduit-configuration.md) | **Conduit Configuration** — Configured vs Effective values with an in-sync indicator. |
+| [![Backup & Restore](docs/screenshots/backup-restore.png)](docs/user-guide/12-backup-and-restore.md) | **Backup & Restore** — inspect a backup before restoring; nothing changes until you confirm. |
 
-<!--
-Planned screenshot assets (store under docs/brand/screenshots/):
-  dashboard-overview.png — Hero: full dashboard, status badge + system health
-  advisor-card.png       — Contribution Advisor card (aggregate guidance only)
-  traffic-history.png    — Optional aggregate traffic history over time
-  conduit-config.png     — Conduit configuration: bandwidth / clients / reduced window
-  personal-mode.png      — Personal Mode status card with pairing QR
-  backup-restore.png     — Encrypted backup / guided restore screen
-Redact any real domain, IP, or token in every capture.
--->
+The full dashboard is shown above; see [Chapter 7 — First Login & Dashboard Tour](docs/user-guide/07-first-login-and-dashboard-tour.md) for the complete tour. Screenshots live under [`docs/screenshots/`](docs/screenshots/); real domains, IPs, tokens, and QR codes are redacted or replaced with safe example values.
 
 ---
 

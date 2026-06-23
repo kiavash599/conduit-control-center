@@ -106,9 +106,9 @@ System
 
 Settings
 
-**Screenshot needed**
+![The CCC dashboard after login — node status, advisor, traffic, and aggregate regions](../screenshots/dashboard-overview.png)
 
-dashboard-navigation.png
+*The CCC dashboard after login — node status, advisor, traffic, and aggregate regions, all in the browser.*
 
 ## 7.4 The Dashboard section
 

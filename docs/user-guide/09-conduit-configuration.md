@@ -64,6 +64,10 @@ Configured
 
 Effective
 
+![Conduit Configuration showing Configured and Effective values with in-sync indicators](../screenshots/conduit-config.png)
+
+*Each setting shows its Configured value and the Effective currently-running value, with an in-sync indicator.*
+
 **What is Configured?**
 
 It is the value that CCC has saved.

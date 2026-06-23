@@ -150,6 +150,10 @@ Understanding Severity Levels.
 
 The Advisor has four severity levels.
 
+![The Contribution Advisor card showing a warning-level recommendation](../screenshots/advisor-card.png)
+
+*The Advisor presents guidance with a severity level; here a warning that contribution is dropping.*
+
 **Warning**
 
 The highest severity level.
