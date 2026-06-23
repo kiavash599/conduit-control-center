@@ -276,31 +276,9 @@ Understanding the Restore steps.
 
 Restore is done as follows:
 
-Upload Backup
+![Restore flow with automatic rollback: CCC inspects, checks compatibility, restores, verifies health, and rolls back if verification fails](../diagrams/svg/restore-rollback-flow.svg)
 
-↓
-
-Inspect
-
-↓
-
-Compatibility Check
-
-↓
-
-Confirm
-
-↓
-
-Restore
-
-↓
-
-Health Verification
-
-↓
-
-Success
+*Restore is not a blind overwrite: CCC inspects the backup, checks compatibility, restores after confirmation, then verifies health — rolling back automatically if the health check fails.*
 
 ## 12.11 Restore is not instant
 
@@ -358,23 +336,7 @@ Rollback
 
 **Process**
 
-Restore
-
-↓
-
-Health Check
-
-↓
-
-Failure
-
-↓
-
-Rollback
-
-↓
-
-Health Check
+If a restore fails its health check, CCC automatically rolls back and runs a health check again on the restored previous state. This safety flow is shown in the restore diagram in §12.10.
 
 **Benefit**
 

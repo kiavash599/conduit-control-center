@@ -1,0 +1,13 @@
+%% DGM-13 personal-mode-states -- Personal Mode is active only when an Identity exists AND Max Personal Clients > 0 and the change is applied
+flowchart LR
+  NS["Not Set Up"] -->|"Create Identity"| CI["Created<br/>Inactive"]
+  CI -->|"Set Max Personal Clients &gt; 0 + Apply"| AC["Active"]
+  AC -->|"Set Max Personal Clients = 0 + Apply"| CI
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class NS,CI neutral;
+  class AC success;

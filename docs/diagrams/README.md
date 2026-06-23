@@ -27,5 +27,9 @@ Diagram specifications and Mermaid sources for the CCC user guide, derived from 
 | DGM-10 | DNS resolution | [spec](specifications/dgm-10-dns-resolution.md) | [mmd](source/dgm-10-dns-resolution.mmd) | `dns-resolution.svg` | pending |
 | DGM-11 | Subdomain concept | [spec](specifications/dgm-11-subdomain-concept.md) | [mmd](source/dgm-11-subdomain-concept.mmd) | `subdomain-concept.svg` | pending |
 | DGM-12 | Cloudflare DDNS flow | [spec](specifications/dgm-12-cloudflare-ddns-flow.md) | [mmd](source/dgm-12-cloudflare-ddns-flow.mmd) | `cloudflare-ddns-flow.svg` | pending |
+| DGM-13 | Personal Mode states | [spec](specifications/dgm-13-personal-mode-states.md) | [mmd](source/dgm-13-personal-mode-states.mmd) | `personal-mode-states.svg` | pending |
+| DGM-15 | Ryve claim flow | [spec](specifications/dgm-15-ryve-claim-flow.md) | [mmd](source/dgm-15-ryve-claim-flow.mmd) | `ryve-claim-flow.svg` | pending |
+| DGM-17 | Restore and automatic rollback | [spec](specifications/dgm-17-restore-rollback-flow.md) | [mmd](source/dgm-17-restore-rollback-flow.mmd) | `restore-rollback-flow.svg` | pending |
+| DGM-18 | Security trust boundaries | [spec](specifications/dgm-18-security-trust-boundaries.md) | [mmd](source/dgm-18-security-trust-boundaries.mmd) | `security-trust-boundaries.svg` | pending |
 
-12 diagrams (DGM-12's asset is referenced in two chapter sections — produced once; see the manifest).
+16 diagrams. DGM-01–12 are the networking batch (DGM-12 is reused across two sections). DGM-13/15/17/18 are the K.3B-1 high-priority core-feature batch; DGM-14 (personal-mode-pairing), DGM-16 (backup-create-flow), and DGM-19 (csrf-double-submit) are deferred to the next batch.

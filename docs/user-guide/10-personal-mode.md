@@ -168,6 +168,10 @@ An Identity exists.
 
 And Max Personal Clients > 0.
 
+![Personal Mode states: an Identity alone is Inactive; it becomes Active only when Max Personal Clients > 0 is applied](../diagrams/svg/personal-mode-states.svg)
+
+*Personal Mode becomes Active only when an Identity exists and Max Personal Clients is set above 0 and applied; setting it back to 0 returns to the Inactive state.*
+
 ## 10.7 What is QR Pairing?
 
 **Purpose**
@@ -270,21 +274,9 @@ The Identity is not deleted; only its use is stopped.
 
 Enabling the capability.
 
-Steps:
+Steps: create an Identity, set Max Personal Clients to a value greater than 0, then Apply.
 
-Create Identity
-
-↓
-
-Set Max Personal Clients
-
-↓
-
-Apply
-
-After Apply:
-
-Conduit is restarted.
+After Apply, Conduit is restarted.
 
 ## 10.14 Restart Behavior
 

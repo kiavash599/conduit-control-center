@@ -1,0 +1,17 @@
+%% DGM-18 security-trust-boundaries -- layered trust boundaries; the web app is non-root and reaches privileged actions only through validated helpers
+flowchart TD
+  I["Internet"] --> CF["Cloudflare"]
+  CF --> NX["Nginx<br/>TLS termination"]
+  NX --> APP["CCC web app<br/>conduit-cc, non-root"]
+  APP -->|"privilege boundary<br/>validated requests only"| H["Validated helpers"]
+  H --> CD["conduit service"]
+  H --> RT["Root-level operations<br/>only via controlled helpers"]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class I,CF,NX,CD neutral;
+  class APP primary;
+  class H,RT warning;

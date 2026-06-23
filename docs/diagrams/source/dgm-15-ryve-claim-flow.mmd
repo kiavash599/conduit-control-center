@@ -1,0 +1,17 @@
+%% DGM-15 ryve-claim-flow -- Conduit creates the Ryve claim; CCC only requests and displays the temporary QR, which expires
+flowchart TD
+  A["User clicks Generate"] --> B["CCC requests claim"]
+  B --> C["Conduit creates claim"]
+  C --> D["CCC receives QR (PNG)"]
+  D --> E["CCC displays temporary QR"]
+  E --> F["User scans with Ryve app"]
+  F --> G["Claim expires and is cleared from memory"]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class C primary;
+  class A,B,D,E,F neutral;
+  class G success;

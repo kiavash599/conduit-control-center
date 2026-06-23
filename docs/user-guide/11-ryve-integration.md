@@ -82,23 +82,9 @@ Knowing the Workflow.
 
 The process is as follows:
 
-Generate
+![Ryve claim flow: Conduit creates the claim, CCC displays a temporary QR, and the claim expires](../diagrams/svg/ryve-claim-flow.svg)
 
-↓
-
-Conduit Creates Claim
-
-↓
-
-CCC Receives PNG
-
-↓
-
-CCC Displays QR
-
-↓
-
-User Scans QR
+*Conduit creates the claim; CCC only requests and displays the temporary QR, which the user scans with the Ryve app before it expires and is cleared from memory.*
 
 **Important note**
 
@@ -116,17 +102,7 @@ The Claim QR is kept in memory only for a short period.
 
 **System behavior**
 
-Generate
-
-↓
-
-Display
-
-↓
-
-Expire
-
-CCC does not store it for long-term use.
+The QR is generated, displayed, and then expires. CCC does not store it for long-term use.
 
 ## 11.6 Temporary storage
 

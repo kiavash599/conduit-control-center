@@ -1,0 +1,21 @@
+%% DGM-17 restore-rollback-flow -- Restore is health-verified; CCC rolls back automatically if verification fails
+flowchart TD
+  A["Upload backup"] --> B["Inspect backup"]
+  B --> C["Compatibility check"]
+  C --> D["User confirmation"]
+  D --> E["Restore attempt"]
+  E --> F{"Health verification:<br/>healthy?"}
+  F -->|"Yes"| G["Success / Restored"]
+  F -->|"No"| H["Failure"]
+  H --> R["Automatic rollback"]
+  R --> P["Post-rollback health check"]
+
+  classDef primary fill:#EFF6FF,stroke:#2563EB,color:#1E40AF,stroke-width:2px;
+  classDef neutral fill:#F9FAFB,stroke:#6B7280,color:#374151,stroke-width:2px;
+  classDef success fill:#F0FDF4,stroke:#16A34A,color:#166534,stroke-width:2px;
+  classDef warning fill:#FFFBEB,stroke:#D97706,color:#92400E,stroke-width:2px;
+  classDef danger  fill:#FEF2F2,stroke:#DC2626,color:#991B1B,stroke-width:2px;
+  class A,B,C,D,E neutral;
+  class F warning;
+  class G success;
+  class H,R,P warning;

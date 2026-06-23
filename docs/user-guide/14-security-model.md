@@ -63,17 +63,9 @@ Reducing the risk of:
 
 **Overall architecture**
 
-Internet
-    ↓
-Cloudflare
-    ↓
-Nginx
-    ↓
-CCC (conduit-cc)
-    ↓
-Validated Helpers
-    ↓
-conduit / root
+![Trust boundaries: Internet, Cloudflare, Nginx, the non-root CCC web app, validated helpers, and the conduit service / root operations](../diagrams/svg/security-trust-boundaries.svg)
+
+*Requests pass through Cloudflare and Nginx to the non-root CCC web app, which reaches privileged actions only through validated helpers — direct root access is never exposed to the browser.*
 
 **Important note**
 
