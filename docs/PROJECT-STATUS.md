@@ -7,7 +7,7 @@
 > decision deep-dives. This file is the canonical closed-epic index and links the
 > three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-24 · branch `main` · HEAD `b88ab33`.
+> Last reconciled: 2026-06-24 · branch `main` · HEAD `043cb6a`.
 
 ## 1. Current Release
 
@@ -15,7 +15,7 @@
 |---|---|---|---|
 | v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.11 | Reconciled · clean baseline |
 
-Branch `main` · HEAD `b88ab33` (Epic B closed: D1 + D2) · released as v0.3.1.
+Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; BCA committed.
 
 ## 2. Closed Epics
 
@@ -29,6 +29,7 @@ Branch `main` · HEAD `b88ab33` (Epic B closed: D1 + D2) · released as v0.3.1.
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
+| Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
 | Regional Analytics | ✅ Closed | — | `docs/closure/regional-analytics-closure.md` |
 | Live Operations | ✅ Closed | — | `docs/closure/live-operations-closure.md` |
@@ -41,7 +42,7 @@ Branch `main` · HEAD `b88ab33` (Epic B closed: D1 + D2) · released as v0.3.1.
 
 ## 3. Active Epics
 
-**NONE.** Epic B — v0.3.1 Hotfixes — is **complete** (D1 + D2); the v0.3.1 tag + CHANGELOG stamp remain as the release step. See Closed Epics.
+**NONE.** Epic B (v0.3.1) is released and Backup Contract Alignment (BCA-1 + BCA-2) is complete (`043cb6a`). See Closed Epics.
 
 ## 4. Approved Next Epics
 

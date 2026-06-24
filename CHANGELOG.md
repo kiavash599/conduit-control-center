@@ -7,6 +7,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Backup key-exclusion guard (BCA-1): the fail-closed path guard now matches
+  excluded locations cross-platform; it previously failed open under Windows-style
+  path resolution (Linux production unaffected). (`043cb6a`)
+
+### Internal
+
+- Backup permission test (BCA-2): the POSIX file-mode invariant is asserted only
+  where the filesystem honours POSIX permission bits (Linux CI / Raspberry Pi),
+  preventing false failures on non-POSIX developer filesystems. No production
+  change. (`043cb6a`)
+
+---
+
 ## [0.3.1] - 2026-06-24
 
 ### Fixed
