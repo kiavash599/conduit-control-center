@@ -7,7 +7,7 @@
 > decision deep-dives. This file is the canonical closed-epic index and links the
 > three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-24 · branch `main` · HEAD `2d42372`.
+> Last reconciled: 2026-06-24 · branch `main` · HEAD `f5233ff`.
 
 ## 1. Current Release
 
@@ -15,7 +15,7 @@
 |---|---|---|---|
 | v0.3.0 (2026-06-21, first public release) | docs-v0.3 (2026-06-22, documentation milestone) | 1.11 | Reconciled · clean baseline |
 
-Branch `main` · HEAD `2d42372` (roadmap reconciliation, Epic A.1) · no active feature branch.
+Branch `main` · HEAD `f5233ff` (D1 root-URL fix) · Epic B in progress on `main`.
 
 ## 2. Closed Epics
 
@@ -28,6 +28,7 @@ Branch `main` · HEAD `2d42372` (roadmap reconciliation, Epic A.1) · no active 
 | Documentation Governance | ✅ Closed | governance + `docs/release-checklist.md` | `971b1bf` |
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
+| v0.3.1 Hotfixes (Epic B) | ✅ Complete — release pending | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | v0.3.1 tag pending |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
 | Regional Analytics | ✅ Closed | — | `docs/closure/regional-analytics-closure.md` |
 | Live Operations | ✅ Closed | — | `docs/closure/live-operations-closure.md` |
@@ -40,13 +41,12 @@ Branch `main` · HEAD `2d42372` (roadmap reconciliation, Epic A.1) · no active 
 
 ## 3. Active Epics
 
-**NONE.** (Epic A.2 — Governance & Status — is closed upon creation of this file; see Closed Epics.)
+**NONE.** Epic B — v0.3.1 Hotfixes — is **complete** (D1 + D2); the v0.3.1 tag + CHANGELOG stamp remain as the release step. See Closed Epics.
 
 ## 4. Approved Next Epics
 
 | Epic | Description | Priority |
 |---|---|---|
-| **B — v0.3.1 Hotfixes** | D1 root-URL `/`→`/dashboard` redirect (P0) + D2 Cloudflare screenshot correction (P1) → patch release v0.3.1 | Next |
 | **C — TLS / Origin Certificate Onboarding** | D3: integrate the Origin-Certificate workflow into the guide flow (ch05/06); create `docs/fa/tls-setup.md`; cross-link `docs/tls-setup.md` | After B |
 | **D — Diagram Parity + Persian RTL/LTR Formatting** | D4: integrate DGM-13–19 into the Persian guide · D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code) | After C |
 
@@ -54,8 +54,8 @@ Branch `main` · HEAD `2d42372` (roadmap reconciliation, Epic A.1) · no active 
 
 | ID | Issue | Severity | Status | Epic / Target |
 |---|---|---|---|---|
-| D1 | Root URL `/` returns 404; only `/login` works, though docs instruct opening the root URL | High (P0) | Open | Epic B / v0.3.1 |
-| D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | Open | Epic B / v0.3.1 |
+| D1 | Root URL `/` returns 404; only `/login` works, though docs instruct opening the root URL | High (P0) | ✅ Resolved — `f5233ff` (`/`→`/dashboard` 307); CI PASS; Raspberry Pi runtime validation PASS | Epic B / v0.3.1 |
+| D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | ✅ Resolved — in-place relabel to root domain `example.com`; same filename/path/dimensions; Parity Guard PASS | Epic B / v0.3.1 |
 | D3 | TLS/Origin-cert workflow not integrated into the guide flow; `tls-setup.md` exists (EN) but is unlinked from chapters and has no FA translation | Medium (P1) | Open | Epic C |
 | D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | Open | Epic D |
 | D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | Open | Epic D |
@@ -95,7 +95,7 @@ Branch `main` · HEAD `2d42372` (roadmap reconciliation, Epic A.1) · no active 
 
 ## 9. Next Recommended Action
 
-**Start Epic B — v0.3.1 Hotfixes (D1 root-URL redirect + D2 screenshot correction).**
+**Tag v0.3.1** (stamp CHANGELOG `[Unreleased]`→`[0.3.1]` recording D1 + D2, then tag), then **start Epic C — TLS / Origin Certificate Onboarding**. Epic B implementation is complete.
 
 ---
 
