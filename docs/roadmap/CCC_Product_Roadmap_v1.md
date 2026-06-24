@@ -1,9 +1,9 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.10  
-**Date:** 2026-06-19  
-**Status:** Draft for Review  
+**Revision:** 1.11  
+**Date:** 2026-06-24  
+**Status:** Reconciled  
 **Author:** CCC Development Team
 
 ---
@@ -11,6 +11,7 @@
 ## Table of Contents
 
 1. [Overview](#1-overview)
+   - [Release History](#release-history)
 2. [Guiding Principles](#2-guiding-principles)
 3. [R1 — Capability Audit (Research Milestone)](#3-r1--capability-audit-research-milestone)
    - 3.1 [Audit Scope](#31-audit-scope)
@@ -38,9 +39,12 @@
    - 6.6 [Broker Live Status](#66-broker-live-status)
    - 6.7 [Theme Support](#67-theme-support)
 - [Approved Delivery Priority (USER-VALUE-FIRST)](#approved-delivery-priority-user-value-first)
-7. [v0.3.0 — Historical Analytics & Operations](#7-v030--historical-analytics--operations)
-8. [v0.4.0 — Personal Mode & Ryve](#8-v040--personal-mode--ryve)
+7. [Operations & Analytics — Feature Catalogue](#7-operations--analytics--feature-catalogue)
+8. [Personal Mode & Ryve — Feature Catalogue](#8-personal-mode--ryve--feature-catalogue)
 9. [Out of Scope](#9-out-of-scope)
+- [Documentation Workstream](#documentation-workstream)
+- [Maintenance & Patch Releases](#maintenance--patch-releases)
+- [v0.4 Candidates](#v04-candidates-not-yet-scheduled)
 10. [Revision History](#10-revision-history)
 
 ---
@@ -52,6 +56,21 @@ Conduit Control Center (CCC) is an open-source web dashboard for managing Psipho
 This roadmap documents the planned evolution of CCC from a monitoring dashboard (v0.1) to a full control centre capable of configuring Conduit, visualising live and historical traffic, intelligently assisting operators with resource decisions, and managing personal relay identities.
 
 **Target platform:** Raspberry Pi 4 (4 GB), Ubuntu 22.04 ARM64, public IP, Cloudflare DNS, Nginx, FastAPI, Python 3.
+
+---
+
+## Release History
+
+The authoritative record of **product releases** (tags). Documentation snapshots are
+tracked separately under [Documentation Workstream → Documentation Milestones](#documentation-workstream).
+
+| Version | Tag | Date | Delivered |
+|---|---|---|---|
+| 0.1.0 | (MVP) | 2026-06 | Initial MVP — monitoring dashboard, auth, Conduit status |
+| 0.1.1 | `v0.1.1` | 2026-06-11 | Maintenance items |
+| 0.2.0 | `v0.2.0` | 2026-06-17 | Smart Conduit Control — Conduit Configuration, Regional Analytics, Bandwidth Scheduling, Live Operations, Theme Support, Traffic/Historical charts, Contribution Advisor |
+| 0.3.0 | `v0.3.0` | 2026-06-21 | **First public release** — Personal Mode, Ryve Claim / Identity, Backup & Restore |
+| 0.3.1 | _(planned)_ | TBD | Hotfixes — D1 root-URL redirect, D2 Cloudflare screenshot correction |
 
 ---
 
@@ -104,21 +123,21 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | # | Capability | Android App | Linux CLI | CCC Current | CCC Candidate |
 |---|---|:---:|:---:|:---:|---|
 | **A — Personal Mode** |||||
-| A1 | Enable personal clients | ✅ | ✅ `--max-personal-clients` | ✅ | **DELIVERED v0.4.0** — Max personal clients apply (Slice 4 / C6b) |
-| A2 | Compartment ID generation | ✅ | ✅ `new-compartment-id` cmd | ✅ | **DELIVERED v0.4.0** — Create identity (Slice 2 / C4 helper) |
-| A3 | Personal pairing token (v1) | ✅ | ✅ `BuildPersonalPairingToken` | ✅ | **DELIVERED v0.4.0** — token retrieval + display (Slice 3 / C6a, C6c) |
-| A4 | Personal pairing QR code | ✅ | ✅ (token → QR) | ✅ | **DELIVERED v0.4.0** — client-side QR, vendored qrcodegen (Slice 3) |
-| A5 | `--compartment-id` accepts raw ID or token | — | ✅ `NormalizePersonalCompartmentInput` | ❌ | Accepts both formats (v0.4.0) |
-| A6 | Pairing name max length | 32 chars | ✅ 32 chars enforced | ❌ | Validated input (v0.4.0) |
-| A7 | Compartment persisted to disk | — | ✅ `personal_compartment.json` | ❌ | Read persisted ID (v0.4.0) |
+| A1 | Enable personal clients | ✅ | ✅ `--max-personal-clients` | ✅ | **DELIVERED v0.3.0** — Max personal clients apply (Slice 4 / C6b) |
+| A2 | Compartment ID generation | ✅ | ✅ `new-compartment-id` cmd | ✅ | **DELIVERED v0.3.0** — Create identity (Slice 2 / C4 helper) |
+| A3 | Personal pairing token (v1) | ✅ | ✅ `BuildPersonalPairingToken` | ✅ | **DELIVERED v0.3.0** — token retrieval + display (Slice 3 / C6a, C6c) |
+| A4 | Personal pairing QR code | ✅ | ✅ (token → QR) | ✅ | **DELIVERED v0.3.0** — client-side QR, vendored qrcodegen (Slice 3) |
+| A5 | `--compartment-id` accepts raw ID or token | — | ✅ `NormalizePersonalCompartmentInput` | ❌ | Accepts both formats (v0.3.0) |
+| A6 | Pairing name max length | 32 chars | ✅ 32 chars enforced | ❌ | Validated input (v0.3.0) |
+| A7 | Compartment persisted to disk | — | ✅ `personal_compartment.json` | ❌ | Read persisted ID (v0.3.0) |
 | A8 | Per-user invitation management | ✅ | ❌ Not in CLI | ❌ | Out of scope |
 | **B — Client Limits** |||||
 | B1 | Max common clients (0–1000) | ✅ | ✅ `--max-common-clients` (default 50) | ❌ read | Read + Write (v0.2.0) |
-| B2 | Max personal clients (0–1000) | ✅ | ✅ `--max-personal-clients` (default 0) | ❌ | Read (v0.2.0), Write (v0.4.0) |
+| B2 | Max personal clients (0–1000) | ✅ | ✅ `--max-personal-clients` (default 0) | ❌ | Read (v0.2.0), Write (v0.3.0) |
 | B3 | At-least-one-client validation | — | ✅ error if both = 0 | — | Enforce in UI (v0.2.0) |
 | B4 | Runtime client limit update | — | ✅ `SetConfig(common, personal, bw)` | ❌ | Apply via service restart (v0.2.0) |
 | B5 | `InproxyMaxCommonClients` via `--set` | — | ✅ in allowlist | — | Covered by B1 |
-| B6 | `InproxyMaxPersonalClients` via `--set` | — | ❌ not in `--set` allowlist | — | Use `--max-personal-clients` flag (v0.4.0) |
+| B6 | `InproxyMaxPersonalClients` via `--set` | — | ❌ not in `--set` allowlist | — | Use `--max-personal-clients` flag (v0.3.0) |
 | **C — Bandwidth Controls** |||||
 | C1 | Global bandwidth limit (Mbps) | ✅ | ✅ `--bandwidth` (default 40, -1 unlimited) | ❌ read | Read + Write (v0.2.0) |
 | C2 | Bandwidth stored as bytes/sec | — | ✅ `int(Mbps × 1,000,000 / 8)` | — | Display as Mbps in UI (v0.2.0) |
@@ -134,7 +153,7 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | D3 | `conduit_connected_clients` | — | ✅ | ✅ | Already exposed |
 | D4 | `conduit_is_live` (broker connection) | — | ✅ | ✅ | Live Operations — delivered 2026-06-17 (broker badge) |
 | D5 | `conduit_max_common_clients` | — | ✅ | ✅ | Already exposed |
-| D6 | `conduit_max_personal_clients` | — | ✅ | ✅ | **DELIVERED v0.4.0** (read + write; Max personal clients apply). Originally reclassified to **v0.4.0 Personal Mode** — read + write fold into "Personal client limit control" (§8). The value is meaningful only alongside the v0.4 compartment / pairing / `--max-personal-clients` flow; not a standalone v0.2 item |
+| D6 | `conduit_max_personal_clients` | — | ✅ | ✅ | **DELIVERED v0.3.0** (read + write; Max personal clients apply). Reclassified to the **Personal Mode & Ryve** catalogue (§8) — read + write fold into "Personal client limit control". The value is meaningful only alongside the v0.3.0 compartment / pairing / `--max-personal-clients` flow; not a standalone v0.2 item |
 | D7 | `conduit_bandwidth_limit_bytes_per_second` | — | ✅ (0 = unlimited) | ❌ | Show in Config panel (v0.2.0) |
 | D8 | `conduit_bytes_uploaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
 | D9 | `conduit_bytes_downloaded` | — | ✅ cumulative | ✅ | Delivered via Traffic / Lifetime cards (not Live Ops — no duplication) |
@@ -142,24 +161,24 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 | D11 | `conduit_idle_seconds` | — | ✅ GaugeFunc (computed at scrape) | ✅ | Live Operations — delivered 2026-06-17 (Node Status Idle) |
 | D12 | `conduit_region_bytes_uploaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
 | D13 | `conduit_region_bytes_downloaded{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Traffic) |
-| D14 | `conduit_region_connecting_clients{scope,region}` | — | ✅ | ❌ | Not used by Regional Analytics MVP (connected only); available (v0.4.0+) |
+| D14 | `conduit_region_connecting_clients{scope,region}` | — | ✅ | ❌ | Not used by Regional Analytics MVP (connected only); available (v0.4 candidate) |
 | D15 | `conduit_region_connected_clients{scope,region}` | — | ✅ | ✅ | Regional Analytics — delivered 2026-06-16 (Clients) |
 | D16 | `conduit_build_info{build_repo,build_rev,go_version,values_rev}` | — | ✅ | partial | build_rev delivered in Node Status (Live Operations 2026-06-17); full build info (repo/go/values_rev) future |
-| D17 | Scope labels: `common` / `personal` | — | ✅ | ❌ | Scope filter deferred to v0.4.0; Regional Analytics MVP is `scope=common` only |
+| D17 | Scope labels: `common` / `personal` | — | ✅ | ❌ | Scope filter deferred (v0.4 candidate); Regional Analytics MVP is `scope=common` only |
 | **E — Ryve** |||||
-| E1 | `conduit ryve-claim` command | — | ✅ | ❌ | Subprocess invocation (v0.4.0) |
-| E2 | Claim URI (`network.ryve.app://…`) | — | ✅ | ❌ | Display claim QR (v0.4.0) |
-| E3 | Claim QR PNG saved to `data/ryve-claim-qr.png` | — | ✅ | ❌ | Serve PNG from data dir (v0.4.0) |
-| E4 | ProxyID (Curve25519 public key) | — | ✅ | ❌ | Display ProxyID (v0.4.0) |
+| E1 | `conduit ryve-claim` command | — | ✅ | ❌ | Subprocess invocation (v0.3.0) |
+| E2 | Claim URI (`network.ryve.app://…`) | — | ✅ | ❌ | Display claim QR (v0.3.0) |
+| E3 | Claim QR PNG saved to `data/ryve-claim-qr.png` | — | ✅ | ❌ | Serve PNG from data dir (v0.3.0) |
+| E4 | ProxyID (Curve25519 public key) | — | ✅ | ❌ | Display ProxyID (v0.3.0) |
 | E5 | Private key exposure in claim | — | ✅ requires explicit confirmation | ❌ | **CCC must NEVER store or display private key** |
 | E6 | Ryve rewards data | — | ❌ not in CLI source | ❌ | Out of scope until confirmed |
-| E7 | Station name / identity label | — | ✅ `--name` flag on `ryve-claim` | ❌ | Pre-fill with hostname (v0.4.0) |
+| E7 | Station name / identity label | — | ✅ `--name` flag on `ryve-claim` | ❌ | Pre-fill with hostname (v0.3.0) |
 
 ---
 
 ### 3.3 Confirmed Findings Summary
 
-**Personal Mode** is fully supported in Linux CLI via `--max-personal-clients` and `--compartment-id`. A compartment ID must be generated first; the CLI errors if personal > 0 and no compartment ID is configured. Personal pairing tokens use a defined v1 format (base64url-encoded JSON `{v:"1", data:{id, name}}`). CCC v0.4.0 can implement the full personal-mode workflow.
+**Personal Mode** is fully supported in Linux CLI via `--max-personal-clients` and `--compartment-id`. A compartment ID must be generated first; the CLI errors if personal > 0 and no compartment ID is configured. Personal pairing tokens use a defined v1 format (base64url-encoded JSON `{v:"1", data:{id, name}}`). CCC v0.3.0 implements the full personal-mode workflow.
 
 **Client limits** are runtime-configurable via `SetConfig()`, which updates common clients, personal clients, and bandwidth in a single call. Since CCC manages Conduit via systemd, "apply" in practice means writing new flags to the service unit drop-in and restarting — not an in-process hot-reload.
 
@@ -169,7 +188,7 @@ The table below captures every capability assessed. "CCC Candidate" describes th
 
 **Ryve** is a mobile app that claims a Conduit station by scanning a QR code encoding the station's private keypair. CCC must never store or display the private key itself. The safe workflow is: invoke `conduit ryve-claim --output <path>` as a subprocess (after explicit user confirmation), serve the resulting QR PNG temporarily, then delete it. The private key must never be logged, stored in the database, or transmitted over the API.
 
-**`InproxyMaxPersonalClients` is not in the `--set` allowlist.** Personal client limits must be set via the `--max-personal-clients` flag, not `--set`. The Config panel write path in v0.4.0 must use `--max-personal-clients N` as a service unit flag — not `--set InproxyMaxPersonalClients=N`, which silently does nothing.
+**`InproxyMaxPersonalClients` is not in the `--set` allowlist.** Personal client limits must be set via the `--max-personal-clients` flag, not `--set`. The Config panel write path in v0.3.0 uses `--max-personal-clients N` as a service unit flag — not `--set InproxyMaxPersonalClients=N`, which silently does nothing.
 
 ---
 
@@ -179,7 +198,7 @@ These maintenance items are included in the v0.1.0 first public release. No new 
 
 | Item | Description | Priority |
 |---|---|:---:|
-| `pairing-neutralise` | Review and correct the unsupported `conduit pair`-based pairing workflow in `adapter.pair()` / `/api/conduit/pair`. `conduit pair` is not a CLI subcommand in any Conduit release (confirmed on `main` and `release-cli-2.0.0`). Full pairing functionality is planned for v0.4.0 (Section 8). | High |
+| `pairing-neutralise` | Review and correct the unsupported `conduit pair`-based pairing workflow in `adapter.pair()` / `/api/conduit/pair`. `conduit pair` is not a CLI subcommand in any Conduit release (confirmed on `main` and `release-cli-2.0.0`). Full pairing functionality is a v0.4 candidate (Section 8). | High |
 | `db-perms-600` | Restrict `ccc.db` file permissions (644 → 600) | High |
 | `root-crontab-cleanup` | Remove duplicate DDNS cron entry from root crontab | Medium |
 | `ufw-doc-update` | Update UFW firewall rules in `pre-install.md` based on production validation | Low |
@@ -209,7 +228,7 @@ The dashboard must not be a raw metrics dump. Every screen must be something a n
 
 ### 5.2 Information Architecture
 
-The dashboard is organised into eight named sections. These sections drive both the navigation structure and the grouping of all features across v0.2.0–v0.4.0.
+The dashboard is organised into eight named sections. These sections drive both the navigation structure and the grouping of all features across v0.2.0–v0.3.0 (plus v0.4 candidates).
 
 | # | Section | Contents |
 |---|---|---|
@@ -220,7 +239,7 @@ The dashboard is organised into eight named sections. These sections drive both 
 | 5 | **Configuration** | Max common clients, max personal clients, bandwidth limit, apply workflow |
 | 6 | **Scheduling** | Bandwidth schedule profiles (reduced-mode) |
 | 7 | **Smart Assistant** | Manual / Assisted / Automatic mode selector and analysis panel |
-| 8 | **Personal & Ryve** | Personal mode setup, pairing tokens, Ryve claim QR (v0.4.0) |
+| 8 | **Personal & Ryve** | Personal mode setup, pairing tokens, Ryve claim QR (v0.3.0) |
 
 Settings (theme, password, session) are accessible via a gear icon, separate from the operational sections above.
 
@@ -269,7 +288,7 @@ These rules apply to every screen in the dashboard:
 | **Large metric cards** | Used for the 3–4 most critical values on a given section (e.g. connected clients, station status). Font size ≥ 32px for the number. |
 | **Secondary cards** | Used for supporting values (e.g. connecting clients, uptime). Smaller but same card component. |
 | **Tables** | Only used when a list of comparable rows is genuinely the clearest format (e.g. Regions table). Never used for single values or key metrics. |
-| **Charts** | Only added when the shape of data over time improves a decision (v0.3.0 onwards). Not in v0.2.0 except where explicitly called out. |
+| **Charts** | Only added when the shape of data over time improves a decision (v0.2.x onwards). |
 | **No raw metric names** | Never display `conduit_bytes_uploaded`, `conduit_is_live`, or any Prometheus/internal identifier to the user. Use plain English labels. |
 | **No raw ISO codes alone** | Country codes (e.g. `MM`, `IR`) must always be accompanied by the country name and flag emoji. |
 | **Colour usage** | Green = good/live/healthy. Yellow/amber = warning/transitioning. Red = error/offline. Grey = unknown/stopped. Blue = informational/neutral. No other status colours. |
@@ -288,7 +307,7 @@ All values presented to the operator must use human-readable formats. No raw num
 | Country identifiers | Flag emoji + full country name + ISO code in parentheses | 🇲🇲 Myanmar (MM) |
 | Conduit version | Semantic version string from build info | `v2.0.0` |
 | Timestamps | Local time in `YYYY-MM-DD HH:mm` | `2026-06-10 14:23` |
-| Bandwidth in/out rates (v0.3.0) | Human-readable binary + `/s` | `1.2 MiB/s` |
+| Bandwidth in/out rates (v0.4 candidate) | Human-readable binary + `/s` | `1.2 MiB/s` |
 
 Never mix decimal and binary byte prefixes on the same panel. Mbps (decimal) is used exclusively for the configured bandwidth limit value, as this matches the CLI's `--bandwidth` flag. All other byte quantities use binary prefixes (KiB, MiB, GiB, TiB).
 
@@ -344,7 +363,7 @@ The dashboard uses three levels of notification:
 
 - **Before applying configuration changes:** "Applying these changes will briefly restart Conduit. Clients currently connected will be disconnected for a few seconds. Do you want to continue?"
 - **Before enabling Automatic mode:** "Automatic mode will adjust your client limits without asking for confirmation. You can set minimum and maximum bounds below. Are you sure you want to enable Automatic mode?"
-- **Before Ryve claim (v0.4.0):** "Generating the Ryve claim QR code requires accessing your station's private key. The key will not be stored or transmitted — only the QR code image will be displayed. This should only be done in a private location. Continue?"
+- **Before Ryve claim (v0.3.0):** "Generating the Ryve claim QR code requires accessing your station's private key. The key will not be stored or transmitted — only the QR code image will be displayed. This should only be done in a private location. Continue?"
 - **Station offline banner:** "Your Conduit station is not running. Check the service status or review the logs."
 - **Broker disconnected banner:** "Conduit is running but not connected to the Psiphon broker. No clients can be served until the connection is restored."
 - **New station empty state:** "No clients connected yet. New stations can take several hours to receive traffic while building reputation with the Psiphon network."
@@ -360,7 +379,7 @@ The dashboard must be fully functional on a 375px-wide smartphone screen.
 | Configuration form | Stacked single-column layout; sliders replaced by number inputs with +/− buttons |
 | Regions table | Simplified: show flag, country name, clients only. Traffic columns hidden (accessible via row expand) |
 | Modals | Full-screen on small viewports |
-| Charts (v0.3.0) | Horizontally scrollable within their container |
+| Charts (v0.2.x) | Horizontally scrollable within their container |
 | Toast notifications | Bottom-centre, full width |
 
 **Touch targets:** all interactive elements (buttons, inputs, toggles, navigation items) must have a minimum touch target of 44×44px.
@@ -398,7 +417,7 @@ Before any v0.2.0 implementation code is written, the following design artefacts
 
 > **Gate:** D1 design deliverables must be approved before implementation begins.
 
-> **Status: ✅ CLOSED — all v0.2.0 features delivered and production-validated (2026-06-17).** v0.2.0 was the active *feature* milestone (gated by D1, complete). Delivered and production-validated: **Conduit Configuration (§6.1, via M2 + Bandwidth Scheduling §6.5); Regional Analytics (§6.3); Bandwidth Scheduling (§6.5); Live Operations (§6.2/§6.6); Theme Support (§6.7).** **Smart Assistant (§6.4) is reconciled** — the Contribution Advisor supersedes the original Manual/Assisted concept (Automatic mode → v0.3.0). **D6 (`max_personal_clients`) is no longer a v0.2 gap** — reclassified to **v0.4.0 Personal Mode** (the read-only value is meaningful only alongside the compartment / pairing / `--max-personal-clients` flow; see §3.2 D6 and §8). **No open v0.2.0 work remains.**
+> **Status: ✅ CLOSED — all v0.2.0 features delivered and production-validated (2026-06-17).** v0.2.0 was the active *feature* milestone (gated by D1, complete). Delivered and production-validated: **Conduit Configuration (§6.1, via M2 + Bandwidth Scheduling §6.5); Regional Analytics (§6.3); Bandwidth Scheduling (§6.5); Live Operations (§6.2/§6.6); Theme Support (§6.7).** **Smart Assistant (§6.4) is reconciled** — the Contribution Advisor supersedes the original Manual/Assisted concept (Automatic mode → v0.3.0). **D6 (`max_personal_clients`) is no longer a v0.2 gap** — reclassified to **v0.3.0 Personal Mode** (the read-only value is meaningful only alongside the compartment / pairing / `--max-personal-clients` flow; see §3.2 D6 and §8). **No open v0.2.0 work remains.**
 
 v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive control centre. The central theme is: **display everything Conduit exposes and give operators control over the parameters they need most.**
 
@@ -407,7 +426,7 @@ v0.2.0 transforms CCC from a read-only monitoring dashboard into an interactive 
 Display and allow editing of the three runtime-configurable parameters:
 
 - **Max common clients** — current value from `conduit_max_common_clients`; editable (0–1000); enforces at-least-one-client rule.
-- **Max personal clients** — `conduit_max_personal_clients`. **Reclassified to v0.4.0 Personal Mode** (not surfaced in v0.2.0): the value is only meaningful alongside the compartment-ID / pairing-token / `--max-personal-clients` flow, so its read-only display folds into v0.4's "Personal client limit control" (§8) rather than shipping as an isolated v0.2 field.
+- **Max personal clients** — `conduit_max_personal_clients`. **Reclassified to v0.3.0 Personal Mode** (not surfaced in v0.2.0): the value is only meaningful alongside the compartment-ID / pairing-token / `--max-personal-clients` flow, so its read-only display folds into the v0.3.0 "Personal client limit control" (§8) rather than shipping as an isolated v0.2 field.
 - **Global bandwidth limit** — current value from `conduit_bandwidth_limit_bytes_per_second`; display as Mbps (0 = unlimited); editable with unlimited toggle.
 
 **Apply mechanism:** write new flags to the systemd service unit drop-in (`/etc/systemd/system/conduit.service.d/ccc.conf`) and run `systemctl daemon-reload && systemctl restart conduit`. Confirm to the user that Conduit will restart briefly (see Section 5.8).
@@ -473,7 +492,7 @@ Live Operations section, aligned with the card structure defined in Sections 5.3
 > **Deferred (not in the MVP), tracked for future milestones:**
 > - Separate Uploaded / Downloaded columns and a Connecting-clients column
 >   (`conduit_region_connecting_clients`, matrix D14) — not consumed by the MVP.
-> - Scope filter (All / Common / Personal, matrix D17) — deferred to **v0.4.0**
+> - Scope filter (All / Common / Personal, matrix D17) — **v0.4 candidate**
 >   (already listed in §8); surfaces only when personal clients > 0.
 > - Mobile row-expand for hidden Traffic columns (§5.9) — superseded by the
 >   horizontal-scroll table actually shipped.
@@ -506,16 +525,16 @@ Rules: regions with zero clients AND zero bytes in all columns are hidden. Scope
 > contribution-health advice. It is always-on and advisory ("recommends; does
 > not set"). **The Contribution Advisor supersedes the original Manual / Assisted
 > concept** — "Manual" = ignore the advice; "Assisted" = the default. **Automatic
-> mode remains a v0.3.0 item.** No open v0.2.0 work.
+> mode remains a v0.4 candidate.** No open v0.2.0 work.
 
 > **Superseded — retained for historical context.** The original three-mode
 > model (Manual / Assisted / Automatic) below is superseded by the reconciliation
 > above: the always-on **Contribution Advisor** delivers the Assisted-mode value
 > ("Manual" = ignore the advice; "Assisted" = the default), and **Automatic mode
-> remains a v0.3.0 item** (Raspberry Pi restart-cascade risk). v0.2.0 has **no open
+> remains a v0.4 candidate** (Raspberry Pi restart-cascade risk). v0.2.0 has **no open
 > Smart Assistant work**.
 
-Three modes as originally defined in Section 5.7. Automatic mode deferred to v0.3.0 (see review note — risk on Raspberry Pi restart cascades).
+Three modes as originally defined in Section 5.7. Automatic mode deferred (v0.4 candidate) (see review note — risk on Raspberry Pi restart cascades).
 
 **Advisor (Assisted-mode) analysis inputs:** CPU utilisation (psutil), RAM utilisation, `conduit_connected_clients`, `conduit_bandwidth_limit_bytes_per_second`, `conduit_bytes_uploaded`, `conduit_bytes_downloaded`, `conduit_idle_seconds`.
 
@@ -585,10 +604,18 @@ Light / Dark / System themes implemented per Section 5.10. Theme preference pers
 
 ## Approved Delivery Priority (USER-VALUE-FIRST)
 
+> ⚠️ **Historical planning artifact (rev 1.9).** This section records the original
+> post-v0.2.0 execution sequence. It is **superseded by the [Release History](#release-history)
+> table (above) and the forthcoming `docs/PROJECT-STATUS.md`** as the authoritative
+> release record. Items 1–4 (Branding, Personal Mode, Ryve Claim, Backup & Restore)
+> were delivered in **v0.3.0**; items 5–7 (Update Centre, Automatic Mode, Health Score)
+> are **v0.4 candidates**. Retained for historical context — do not read it as the
+> current release status.
+
 > **Authoritative execution order — approved 2026-06-17 (Product Owner).** This
 > section records the **sequence** in which the post-v0.2.0 epics will be
 > delivered under the USER-VALUE-FIRST direction. It is intentionally **decoupled
-> from the milestone version labels** in §7 (v0.3.0) and §8 (v0.4.0): those
+> from the milestone version labels** in §7 (Operations & Analytics) and §8 (Personal Mode & Ryve): those
 > sections are **preserved as-is** for historical and feature-specification
 > purposes. Where the priority order and the old milestone grouping disagree,
 > **this order governs delivery**; §7/§8 remain the detailed feature catalogues.
@@ -613,30 +640,32 @@ Psiphon exposes the data via a metric or a documented API — epic 3 delivers cl
 
 ---
 
-## 7. v0.3.0 — Historical Analytics & Operations
+## 7. Operations & Analytics — Feature Catalogue
 
 > **Status: ✅ Traffic UI CLOSED — shipped early (v0.1.x → v0.2 cycle, in production).**
 > The persistent traffic collector (SQLite, configurable retention) and the
 > "Lifetime & History" dashboard card — Current Run, Lifetime totals, 24h/7d
 > windows, SVG time-series chart, and recording/empty/error states — backed by
 > `GET /api/traffic/summary` and `GET /api/traffic/series`, are delivered and
-> production-validated. Recorded here for history; this is **not** a remaining
-> v0.3.0 deliverable and **not** a future candidate epic. The rows below are the
-> remaining v0.3.0 items.
+> production-validated (delivered in the **v0.2.x** line). Recorded here for history;
+> this is **not** a future candidate epic. In the table below, **Backup & Restore was
+> delivered in v0.3.0**; the remaining rows (Health Score, Automatic Mode, Update
+> Centre, Per-direction bandwidth) are **v0.4 candidates**.
 
 | Feature | Description |
 |---|---|
 | Health score | Composite score derived from uptime %, broker live %, average client count, and bandwidth headroom. Displayed on Overview screen. |
 | Smart Assistant — Automatic mode | Adjusts `max_common_clients` within operator-defined bounds. Requires audit log infrastructure from this release. |
-| Backup & restore | Export CCC configuration (not Conduit key) to encrypted archive. Restore from archive. |
+| Backup & restore | **✅ Delivered in v0.3.0.** Export CCC configuration (not Conduit key) to encrypted archive. Restore from archive. |
 | Update centre | Check for new CCC releases via GitHub releases API. Display release notes. One-click update (runs `update.sh`). No automatic updates — operator must confirm. |
 | Per-direction bandwidth display | Show upstream / downstream limits separately if set in `psiphon_config.json`. Read-only; write deferred. |
 
 ---
 
-## 8. v0.4.0 — Personal Mode & Ryve
+## 8. Personal Mode & Ryve — Feature Catalogue
 
-> **Personal Mode status (2026-06-19): ✅ CLOSED — DELIVERED and production-validated.**
+> **Personal Mode status (2026-06-19): ✅ CLOSED — DELIVERED in v0.3.0 and production-validated.**
+> Personal Mode + Ryve shipped under tag **v0.3.0** (first public release), not v0.4.0.
 > The Personal Mode rows below (setup, pairing token, personal client limit
 > control) are delivered as the **C4–C6 backend + Frontend Slices 1–4** and
 > validated on a Raspberry Pi 4 (C6e). **Regenerate / Restore UI** is deferred
@@ -647,9 +676,9 @@ Psiphon exposes the data via a metric or a documented API — epic 3 delivers cl
 
 | Feature | Description |
 |---|---|
-| Personal mode setup | **✅ DELIVERED (v0.4.0).** Generate compartment ID (`conduit new-compartment-id`), persist to `personal_compartment.json`, display in Config panel. |
-| Pairing token generation | **✅ DELIVERED (v0.4.0).** Build v1 pairing tokens (`BuildPersonalPairingToken(id, name)`). Display as QR code and copyable string. Max name: 32 chars. _(Regenerate / Restore UI deferred; C6c backend retained.)_ |
-| Personal client limit control | **✅ DELIVERED (v0.4.0).** Expose `--max-personal-clients` write path in Config panel (requires compartment ID to be set first). Uses `--max-personal-clients N` flag — not `--set InproxyMaxPersonalClients=N`. |
+| Personal mode setup | **✅ DELIVERED (v0.3.0).** Generate compartment ID (`conduit new-compartment-id`), persist to `personal_compartment.json`, display in Config panel. |
+| Pairing token generation | **✅ DELIVERED (v0.3.0).** Build v1 pairing tokens (`BuildPersonalPairingToken(id, name)`). Display as QR code and copyable string. Max name: 32 chars. _(Regenerate / Restore UI deferred; C6c backend retained.)_ |
+| Personal client limit control | **✅ DELIVERED (v0.3.0).** Expose `--max-personal-clients` write path in Config panel (requires compartment ID to be set first). Uses `--max-personal-clients N` flag — not `--set InproxyMaxPersonalClients=N`. |
 | Scope filter in Regional Analytics | **⏸ DEFERRED — upstream-blocked.** Show common / personal scope breakdown when personal clients > 0. Conduit exposes only an aggregate connected-client count (no personal-vs-common runtime metric); requires upstream Conduit support. |
 | Ryve claim QR | Invoke `conduit ryve-claim --output <tmp_path>` as subprocess after modal confirmation (see Section 5.8). Serve QR PNG. Delete from disk after display. **Never store or log the private key.** |
 | ProxyID display | Show Curve25519-derived ProxyID from `conduit ryve-claim` output. Display-only. |
@@ -674,6 +703,73 @@ The following items are explicitly out of scope for all planned versions and req
 
 ---
 
+## Documentation Workstream
+
+The product roadmap above tracks application features. This section tracks the
+**documentation programme** so that doc epics are visible and their status is
+unambiguous.
+
+### Documentation Delivery
+
+Completed documentation milestones:
+
+| Milestone | Status | Evidence |
+|---|---|---|
+| English User Guide | ✅ **CLOSED** | `775848b` |
+| Persian User Guide (text) | ✅ **CLOSED** | `fe86f80`, `c45fc48` |
+| Diagram Program | ✅ **CLOSED (EN)** — DGM-01–19 produced and integrated in English. **DGM-13–19 Persian parity belongs to Epic D (Persian Documentation) and does NOT reopen the Diagram Program.** | `c898201` … `8a8379b` |
+| Screenshot Program (K.5) | ✅ **CLOSED** | `c354993`; Parity Guard PASS |
+| Documentation Governance | ✅ **CLOSED** | `971b1bf`; `docs/release-checklist.md` |
+
+### Documentation Accuracy & Onboarding
+
+Documentation-quality and onboarding improvements (open):
+
+| Item | Description | Status | Priority |
+|---|---|---|---|
+| D2 — Cloudflare screenshot correction | Replace `cloudflare-domain-active.png` so the activated zone is the root domain (`example.com`), not a subdomain | Planned (v0.3.1 / Epic B) | P1 |
+| D3 — TLS onboarding improvements | Integrate the Origin-Certificate workflow into the guide flow; add `docs/fa/tls-setup.md`; link from chapters 05 / 06 | Planned (Epic C) | P1 |
+| _(future)_ | Reserved for onboarding / documentation-accuracy items surfaced after v0.3.0 | Open | — |
+
+### Documentation Milestones
+
+Documentation snapshots are **not** product releases and are tracked here:
+
+| Milestone | Tag | Date | Note |
+|---|---|---|---|
+| docs-v0.3 | `docs-v0.3` | 2026-06-22 | Documentation snapshot — EN + FA user guide, diagram program, screenshot program (K.5). **Documentation Milestone, not a product release.** |
+
+---
+
+## Maintenance & Patch Releases
+
+### v0.3.1 — Patch (planned)
+
+| ID | Fix | Priority | Scope |
+|---|---|---|---|
+| D1 | Root URL `/` → `/dashboard` redirect (reuse existing auth flow) | **P0** | Backend route + test; no nginx / doc change |
+| D2 | Replace `cloudflare-domain-active.png` (root domain Active) | P1 | Image recapture + redaction |
+
+---
+
+## v0.4 Candidates (not yet scheduled)
+
+Genuinely future items, consolidated from §7/§8 and the maintenance list. None are
+delivered; none are scheduled.
+
+| Candidate | Source | Note |
+|---|---|---|
+| Update Centre | §7 | One-click `update.sh`; depends on Backup (delivered v0.3.0) |
+| Automatic Mode | §7, §5.7 | Raspberry Pi restart-cascade risk; needs audit-log infrastructure |
+| Health Score | §7 | All inputs exist; unblocked |
+| Per-direction bandwidth display | §7, §5.6 | Read-only; not yet built |
+| Personal Regenerate / Restore UI | §8 | C6c backend retained; UI deferred |
+| Regional Analytics scope filter | §8 (D14 / D17) | Upstream-blocked (no personal-vs-common runtime metric) |
+| Full pairing implementation | §4 `pairing-neutralise` | `/api/conduit/pair` currently returns 501 |
+| Ryve rewards | §8 / §9 | Out of scope until Psiphon exposes the data via a metric or documented API |
+
+---
+
 ## 10. Revision History
 
 | Version | Date | Author | Notes |
@@ -689,6 +785,7 @@ The following items are explicitly out of scope for all planned versions and req
 | 1.9 | 2026-06-17 | CCC Development Team | **Approved Delivery Priority (USER-VALUE-FIRST) recorded** as a new authoritative section before §7, documenting the post-v0.2.0 execution order (1 Branding & Identity, 2 Personal Mode, 3 Ryve Claim / Identity, 4 Backup & Restore, 5 Update Center, 6 Automatic Mode, 7 Health Score) **without renumbering** §7/§8 — those sections are preserved as feature catalogues. D6 recorded as part of Personal Mode; **"Ryve Rewards" renamed to "Ryve Claim / Identity"** with rewards/points kept explicitly out-of-scope (§3.2 E6, §8, §9); Per-direction bandwidth display and Regional-Analytics scope filter explicitly preserved. Companion to the `APP_VERSION 0.1.0 → 0.2.0` consistency cleanup (CHANGELOG `[0.2.0]` stamp + version guard + `docs/release-checklist.md`). No milestone renumbering. |
 | 1.10 | 2026-06-19 | CCC Development Team | **Personal Mode epic CLOSED — DELIVERED and production-validated.** §3.2 matrix A1–A4 and D6 → ✅ DELIVERED (v0.4.0); §8 Personal Mode rows annotated DELIVERED (C4–C6 backend + Frontend Slices 1–4), with Regenerate/Restore **UI** recorded as deferred (C6c backend retained) and the Regional-Analytics **scope filter** as upstream-blocked (no personal-vs-common runtime metric). Production-validated on a Raspberry Pi 4 (C6e); EROFS production bug fixed in `39ba3eb` (`ReadWritePaths=/var/lib/conduit/data` + private-key `ReadOnlyPaths` carve-out + `After=conduit.service`, no `Wants=` pull-in). Closure record `docs/closure/PERSONAL_MODE_CLOSURE.md`; CHANGELOG `[Unreleased]` entry added. No milestone renumbering. |
 | 1.8 | 2026-06-17 | CCC Development Team | **Theme Support closure + v0.2.0 CLOSED.** §6.7 marked ✅ DELIVERED (TS4 Raspberry Pi validation; commits `46547c0`/`df49f42`/TS3, CI #117–#118) with server-rendered flash-free first paint and no localStorage; §6 v0.2.0 status updated to **CLOSED — all features delivered**. **D6 (`max_personal_clients`) reclassified** from a minor v0.2 gap to v0.4.0 Personal Mode in §3.2 and §6.1 (folds into "Personal client limit control", §8). §6.4 stale three-mode prose reconciled (superseded by the Contribution Advisor; Automatic → v0.3.0). Closure record added at `docs/closure/theme-support-closure.md`. No milestone renumbering. |
+| 1.11 | 2026-06-24 | CCC Development Team | **Roadmap reconciliation (Epic A.1).** Re-anchored §7/§8 from version-numbered titles to feature catalogues ("Operations & Analytics"; "Personal Mode & Ryve"). Corrected all "DELIVERED v0.4.0" → "v0.3.0" (Personal Mode + Ryve Claim + Backup shipped under tag v0.3.0 — first public release). Relabelled genuinely-future items (Automatic Mode, Update Centre, Health Score, Per-direction bandwidth, Regional-Analytics scope filter, full pairing) as **v0.4 candidates**; chart/traffic references re-labelled v0.2.x. Added Release History (product releases only), Documentation Workstream (Delivery + Accuracy & Onboarding + Documentation Milestones, with docs-v0.3 classified as a documentation milestone, not a product release), Maintenance & Patch Releases (v0.3.1 = D1 + D2), and v0.4 Candidates sections. Diagram Program marked CLOSED (EN); DGM-13–19 Persian parity assigned to Epic D and does not reopen it. Bannered "Approved Delivery Priority" as a historical planning artifact. Historical revision rows (≤1.10) left intact and not reordered. Status → Reconciled. No feature scope changed. |
 
 ---
 
