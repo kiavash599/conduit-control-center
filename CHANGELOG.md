@@ -7,6 +7,15 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.1] - 2026-06-24
+
+### Fixed
+
+- Root URL onboarding (D1): `/` now redirects to `/dashboard` (`f5233ff`)
+- Cloudflare onboarding screenshot fix (D2): corrected zone representation (`b88ab33`)
+
+---
+
 ## [0.3.0] - 2026-06-21
 
 > First public release. Bundles the Personal Mode, Ryve Claim, and Backup &

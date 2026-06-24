@@ -7,15 +7,15 @@
 > decision deep-dives. This file is the canonical closed-epic index and links the
 > three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-24 · branch `main` · HEAD `f5233ff`.
+> Last reconciled: 2026-06-24 · branch `main` · HEAD `b88ab33`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| v0.3.0 (2026-06-21, first public release) | docs-v0.3 (2026-06-22, documentation milestone) | 1.11 | Reconciled · clean baseline |
+| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.11 | Reconciled · clean baseline |
 
-Branch `main` · HEAD `f5233ff` (D1 root-URL fix) · Epic B in progress on `main`.
+Branch `main` · HEAD `b88ab33` (Epic B closed: D1 + D2) · released as v0.3.1.
 
 ## 2. Closed Epics
 
@@ -28,7 +28,7 @@ Branch `main` · HEAD `f5233ff` (D1 root-URL fix) · Epic B in progress on `main
 | Documentation Governance | ✅ Closed | governance + `docs/release-checklist.md` | `971b1bf` |
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
-| v0.3.1 Hotfixes (Epic B) | ✅ Complete — release pending | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | v0.3.1 tag pending |
+| v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
 | Regional Analytics | ✅ Closed | — | `docs/closure/regional-analytics-closure.md` |
 | Live Operations | ✅ Closed | — | `docs/closure/live-operations-closure.md` |
@@ -91,11 +91,11 @@ Branch `main` · HEAD `f5233ff` (D1 root-URL fix) · Epic B in progress on `main
 | v0.2.0 | 2026-06-17 | Smart Conduit Control |
 | v0.3.0 | 2026-06-21 | First public release (Personal Mode, Ryve Claim, Backup & Restore) |
 | docs-v0.3 | 2026-06-22 | Documentation milestone (not a product release) |
-| v0.3.1 | planned | Hotfixes (D1 + D2) |
+| v0.3.1 | released (2026-06-24) | Hotfixes (D1 + D2) |
 
 ## 9. Next Recommended Action
 
-**Tag v0.3.1** (stamp CHANGELOG `[Unreleased]`→`[0.3.1]` recording D1 + D2, then tag), then **start Epic C — TLS / Origin Certificate Onboarding**. Epic B implementation is complete.
+**Start Epic C — TLS / Origin Certificate Onboarding.** Epic B (v0.3.1) is released.
 
 ---
 
