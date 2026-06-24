@@ -84,11 +84,9 @@ https://www.raspberrypi.com/software/
 
 پس از نصب باید بتوانید Raspberry Pi Imager را اجرا کنید.
 
-**تصویر مورد نیاز**
+![پنجره اصلی Raspberry Pi Imager](../../screenshots/raspberry-pi-imager-main-window.png)
 
-Screenshot:
-
-raspberry-pi-imager-main-window.png
+*پنجره اصلی Raspberry Pi Imager — ابتدا دستگاه خود را انتخاب کنید.*
 
 ## 3.4 انتخاب سیستم عامل
 
@@ -136,11 +134,9 @@ Ubuntu Server 22.04 LTS (64-bit)
 - منابع کمتری مصرف می‌کند.
 - برای اجرای سرویس‌ها مناسب‌تر است.
 
-**تصویر مورد نیاز**
+![انتخاب Ubuntu Server 22.04 LTS 64-bit](../../screenshots/ubuntu-selection.png)
 
-Screenshot:
-
-ubuntu-selection.png
+*انتخاب Ubuntu Server 22.04 LTS (64-bit) از فهرست سیستم‌عامل‌ها.*
 
 ## 3.5 انتخاب کارت حافظه
 
@@ -157,6 +153,10 @@ Choose Storage
 تمام اطلاعات موجود روی کارت حافظه پاک خواهند شد.
 
 قبل از ادامه از اطلاعات مهم نسخه پشتیبان تهیه کنید.
+
+![انتخاب کارت حافظه](../../screenshots/storage-selection.png)
+
+*انتخاب کارت حافظه مقصد — تمام اطلاعات روی آن پاک می‌شود.*
 
 ## 3.6 تنظیمات پیشرفته Raspberry Pi Imager
 
@@ -257,21 +257,31 @@ en_US.UTF-8
 
 اگر از Ethernet استفاده می‌کنید این قسمت ضروری نیست.
 
-**تصویر مورد نیاز**
+در نسخهٔ فعلی Raspberry Pi Imager، پنجرهٔ Edit Settings به چند زبانه تقسیم شده است — General (نام میزبان)، Localisation، User، Wi-Fi و Remote access (SSH). هر بخش را مطابق توضیحات بالا تنظیم کنید؛ این پنل‌ها به این شکل هستند:
 
-Screenshot:
+![پنل Localisation](../../screenshots/advanced-settings-localisation.png)
 
-advanced-settings.png
+*Localisation: منطقه زمانی و چیدمان صفحه‌کلید را تنظیم کنید.*
+
+![پنل User](../../screenshots/advanced-settings-user.png)
+
+*User: نام کاربری و رمز عبور حساب را بسازید.*
+
+![پنل Wi-Fi](../../screenshots/advanced-settings-wifi.png)
+
+*Wi-Fi: نام شبکه (SSID) و رمز عبور را وارد کنید (در صورت استفاده از Ethernet لازم نیست).*
+
+![پنل Remote access (SSH)](../../screenshots/advanced-settings-ssh.png)
+
+*Remote access: SSH را با احراز هویت رمز عبور فعال کنید.*
 
 ## 3.7 نوشتن سیستم عامل روی کارت حافظه
 
-پس از تأیید تنظیمات:
+پیش از نوشتن، Raspberry Pi Imager خلاصه‌ای از دستگاه انتخابی، سیستم‌عامل و تنظیماتی که اعمال می‌شود را نشان می‌دهد. آن را بررسی کنید و سپس روی Write کلیک کنید.
 
-روی:
+![خلاصهٔ پیش از نوشتن در Raspberry Pi Imager](../../screenshots/write-complete.png)
 
-Write
-
-کلیک کنید.
+*خلاصهٔ پیش از نوشتن — پیش از کلیک روی Write، دستگاه، سیستم‌عامل و تنظیمات را بررسی کنید.*
 
 فرآیند نوشتن ممکن است چند دقیقه طول بکشد.
 
@@ -280,12 +290,6 @@ Write
 Write Successful
 
 نمایش داده خواهد شد.
-
-**تصویر مورد نیاز**
-
-Screenshot:
-
-write-complete.png
 
 ## 3.8 اولین بوت
 

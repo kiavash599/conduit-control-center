@@ -396,9 +396,9 @@ So we first need a Cloudflare account.
 
 You should be able to log in to the Cloudflare Dashboard.
 
-**Screenshot needed**
+![Cloudflare sign-up page](../screenshots/cloudflare-signup.png)
 
-cloudflare-signup.png
+*Creating a Cloudflare account on the sign-up page.*
 
 ## 5.10 Adding the domain to Cloudflare
 
@@ -432,9 +432,9 @@ After completing the process, the domain should have the following status in Clo
 
 Active
 
-**Screenshot needed**
+![Domain Active in Cloudflare](../screenshots/cloudflare-domain-active.png)
 
-cloudflare-domain-active.png
+*The domain showing Active status in Cloudflare.*
 
 ## 5.11 What is a DNS record?
 
@@ -502,9 +502,15 @@ Example:
 
 This value will later be updated by DDNS.
 
-**Screenshot needed**
+Subdomains like `conduit` are not registered separately — they are created as **DNS records**. Open your domain in Cloudflare, go to **DNS → Records**, and click **Add record**. Set **Type = A**, **Name = `conduit`**, the **IPv4 address** (any valid IPv4 for now — DDNS updates it later), and turn **Proxy status** on (orange cloud).
 
-cloudflare-a-record.png
+![DNS Records section in Cloudflare](../screenshots/cloudflare-dns-records.png)
+
+*DNS → Records: the zone's records, with Add record.*
+
+![Adding the conduit A record](../screenshots/cloudflare-add-dns-record.png)
+
+*Adding the `conduit` A record with proxy enabled.*
 
 ## 5.13 Why must the record be Proxied?
 
@@ -548,9 +554,9 @@ Proxy Status
 
 Proxied
 
-**Screenshot needed**
+![Proxy status set to Proxied](../screenshots/cloudflare-add-dns-record.png)
 
-cloudflare-orange-cloud.png
+*Proxy status set to Proxied (orange cloud) on the record.*
 
 ## 5.14 Creating an API Token
 
@@ -615,9 +621,23 @@ After creating the Token, keep it in a safe place.
 
 The Token is shown only once.
 
-**Screenshot needed**
+To create the token: (1) In **My Profile → API Tokens**, click **Create Token**. (2) Choose **Create Custom Token → Get started**. (3) Add the permissions **Zone : Zone : Read** and **Zone : DNS : Edit**, and under **Zone Resources** scope it to your domain. (4) Review the summary, then click **Create Token**. Copy the token immediately — it is shown only once.
 
-cloudflare-token-permissions.png
+![User API Tokens page](../screenshots/cloudflare-token-list.png)
+
+*My Profile → API Tokens → Create Token.*
+
+![Create API Token templates](../screenshots/cloudflare-token-create.png)
+
+*Choosing "Create Custom Token".*
+
+![Token permissions configuration](../screenshots/cloudflare-token-permissions.png)
+
+*Least-privilege permissions: Zone:Read + DNS:Edit, scoped to one zone.*
+
+![Token summary before creation](../screenshots/cloudflare-token-summary.png)
+
+*Reviewing the token summary, then Create Token.*
 
 ## 5.15 How does CCC use Cloudflare?
 

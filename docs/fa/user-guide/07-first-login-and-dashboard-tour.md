@@ -60,9 +60,9 @@ Admin Username
 
 Admin Password
 
-**تصویر مورد نیاز**
+![صفحهٔ ورود CCC](../../screenshots/login-page.png)
 
-login-page.png
+*صفحهٔ ورود CCC.*
 
 ## 7.2 امنیت ورود
 
@@ -128,9 +128,9 @@ System
 
 Settings
 
-**تصویر مورد نیاز**
+![داشبورد CCC](../../screenshots/dashboard-overview.png)
 
-dashboard-navigation.png
+*داشبورد CCC پس از ورود — وضعیت نود، مشاور، ترافیک و مناطق تجمیعی، همگی در مرورگر.*
 
 ## 7.4 بخش Dashboard
 

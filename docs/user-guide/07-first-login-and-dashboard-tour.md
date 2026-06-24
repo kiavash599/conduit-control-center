@@ -50,9 +50,9 @@ Admin Username
 
 Admin Password
 
-**Screenshot needed**
+![CCC login screen](../screenshots/login-page.png)
 
-login-page.png
+*The CCC login screen.*
 
 ## 7.2 Login security
 

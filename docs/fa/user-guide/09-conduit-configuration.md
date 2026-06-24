@@ -68,6 +68,10 @@ Configured
 
 Effective
 
+![پیکربندی Conduit](../../screenshots/conduit-config.png)
+
+*هر تنظیم مقدار Configured و مقدار Effective (در حال اجرا) را با نشانگر هماهنگی نشان می‌دهد.*
+
 **Configured چیست؟**
 
 مقداری است که CCC ذخیره کرده است.

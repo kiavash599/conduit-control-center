@@ -262,6 +262,10 @@ CCC فایل Backup را روی Pi ذخیره نمی‌کند.
 
 یکی از حرفه‌ای‌ترین قابلیت‌های CCC Inspect است.
 
+![Backup & Restore — نتیجهٔ Inspect](../../screenshots/backup-restore.png)
+
+*Inspect محتوا و سازگاری یک پشتیبان را پیش‌نمایش می‌دهد؛ هرگز بازیابی یا تغییری انجام نمی‌دهد.*
+
 Inspect:
 
 ✓ Backup را باز می‌کند.

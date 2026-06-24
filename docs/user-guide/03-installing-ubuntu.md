@@ -68,11 +68,9 @@ https://www.raspberrypi.com/software/
 
 After installation, you should be able to run Raspberry Pi Imager.
 
-**Screenshot needed**
+![Raspberry Pi Imager main window](../screenshots/raspberry-pi-imager-main-window.png)
 
-Screenshot:
-
-raspberry-pi-imager-main-window.png
+*Raspberry Pi Imager's main window — start by choosing your device.*
 
 ## 3.4 Choosing the operating system
 
@@ -100,11 +98,9 @@ Ubuntu Server 22.04 LTS (64-bit)
 
 This project does not need a graphical environment. The Server version is lighter, consumes fewer resources, and is better suited to running services.
 
-**Screenshot needed**
+![Selecting Ubuntu Server 22.04 LTS 64-bit](../screenshots/ubuntu-selection.png)
 
-Screenshot:
-
-ubuntu-selection.png
+*Selecting Ubuntu Server 22.04 LTS (64-bit) in the OS list.*
 
 ## 3.5 Choosing the memory card
 
@@ -113,6 +109,10 @@ Click **Choose Storage** and select the correct memory card.
 **Warning**
 
 All data on the memory card will be erased. Back up any important data before continuing.
+
+![Choosing the memory card](../screenshots/storage-selection.png)
+
+*Choosing the target memory card — all data on it will be erased.*
 
 ## 3.6 Advanced settings in Raspberry Pi Imager
 
@@ -180,23 +180,35 @@ en_US.UTF-8
 
 If you use Wi-Fi, enter the network name (SSID) and password. If you use Ethernet, this section is not necessary.
 
-**Screenshot needed**
+In the current Raspberry Pi Imager, the **Edit Settings** dialog is organised into tabs — **General** (hostname), **Localisation**, **User**, **Wi-Fi**, and **Remote access** (SSH). Configure each as described above; the panels look like this:
 
-Screenshot:
+![Localisation settings panel](../screenshots/advanced-settings-localisation.png)
 
-advanced-settings.png
+*Localisation: set your time zone and keyboard layout.*
+
+![User account settings panel](../screenshots/advanced-settings-user.png)
+
+*User: create the account username and password.*
+
+![Wi-Fi settings panel](../screenshots/advanced-settings-wifi.png)
+
+*Wi-Fi: enter the SSID and password (skip if using Ethernet).*
+
+![Remote access (SSH) settings panel](../screenshots/advanced-settings-ssh.png)
+
+*Remote access: enable SSH with password authentication.*
 
 ## 3.7 Writing the operating system to the memory card
 
-After confirming the settings, click **Write**. The writing process may take a few minutes. When it finishes, you will see:
+Before writing, Raspberry Pi Imager shows a summary of your selected device, operating system, and the customisations to apply. Review it, then click **Write**.
+
+![Pre-write summary in Raspberry Pi Imager](../screenshots/write-complete.png)
+
+*The pre-write summary — review device, OS, and customisations before clicking Write.*
+
+The writing process may take a few minutes. When it finishes, you will see:
 
 Write Successful
-
-**Screenshot needed**
-
-Screenshot:
-
-write-complete.png
 
 ## 3.8 First boot
 

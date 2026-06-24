@@ -486,9 +486,9 @@ CCC از Cloudflare برای:
 
 باید بتوانید وارد Dashboard Cloudflare شوید.
 
-**تصویر مورد نیاز**
+![صفحهٔ ثبت‌نام Cloudflare](../../screenshots/cloudflare-signup.png)
 
-cloudflare-signup.png
+*ایجاد حساب Cloudflare در صفحهٔ ثبت‌نام.*
 
 ## 5.10 افزودن دامنه به Cloudflare
 
@@ -528,9 +528,9 @@ Active
 
 داشته باشد.
 
-**تصویر مورد نیاز**
+![دامنه با وضعیت Active در Cloudflare](../../screenshots/cloudflare-domain-active.png)
 
-cloudflare-domain-active.png
+*نمایش وضعیت Active دامنه در Cloudflare.*
 
 ## 5.11 رکورد DNS چیست؟
 
@@ -602,9 +602,15 @@ A
 
 این مقدار بعداً توسط DDNS به‌روزرسانی خواهد شد.
 
-**تصویر مورد نیاز**
+زیردامنه‌هایی مانند `conduit` جداگانه ثبت نمی‌شوند — آن‌ها به‌صورت **رکورد DNS** ساخته می‌شوند. دامنهٔ خود را در Cloudflare باز کنید، به **DNS → Records** بروید و روی **Add record** کلیک کنید. مقدار **Type = A**، **Name = `conduit`**، **آدرس IPv4** (فعلاً هر IPv4 معتبر؛ بعداً DDNS آن را به‌روزرسانی می‌کند) را تنظیم کنید و **Proxy status** را روشن (ابر نارنجی) کنید.
 
-cloudflare-a-record.png
+![بخش DNS Records در Cloudflare](../../screenshots/cloudflare-dns-records.png)
+
+*DNS → Records: رکوردهای زون، همراه با Add record.*
+
+![افزودن رکورد A برای conduit](../../screenshots/cloudflare-add-dns-record.png)
+
+*افزودن رکورد A برای conduit با Proxy فعال.*
 
 ## 5.13 چرا رکورد باید Proxied باشد؟
 
@@ -652,9 +658,9 @@ Proxy Status
 
 Proxied
 
-**تصویر مورد نیاز**
+![وضعیت Proxy روی Proxied](../../screenshots/cloudflare-add-dns-record.png)
 
-cloudflare-orange-cloud.png
+*وضعیت Proxy روی Proxied (ابر نارنجی) برای رکورد.*
 
 ## 5.14 ساخت API Token
 
@@ -719,9 +725,23 @@ example.com
 
 Token فقط یک بار نمایش داده می‌شود.
 
-**تصویر مورد نیاز**
+برای ساخت Token: (۱) در **My Profile → API Tokens** روی **Create Token** کلیک کنید. (۲) گزینهٔ **Create Custom Token → Get started** را انتخاب کنید. (۳) دسترسی‌های **Zone : Zone : Read** و **Zone : DNS : Edit** را اضافه کنید و در بخش **Zone Resources** دامنهٔ خود را تعیین کنید. (۴) خلاصه را بررسی کنید و سپس روی **Create Token** کلیک کنید. Token را فوراً کپی کنید — فقط یک بار نمایش داده می‌شود.
 
-cloudflare-token-permissions.png
+![صفحهٔ User API Tokens](../../screenshots/cloudflare-token-list.png)
+
+*My Profile → API Tokens → Create Token.*
+
+![صفحهٔ Create API Token](../../screenshots/cloudflare-token-create.png)
+
+*انتخاب Create Custom Token.*
+
+![پیکربندی دسترسی‌های Token](../../screenshots/cloudflare-token-permissions.png)
+
+*حداقل دسترسی: Zone:Read + DNS:Edit، محدود به یک زون.*
+
+![خلاصهٔ Token پیش از ساخت](../../screenshots/cloudflare-token-summary.png)
+
+*بررسی خلاصهٔ Token و سپس Create Token.*
 
 ## 5.15 CCC چگونه از Cloudflare استفاده می‌کند؟
 
