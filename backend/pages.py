@@ -141,6 +141,23 @@ def _templates(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# GET /  (root -> dashboard; D1)
+# ---------------------------------------------------------------------------
+
+@router.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """
+    Redirect the site root to the dashboard.
+
+    The /dashboard auth guard (require_auth_html) then sends unauthenticated
+    visitors on to /login?next=/dashboard, so opening the bare domain lands on
+    the login page when logged out and on the dashboard when logged in. This
+    matches the user guide, which instructs operators to open the root URL.
+    """
+    return RedirectResponse(url="/dashboard", status_code=307)
+
+
+# ---------------------------------------------------------------------------
 # GET /login
 # ---------------------------------------------------------------------------
 

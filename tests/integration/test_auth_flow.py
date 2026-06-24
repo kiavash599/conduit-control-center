@@ -290,3 +290,26 @@ class TestLoginLockout:
             json={"username": "admin", "password": "wrong"},
         )
         assert response.status_code == 401  # 401, not 429
+
+
+# ---------------------------------------------------------------------------
+# Root URL redirect (D1)
+# ---------------------------------------------------------------------------
+
+
+class TestRootRedirect:
+    def test_root_returns_307_to_dashboard(self, integration_client):
+        """GET / issues a 307 redirect to /dashboard (no auth inspection here)."""
+        response = integration_client.get("/", follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == "/dashboard"
+
+    def test_root_unauthenticated_lands_on_login(self, integration_client):
+        """
+        Following / as an unauthenticated user chains through the /dashboard
+        auth guard to the login page, preserving next=/dashboard.
+        """
+        response = integration_client.get("/", follow_redirects=True)
+        assert response.status_code == 200
+        assert "/login" in str(response.url)
+        assert "next=/dashboard" in str(response.url)
