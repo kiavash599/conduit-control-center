@@ -18,7 +18,10 @@ Usage:  python3 scripts/check-screenshot-parity.py
 Exit:   0 = all checks PASS, 1 = one or more FAIL.
 Run authoritatively (e.g. on Windows) -- the sandbox mount can be stale.
 """
-import os, re, sys, glob
+import os
+import re
+import sys
+import glob
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOTS = os.path.join(ROOT, "docs", "screenshots")
@@ -61,7 +64,8 @@ def load_deferrals():
     grab = False
     for ln in lines:
         if ln.strip().startswith("## Deferrals"):
-            grab = True; continue
+            grab = True
+            continue
         if grab and ln.startswith("## "):
             break
         if grab and ln.startswith("|"):
@@ -98,7 +102,9 @@ def main():
             if a not in disk:
                 missing.append(f"  {area}: {a} (referenced, not on disk)")
     if missing:
-        fails.append("existence"); print("  FAIL"); print("\n".join(missing))
+        fails.append("existence")
+        print("  FAIL")
+        print("\n".join(missing))
     else:
         print("  PASS")
 
@@ -106,14 +112,16 @@ def main():
     print("\n[2] EN<->FA chapter set-parity (README excluded)")
     parity_fail = False
     for ch in sorted(set(en) | set(fa)):
-        e = set(en.get(ch, set())); f = set(fa.get(ch, set()))
+        e = set(en.get(ch, set()))
+        f = set(fa.get(ch, set()))
         miss_fa = {a for a in e - f if (ch, a) not in deferrals}
         miss_en = {a for a in f - e if (ch, a) not in deferrals}
         if miss_fa or miss_en:
             parity_fail = True
             print(f"  ch{ch}: EN={len(e)} FA={len(f)}  missing-in-FA={sorted(miss_fa)}  missing-in-EN={sorted(miss_en)}")
     if parity_fail:
-        fails.append("parity"); print("  FAIL (see above)")
+        fails.append("parity")
+        print("  FAIL (see above)")
     else:
         print("  PASS")
 
@@ -121,14 +129,19 @@ def main():
     print("\n[3] Orphan placeholders")
     orphan_fail = False
     for ch in sorted(set(en) | set(fa) | set(en_ph) | set(fa_ph)):
-        e_has = len(en.get(ch, set())) > 0; f_has = len(fa.get(ch, set())) > 0
-        e_ph = en_ph.get(ch, 0); f_ph = fa_ph.get(ch, 0)
+        e_has = len(en.get(ch, set())) > 0
+        f_has = len(fa.get(ch, set())) > 0
+        e_ph = en_ph.get(ch, 0)
+        f_ph = fa_ph.get(ch, 0)
         if e_has and f_ph > 0:
-            orphan_fail = True; print(f"  ch{ch}: EN embedded but FA still has {f_ph} placeholder(s)")
+            orphan_fail = True
+            print(f"  ch{ch}: EN embedded but FA still has {f_ph} placeholder(s)")
         if f_has and e_ph > 0:
-            orphan_fail = True; print(f"  ch{ch}: FA embedded but EN still has {e_ph} placeholder(s)")
+            orphan_fail = True
+            print(f"  ch{ch}: FA embedded but EN still has {e_ph} placeholder(s)")
     if orphan_fail:
-        fails.append("orphan"); print("  FAIL (see above)")
+        fails.append("orphan")
+        print("  FAIL (see above)")
     else:
         print("  PASS")
 
@@ -140,7 +153,9 @@ def main():
         if b.endswith(".png.png") or b.startswith("_") or "raw" in b.lower() or b.startswith("scr"):
             junk.append("  " + b)
     if junk:
-        fails.append("hygiene"); print("  FAIL"); print("\n".join(junk))
+        fails.append("hygiene")
+        print("  FAIL")
+        print("\n".join(junk))
     else:
         print("  PASS")
 
