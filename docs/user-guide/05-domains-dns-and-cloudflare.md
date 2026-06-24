@@ -639,7 +639,75 @@ To create the token: (1) In **My Profile → API Tokens**, click **Create Token*
 
 *Reviewing the token summary, then Create Token.*
 
-## 5.15 How does CCC use Cloudflare?
+## 5.15 Creating a Cloudflare Origin Certificate
+
+### 5.15.1 Why CCC uses an Origin Certificate
+
+**Purpose**
+
+Securing the connection between Cloudflare and your Pi.
+
+CCC serves its dashboard over HTTPS. The recommended way to do this is a:
+
+Cloudflare Origin Certificate
+
+**Why this one?**
+
+- Free
+- Valid for 15 years (no renewal to manage)
+- Fully supported by the installer
+
+It is trusted by Cloudflare — not by browsers directly. Visitors connect to
+Cloudflare over HTTPS, and Cloudflare connects to your Pi using this certificate
+(the "Full (strict)" model). Keep the Cloudflare proxy enabled.
+
+### 5.15.2 Creating the certificate
+
+**Where**
+
+In the Cloudflare dashboard:
+
+SSL/TLS → Origin Server → Create Certificate
+
+**What to choose**
+
+- Let Cloudflare generate the private key and CSR (default)
+- Key type: **RSA (2048)** — the installer expects RSA
+- Hostnames: your domain and wildcard, e.g. `example.com, *.example.com`
+- Validity: 15 years (default)
+
+**Warning**
+
+⚠️
+
+The certificate and the private key are displayed only once.
+
+Copy **both** before leaving the page. The private key is a secret — never share
+it, never commit it to git, and store it only on the Pi.
+
+### 5.15.3 Saving origin.pem and origin.key on the Pi
+
+Save the two blocks to the paths the installer expects:
+
+origin.pem  (the certificate)
+
+origin.key  (the private key)
+
+The installer's default location is:
+
+/etc/conduit-cc/tls/
+
+The full copy-and-paste steps, the exact file permissions, and the verification
+commands are in the canonical guide:
+
+docs/tls-setup.md (Path A)
+
+### 5.15.4 Next step
+
+You now have `origin.pem` and `origin.key`. In the next chapter, the installer
+will check and install them — see Chapter 6, §6.4 (Preparing the TLS files).
+
+## 5.16 How does CCC use Cloudflare?
 
 **Purpose**
 
@@ -669,7 +737,7 @@ The user does not enter the Zone ID; CCC finds it automatically.
 
 Reducing configuration complexity.
 
-## 5.16 How does Dynamic DNS work?
+## 5.17 How does Dynamic DNS work?
 
 **Purpose**
 
@@ -701,7 +769,7 @@ is recorded.
 
 *CCC periodically checks the public IP and updates the Cloudflare DNS record whenever it changes.*
 
-## 5.17 Validation
+## 5.18 Validation
 
 **Viewing the settings**
 
@@ -723,7 +791,7 @@ sudo -u conduit-cc /usr/local/bin/cloudflare-ddns.sh
 
 tail -n 1 /var/log/conduit-cc/ddns.log
 
-## 5.18 Important note about dig
+## 5.19 Important note about dig
 
 Many users expect:
 
@@ -743,7 +811,7 @@ then Cloudflare may display its own IPs instead.
 
 This behavior is normal and is not a sign of DDNS failure.
 
-## 5.19 Troubleshooting
+## 5.20 Troubleshooting
 
 **DDNS does not update**
 

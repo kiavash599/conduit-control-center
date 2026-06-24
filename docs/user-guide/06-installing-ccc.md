@@ -193,6 +193,12 @@ The installer checks that:
 
 ✓ The Certificate issuer is Cloudflare
 
+**How to obtain these files**
+
+If you do not yet have `origin.pem` and `origin.key`, create the Cloudflare
+Origin Certificate first — see Chapter 5, §5.15 (Creating a Cloudflare Origin
+Certificate). The full step-by-step procedure is in docs/tls-setup.md (Path A).
+
 ## 6.5 Getting the CCC repository
 
 **Purpose**
