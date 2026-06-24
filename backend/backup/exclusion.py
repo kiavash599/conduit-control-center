@@ -42,12 +42,31 @@ _KEY_JSON_FIELDS = (
 )
 
 
+def _norm_for_prefix(p: str) -> str:
+    """Normalize a resolved path for POSIX-prefix comparison across platforms.
+
+    EXCLUDED_PATH_PREFIXES describe the Linux production layout. On Windows
+    developer machines ``os.path.realpath`` rewrites ``/var/lib/conduit/x`` to
+    ``C:\\var\\lib\\conduit\\x``; matching against ``pre + os.sep`` then silently
+    misses it, leaving the fail-closed guard *open*. Convert separators to ``/``
+    and drop a leading drive letter so the guard matches on Linux (production)
+    and Windows (dev) alike. This affects matching only; it never touches the
+    filesystem."""
+    p = p.replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":" and p[0].isalpha():   # strip a "C:" drive prefix
+        p = p[2:]
+        if not p.startswith("/"):
+            p = "/" + p
+    return p
+
+
 def assert_path_allowed(path: str) -> None:
     """Raise KeyExclusionError if `path` (after symlink resolution) is key-grade
     or under an excluded location."""
     rp = os.path.realpath(path)
+    rpn = _norm_for_prefix(rp)
     for pre in EXCLUDED_PATH_PREFIXES:
-        if rp == pre or rp.startswith(pre + os.sep):
+        if rpn == pre or rpn.startswith(pre + "/"):
             raise KeyExclusionError("path under an excluded location")
     base = os.path.basename(rp).lower()
     if base in _EXCLUDED_NAMES:

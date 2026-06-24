@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import stat
 import tempfile
 
 import pytest
@@ -19,6 +20,25 @@ from backend.backup.collector import StagedItem, StagingSet
 from backend.backup.exclusion import KeyExclusionError
 from backend.backup.manifest import MANIFEST_VERSION, BackupArchiveError, build_manifest
 from backend.backup.restore import RestoreResult, restore_backup
+
+
+# BCA-2: POSIX file-mode invariants (Contract v1 I6) are asserted only where the
+# filesystem actually honours POSIX permission bits. On Linux CI / Raspberry Pi
+# this holds; on a Windows / non-POSIX developer filesystem chmod is not faithful,
+# so the assertion is skipped there -- never weakened, never removed.
+def _posix_modes_supported() -> bool:
+    try:
+        fd, p = tempfile.mkstemp()
+        os.close(fd)
+        os.chmod(p, 0o600)
+        ok = stat.S_IMODE(os.stat(p).st_mode) == 0o600
+        os.unlink(p)
+        return ok
+    except OSError:
+        return False
+
+
+_POSIX_MODES = _posix_modes_supported()
 
 _ENV_LIVE = (
     "SESSION_SECRET=LIVE_SECRET\nCF_API_TOKEN=LIVE_TOKEN\n"
@@ -261,6 +281,11 @@ def test_checkpoint_deleted_after_rollback(tmp_path, monkeypatch):
 
 
 # 16
+@pytest.mark.skipif(
+    not _POSIX_MODES,
+    reason="POSIX file-mode invariant (Contract v1 I6); enforced on Linux CI / "
+           "Raspberry Pi. Skipped where the filesystem does not honour POSIX modes.",
+)
 def test_permissions(tmp_path):
     d = _target(tmp_path)
     restore_backup(_opened(tmp_path), ccc_dir=str(d))
