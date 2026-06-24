@@ -7,15 +7,15 @@
 > decision deep-dives. This file is the canonical closed-epic index and links the
 > three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-24 · branch `main` · HEAD `043cb6a`.
+> Last reconciled: 2026-06-24 · branch `main` · HEAD `652f028`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.11 | Reconciled · clean baseline |
+| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.13 | Reconciled · clean baseline |
 
-Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; BCA committed.
+Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; Epic C complete (unreleased).
 
 ## 2. Closed Epics
 
@@ -30,6 +30,7 @@ Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; 
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
 | Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
+| TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Complete (unreleased) | EN onboarding — ch05 §5.15 + ch06 §6.4 note (`83d2ed0`); FA parity (`652f028`); text-only (no screenshots); canonical guide English-only (`docs/tls-setup.md`), no `docs/fa/tls-setup.md` | commits `83d2ed0`, `652f028` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
 | Regional Analytics | ✅ Closed | — | `docs/closure/regional-analytics-closure.md` |
 | Live Operations | ✅ Closed | — | `docs/closure/live-operations-closure.md` |
@@ -42,14 +43,13 @@ Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; 
 
 ## 3. Active Epics
 
-**NONE.** Epic B (v0.3.1) is released and Backup Contract Alignment (BCA-1 + BCA-2) is complete (`043cb6a`). See Closed Epics.
+**NONE.** Epic B (v0.3.1) released; Backup Contract Alignment complete (`043cb6a`); Epic C — TLS onboarding complete (`83d2ed0`, `652f028`, unreleased). See Closed Epics.
 
 ## 4. Approved Next Epics
 
 | Epic | Description | Priority |
 |---|---|---|
-| **C — TLS / Origin Certificate Onboarding** | D3: integrate the Origin-Certificate workflow into the guide flow (ch05/06); create `docs/fa/tls-setup.md`; cross-link `docs/tls-setup.md` | After B |
-| **D — Diagram Parity + Persian RTL/LTR Formatting** | D4: integrate DGM-13–19 into the Persian guide · D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code) | After C |
+| **D — Diagram Parity + Persian RTL/LTR Formatting** | D4: integrate DGM-13–19 into the Persian guide · D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code) | Next |
 
 ## 5. Known Issues
 
@@ -57,7 +57,7 @@ Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; 
 |---|---|---|---|---|
 | D1 | Root URL `/` returns 404; only `/login` works, though docs instruct opening the root URL | High (P0) | ✅ Resolved — `f5233ff` (`/`→`/dashboard` 307); CI PASS; Raspberry Pi runtime validation PASS | Epic B / v0.3.1 |
 | D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | ✅ Resolved — in-place relabel to root domain `example.com`; same filename/path/dimensions; Parity Guard PASS | Epic B / v0.3.1 |
-| D3 | TLS/Origin-cert workflow not integrated into the guide flow; `tls-setup.md` exists (EN) but is unlinked from chapters and has no FA translation | Medium (P1) | Open | Epic C |
+| D3 | TLS/Origin-cert workflow not integrated into the guide flow | Medium (P1) | ✅ Resolved — EN ch05 §5.15 + ch06 §6.4 note (`83d2ed0`); FA parity (`652f028`); text-only; canonical guide remains English (`docs/tls-setup.md`), `docs/fa/tls-setup.md` intentionally not created | Epic C |
 | D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | Open | Epic D |
 | D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | Open | Epic D |
 | D6 | Governance / release-narrative drift (roadmap vs shipped tags) | — | ✅ Resolved by Epic A.1 + Epic A.2 | Epic A |
@@ -96,7 +96,7 @@ Branch `main` · HEAD `043cb6a` (Backup Contract Alignment) · v0.3.1 released; 
 
 ## 9. Next Recommended Action
 
-**Start Epic C — TLS / Origin Certificate Onboarding.** Epic B (v0.3.1) is released.
+**Start Epic D — Diagram Parity + Persian RTL/LTR Formatting.** Epic C (TLS onboarding) is complete (unreleased).
 
 ---
 

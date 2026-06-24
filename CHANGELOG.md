@@ -9,6 +9,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- TLS onboarding (Epic C / D3): the user guide now routes operators to the
+  Cloudflare Origin Certificate workflow — EN Chapter 5 §5.15 + Chapter 6 §6.4
+  note, mirrored in the Persian guide. The detailed procedure remains canonical
+  in English at docs/tls-setup.md. (`83d2ed0`, `652f028`)
+
 ### Fixed
 
 - Backup key-exclusion guard (BCA-1): the fail-closed path guard now matches

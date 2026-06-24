@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.12  
+**Revision:** 1.13  
 **Date:** 2026-06-24  
 **Status:** Reconciled  
 **Author:** CCC Development Team
@@ -728,7 +728,7 @@ Documentation-quality and onboarding improvements (open):
 | Item | Description | Status | Priority |
 |---|---|---|---|
 | D2 — Cloudflare screenshot correction | Replace `cloudflare-domain-active.png` so the activated zone is the root domain (`example.com`), not a subdomain | ✅ Released v0.3.1 (2026-06-24) | P1 |
-| D3 — TLS onboarding improvements | Integrate the Origin-Certificate workflow into the guide flow; add `docs/fa/tls-setup.md`; link from chapters 05 / 06 | Planned (Epic C) | P1 |
+| D3 — TLS onboarding | Origin-Certificate workflow integrated into the guide flow (EN ch05 §5.15 + ch06 §6.4 note; FA parity); detailed guide canonical in English (`docs/tls-setup.md`) — no `docs/fa/tls-setup.md` | ✅ Done (Epic C, unreleased) | P1 |
 | _(future)_ | Reserved for onboarding / documentation-accuracy items surfaced after v0.3.0 | Open | — |
 
 ### Documentation Milestones
@@ -787,6 +787,7 @@ delivered; none are scheduled.
 | 1.8 | 2026-06-17 | CCC Development Team | **Theme Support closure + v0.2.0 CLOSED.** §6.7 marked ✅ DELIVERED (TS4 Raspberry Pi validation; commits `46547c0`/`df49f42`/TS3, CI #117–#118) with server-rendered flash-free first paint and no localStorage; §6 v0.2.0 status updated to **CLOSED — all features delivered**. **D6 (`max_personal_clients`) reclassified** from a minor v0.2 gap to v0.4.0 Personal Mode in §3.2 and §6.1 (folds into "Personal client limit control", §8). §6.4 stale three-mode prose reconciled (superseded by the Contribution Advisor; Automatic → v0.3.0). Closure record added at `docs/closure/theme-support-closure.md`. No milestone renumbering. |
 | 1.11 | 2026-06-24 | CCC Development Team | **Roadmap reconciliation (Epic A.1).** Re-anchored §7/§8 from version-numbered titles to feature catalogues ("Operations & Analytics"; "Personal Mode & Ryve"). Corrected all "DELIVERED v0.4.0" → "v0.3.0" (Personal Mode + Ryve Claim + Backup shipped under tag v0.3.0 — first public release). Relabelled genuinely-future items (Automatic Mode, Update Centre, Health Score, Per-direction bandwidth, Regional-Analytics scope filter, full pairing) as **v0.4 candidates**; chart/traffic references re-labelled v0.2.x. Added Release History (product releases only), Documentation Workstream (Delivery + Accuracy & Onboarding + Documentation Milestones, with docs-v0.3 classified as a documentation milestone, not a product release), Maintenance & Patch Releases (v0.3.1 = D1 + D2), and v0.4 Candidates sections. Diagram Program marked CLOSED (EN); DGM-13–19 Persian parity assigned to Epic D and does not reopen it. Bannered "Approved Delivery Priority" as a historical planning artifact. Historical revision rows (≤1.10) left intact and not reordered. Status → Reconciled. No feature scope changed. |
 | 1.12 | 2026-06-24 | CCC Development Team | **Post-v0.3.1 state reconciliation.** Marked v0.3.1 as **released 2026-06-24** in the Release History table, the Documentation Accuracy D2 row, and the Maintenance/Patch section (previously "planned/TBD"). No feature scope changed; documentation-only. (Backup Contract Alignment is internal correctness, tracked in `docs/PROJECT-STATUS.md`, not the roadmap.) |
+| 1.13 | 2026-06-24 | CCC Development Team | **Epic C (TLS / Origin Certificate Onboarding, D3) closed.** EN onboarding (ch05 §5.15 + ch06 §6.4 note, `83d2ed0`) and FA parity (`652f028`) integrate the Cloudflare Origin Certificate workflow into the guide flow; text-only (no screenshots); the detailed guide remains canonical in English (`docs/tls-setup.md`) — `docs/fa/tls-setup.md` intentionally not created. D3 row marked Done. Documentation-only; unreleased (next patch). |
 
 ---
 
