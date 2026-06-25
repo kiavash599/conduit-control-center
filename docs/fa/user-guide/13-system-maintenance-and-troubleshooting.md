@@ -413,7 +413,7 @@ sudo bash update.sh
 
 **نکته مهم**
 
-update.sh فقط Update انجام نمی‌دهد.
+`update.sh` فقط Update انجام نمی‌دهد.
 
 این فرآیند:
 

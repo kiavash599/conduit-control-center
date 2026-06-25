@@ -134,7 +134,7 @@ sudo bash update.sh
 
 **نکته مهم**
 
-update.sh صرفاً یک Update Script نیست.
+`update.sh` صرفاً یک Update Script نیست.
 
 در واقع:
 
@@ -248,7 +248,7 @@ ADMIN_PASSWORD_HASH
 
 CF_API_TOKEN
 
-## 15.11 فایل config.json
+## 15.11 فایل `config.json`
 
 مسیر:
 
