@@ -700,7 +700,7 @@ The installer's default location is:
 The full copy-and-paste steps, the exact file permissions, and the verification
 commands are in the canonical guide:
 
-docs/tls-setup.md (Path A)
+[docs/tls-setup.md](../tls-setup.md) (Path A)
 
 ### 5.15.4 Next step
 
