@@ -24,6 +24,8 @@ Change types: `swap` (placeholder→embed), `new-embed` (no placeholder existed)
 | L13 | EN-guide / FA-guide | 08 §8.4 | advisor-card.png | swap | done | done | done | Integrated Batch 3; FA new embed (no prior placeholder) |
 | L14 | EN-guide / FA-guide | 09 §9.2 | conduit-config.png | swap | done | done | done | Integrated Batch 3; FA new embed (no prior placeholder) |
 | L15 | EN-guide / FA-guide | 12 §12.8 | backup-restore.png | swap | done | done | done | Integrated Batch 3; FA new embed (no prior placeholder) |
+| L16 | tls-setup.md (EN canonical) | Before You Begin (SSL/TLS mode) | cloudflare-domain-active.png (reuse), cloudflare-ssl-domain-overview.png, cloudflare-ssl-overview.png, cloudflare-ssl-full-strict.png | multi-series | done | n/a | done | TLS Phase 2; English-only canonical guide (no FA equivalent); `cloudflare-domain-active.png` reused from ch05 §5.10 |
+| L17 | tls-setup.md (EN canonical) | A.1 Create the certificate | cloudflare-origin-server.png, cloudflare-origin-create.png, cloudflare-origin-configure.png, cloudflare-origin-cert-key.png | multi-series | done | n/a | done | TLS Phase 2; English-only canonical guide (no FA equivalent); cert+key screen fully redacted (Phase 1) |
 | R01 | README | Hero | dashboard-overview.png | reuse | done | n/a | done | Links to ch07 |
 | R02 | README | Gallery | advisor-card.png | reuse | done | n/a | done | Links to ch08 |
 | R03 | README | Gallery | conduit-config.png | reuse | done | n/a | done | Links to ch09 |

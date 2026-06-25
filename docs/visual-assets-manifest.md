@@ -6,10 +6,10 @@
 ## Summary
 
 - Diagrams: **19 unique** (`cloudflare-ddns-flow.svg` referenced twice → 20 references). All `available`.
-- Screenshots: **21 unique** (`cloudflare-add-dns-record.png` reused in §5.12 + §5.13 → 22 references per edition). All `available`; **0 pending**.
+- Screenshots: **28 unique** (`cloudflare-add-dns-record.png` reused in §5.12 + §5.13; `cloudflare-domain-active.png` reused in `docs/tls-setup.md`). 21 in the bilingual guide + 7 TLS-onboarding shots in `docs/tls-setup.md` (English canonical). All `available`; **0 pending**.
 - Superseded placeholder names (historical, never produced as files): **4** — `advanced-settings.png`, `cloudflare-a-record.png`, `cloudflare-orange-cloud.png`, `dashboard-navigation.png`.
 - Educational images: **0**.
-- Total unique assets: **40** (19 diagrams + 21 screenshots).
+- Total unique assets: **47** (19 diagrams + 28 screenshots).
 - Prose mention of "Screenshot" that is **not** an asset reference: 1 (ch11) — see Ambiguities.
 
 Status values: `available` = asset produced on disk; `superseded` = retired placeholder name kept for history; `ambiguous` = traceability note only.
@@ -39,6 +39,13 @@ Status values: `available` = asset produced on disk; `superseded` = retired plac
 | — | `advisor-card.png` | 08 | 8.4 Recommendation severity levels | available |
 | — | `conduit-config.png` | 09 | 9.2 Configured and Effective | available |
 | — | `backup-restore.png` | 12 | 12.8 Inspect Before Restore | available |
+| — | `cloudflare-ssl-domain-overview.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| — | `cloudflare-ssl-overview.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| — | `cloudflare-ssl-full-strict.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| — | `cloudflare-origin-server.png` | tls-setup | A.1 Create the certificate | available |
+| — | `cloudflare-origin-create.png` | tls-setup | A.1 Create the certificate | available |
+| — | `cloudflare-origin-configure.png` | tls-setup | A.1 Create the certificate | available |
+| — | `cloudflare-origin-cert-key.png` | tls-setup | A.1 Create the certificate (key redacted) | available |
 
 ### Superseded screenshot placeholders (historical — never produced as files)
 
@@ -104,6 +111,7 @@ Status values: `available` = asset produced on disk; `superseded` = retired plac
 | 14-security-model | DGM-18, DGM-19 |
 | 15-advanced-administration | none |
 | 16-faq | none |
+| docs/tls-setup.md (Path A, EN canonical) | `cloudflare-domain-active` (reused) + `cloudflare-ssl-domain-overview`, `cloudflare-ssl-overview`, `cloudflare-ssl-full-strict`, `cloudflare-origin-server`, `cloudflare-origin-create`, `cloudflare-origin-configure`, `cloudflare-origin-cert-key` (7 new) |
 
 ## Ambiguities (Challenge → Evidence → Recommendation)
 

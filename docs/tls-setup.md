@@ -31,12 +31,60 @@ If the Cloudflare proxy is ever disabled (grey cloud), the browser connects
 directly to your Pi and will reject the Origin Certificate with a
 `NET::ERR_CERT_AUTHORITY_INVALID` error. Keep the proxy enabled.
 
+### Before You Begin — Configure the Cloudflare SSL/TLS mode to Full (strict)
+
+Before you create the Origin Certificate, set your zone's encryption mode to
+**Full (strict)**. This tells Cloudflare to verify the Origin Certificate on
+your Pi; without it the certificate you are about to install will not be used.
+
+First confirm your domain is **Active** in Cloudflare.
+
+![Domain Active in Cloudflare](screenshots/cloudflare-domain-active.png)
+
+*Your domain showing "Active" in Cloudflare.*
+
+Open your domain, then choose **SSL/TLS** from the left navigation menu.
+
+![Domain Overview — open SSL/TLS](screenshots/cloudflare-ssl-domain-overview.png)
+
+*Open your domain, then go to SSL/TLS.*
+
+On the **SSL/TLS → Overview** page you can see the current encryption mode.
+
+![SSL/TLS Overview](screenshots/cloudflare-ssl-overview.png)
+
+*SSL/TLS Overview — the current encryption mode.*
+
+Click **Configure**, select **Full (strict)**, and click **Save**.
+
+![Select Full (strict)](screenshots/cloudflare-ssl-full-strict.png)
+
+*Select **Full (strict)**, then Save.*
+
+With the mode set, you can now create the Origin Certificate.
+
 ### A.1 — Create the certificate
 
 Log in to the [Cloudflare dashboard](https://dash.cloudflare.com), select your
 zone, and go to **SSL/TLS → Origin Server**.
 
-Click **Create Certificate**.
+![SSL/TLS → Origin Server](screenshots/cloudflare-origin-server.png)
+
+*SSL/TLS → Origin Server → Create Certificate.*
+
+Click **Create Certificate**. On the first step, let Cloudflare generate the
+private key and CSR for you, and set the key type to **RSA (2048)**.
+
+![Create Certificate — generate key](screenshots/cloudflare-origin-create.png)
+
+*Let Cloudflare generate the private key — key type **RSA (2048)**.*
+
+Next, enter the hostnames the certificate should cover and choose the validity
+period.
+
+![Create Certificate — hostnames and validity](screenshots/cloudflare-origin-configure.png)
+
+*Hostnames (`example.com`, `*.example.com`) and 15-year validity.*
 
 Fill in the wizard as follows:
 
@@ -61,6 +109,15 @@ Click **Create**. Cloudflare will display:
   `-----BEGIN CERTIFICATE-----`)
 - **Private Key** — the private key (secret, starts with
   `-----BEGIN RSA PRIVATE KEY-----`)
+
+Cloudflare now shows the certificate and the private key on a single screen.
+
+![Origin Certificate and Private Key display](screenshots/cloudflare-origin-cert-key.png)
+
+*The certificate and private key are shown only once — copy both now. (Key redacted in this example.)*
+
+⚠️ **The private key is displayed only once.** If you leave this page without
+copying it, you cannot retrieve it again and must create a new certificate.
 
 **Leave this browser tab open.** You will need to copy both blocks in the
 next step.
@@ -126,6 +183,47 @@ Then on the Pi, move the files into place:
 sudo mv /tmp/origin.pem /etc/conduit-cc/tls/origin.pem
 sudo mv /tmp/origin.key /etc/conduit-cc/tls/origin.key
 ```
+
+#### Method 3: WinSCP on Windows (no terminal)
+
+If you are on Windows and prefer not to use a terminal, you can save the two
+blocks as files in Notepad and upload them with WinSCP.
+
+First, save each block from the Cloudflare tab using **Notepad → File → Save
+As**. In the Save dialog, set **Save as type** to **All Files**, set
+**Encoding** to **UTF-8**, and type the exact filename:
+
+- Save the **Origin Certificate** block as `origin.pem`
+- Save the **Private Key** block as `origin.key`
+
+Setting **Save as type** to **All Files** is what prevents Notepad from adding a
+hidden `.txt` extension.
+
+> ⚠️ **Windows users:** Make sure the files are named:
+>
+> `origin.pem`  `origin.key`
+>
+> and **NOT**:
+>
+> `origin.pem.txt`  `origin.key.txt`
+>
+> A trailing `.txt` will make the installer reject the files.
+
+Then transfer them to the Pi:
+
+1. Open **WinSCP** and create a **New Site**.
+2. Set **File protocol** to **SFTP**, **Host name** to your Pi's IP or hostname,
+   **Port** to `22`, and enter your username and password.
+3. Connect, then drag `origin.pem` and `origin.key` into **`/tmp`** on the Pi.
+
+Finally, on the Pi, move the files into place:
+
+```bash
+sudo mv /tmp/origin.pem /etc/conduit-cc/tls/origin.pem
+sudo mv /tmp/origin.key /etc/conduit-cc/tls/origin.key
+```
+
+Then set ownership and permissions using **A.4** below.
 
 ### A.4 — Set file permissions
 

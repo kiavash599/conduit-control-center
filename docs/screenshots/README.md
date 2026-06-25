@@ -3,7 +3,7 @@
 > [!NOTE]
 > Canonical screenshot directory for CCC documentation. All guide screenshots have been **captured, sanitized, and integrated** into the English and Persian user guides; **none are pending**. Real domains, IPs, tokens, usernames, emails, and QR codes are redacted or replaced with safe example values (`conduit.example.com`, `203.0.113.10`, `example-node`). Filenames are the canonical identifiers. See [`../visual-assets-manifest.md`](../visual-assets-manifest.md).
 
-## Captured (21)
+## Captured (28)
 
 Grouped by chapter; all `available`. Identified by filename (no SCR-ID needed).
 
@@ -30,8 +30,15 @@ Grouped by chapter; all `available`. Identified by filename (no SCR-ID needed).
 | `advisor-card.png` | 08 | 8.4 Recommendation severity levels | available |
 | `conduit-config.png` | 09 | 9.2 Configured and Effective | available |
 | `backup-restore.png` | 12 | 12.8 Inspect Before Restore | available |
+| `cloudflare-ssl-domain-overview.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| `cloudflare-ssl-overview.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| `cloudflare-ssl-full-strict.png` | tls-setup | Before You Begin (SSL/TLS mode) | available |
+| `cloudflare-origin-server.png` | tls-setup | A.1 Create the certificate | available |
+| `cloudflare-origin-create.png` | tls-setup | A.1 Create the certificate | available |
+| `cloudflare-origin-configure.png` | tls-setup | A.1 Create the certificate | available |
+| `cloudflare-origin-cert-key.png` | tls-setup | A.1 Create the certificate | available |
 
-`cloudflare-add-dns-record.png` is **reused** in both §5.12 and §5.13 (different captions).
+`cloudflare-add-dns-record.png` is **reused** in both §5.12 and §5.13 (different captions). `cloudflare-domain-active.png` is **reused** in `docs/tls-setup.md` (Before You Begin).
 
 ## Pending
 
@@ -55,4 +62,4 @@ Retired placeholder names, kept for provenance. **None were ever produced as fil
 - Multi-panel/series assets use a descriptive suffix (e.g., `advanced-settings-<panel>.png`, `cloudflare-token-<step>.png`).
 - Redact or replace real domains, IPs, tokens, usernames, emails, and QR codes with safe example values.
 
-**21 captured · 0 pending.**
+**28 captured · 0 pending.**
