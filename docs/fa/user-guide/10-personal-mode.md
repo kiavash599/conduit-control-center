@@ -186,6 +186,10 @@ Max Personal Clients > 0
 
 است.
 
+![وضعیت‌های Personal Mode: یک Identity به‌تنهایی Inactive است؛ تنها زمانی Active می‌شود که Max Personal Clients > 0 اعمال شود](../../diagrams/svg/personal-mode-states.svg)
+
+*Personal Mode تنها زمانی Active می‌شود که یک Identity وجود داشته باشد و Max Personal Clients بالای ۰ تنظیم و اعمال شود؛ بازگرداندن آن به ۰ به وضعیت Inactive برمی‌گردد.*
+
 ## 10.7 QR Pairing چیست؟
 
 **هدف**
@@ -201,6 +205,10 @@ CCC می‌تواند یک QR Code تولید کند.
 **نکته مهم**
 
 QR از روی Identity ساخته می‌شود.
+
+![Pairing در Personal Mode: از Identity یک QR جفت‌سازی ساخته می‌شود که دستگاه مورد اعتماد آن را اسکن می‌کند تا اتصال شخصی برقرار شود](../../diagrams/svg/personal-mode-pairing.svg)
+
+*پس از فعال شدن Personal Mode، CCC از Identity یک QR جفت‌سازی می‌سازد؛ یک دستگاه مورد اعتماد آن را اسکن می‌کند تا اتصال شخصی برقرار شود.*
 
 ## 10.8 QR Code شامل چه اطلاعاتی است؟
 

@@ -90,9 +90,9 @@ Ali
 
 Domain نیز نقش مشابهی برای اینترنت دارد.
 
-**دیاگرام مورد نیاز**
+![نام دامنه یک برچسب خوانا برای انسان به‌جای آدرس IP است](../../diagrams/svg/domain-name-concept.svg)
 
-domain-name-concept.svg
+*نام دامنه یک برچسب خوانا برای انسان است که جای یک آدرس IP عددی را می‌گیرد.*
 
 ## 5.2 DNS چیست؟
 
@@ -136,29 +136,9 @@ DNS پاسخ می‌دهد:
 
 که عملاً غیرممکن است.
 
-**دیاگرام مورد نیاز**
+![DNS یک نام دامنه را به آدرس IP ترجمه می‌کند](../../diagrams/svg/dns-resolution.svg)
 
-dns-resolution.svg
-
-Browser
-
-│
-
-▼
-
-DNS Query
-
-│
-
-▼
-
-DNS Server
-
-│
-
-▼
-
-IP Address
+*DNS یک نام دامنه را به آدرس IP ترجمه می‌کند و سپس مرورگر به آن متصل می‌شود.*
 
 ## 5.3 Subdomain چیست؟
 
@@ -206,9 +186,9 @@ support.example.com
 
 conduit.example.com
 
-**دیاگرام مورد نیاز**
+![زیردامنه‌ها واحدهای نام‌گذاری‌شده زیر یک دامنهٔ والد هستند](../../diagrams/svg/subdomain-concept.svg)
 
-subdomain-concept.svg
+*زیردامنه‌ها واحدهای نام‌گذاری‌شده‌ای هستند که زیر یک دامنهٔ والد سازمان‌دهی شده‌اند.*
 
 ## 5.4 Cloudflare چیست؟
 
@@ -297,29 +277,9 @@ conduit.example.com
 
 همیشه به IP صحیح اشاره خواهد کرد.
 
-**دیاگرام مورد نیاز**
+![Dynamic DNS دامنهٔ شما را به Public IP فعلی‌تان متصل نگه می‌دارد](../../diagrams/svg/cloudflare-ddns-flow.svg)
 
-cloudflare-ddns-flow.svg
-
-Public IP Changed
-
-│
-
-▼
-
-CCC DDNS
-
-│
-
-▼
-
-Cloudflare DNS
-
-│
-
-▼
-
-Updated Record
+*Dynamic DNS دامنهٔ شما را همگام با تغییر Public IP خانه، به آدرس فعلی متصل نگه می‌دارد.*
 
 ## 5.6 API Token چیست؟
 
@@ -875,29 +835,9 @@ updated
 
 ثبت می‌شود.
 
-**دیاگرام مورد نیاز**
+![CCC هنگام تغییر Public IP رکورد DNS کلودفلر را به‌روزرسانی می‌کند](../../diagrams/svg/cloudflare-ddns-flow.svg)
 
-cloudflare-ddns-flow.svg
-
-Public IP
-
-│
-
-▼
-
-CCC DDNS
-
-│
-
-▼
-
-Cloudflare
-
-│
-
-▼
-
-Updated DNS Record
+*CCC به‌صورت دوره‌ای Public IP را بررسی می‌کند و هر زمان تغییر کند، رکورد DNS کلودفلر را به‌روزرسانی می‌کند.*
 
 ## 5.18 اعتبارسنجی
 

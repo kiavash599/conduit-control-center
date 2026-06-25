@@ -96,23 +96,9 @@ CCC فقط آن را نمایش می‌دهد.
 
 فرآیند به شکل زیر است:
 
-Generate
+![جریان Claim در Ryve: Conduit ادعا را می‌سازد، CCC یک QR موقت نمایش می‌دهد و ادعا منقضی می‌شود](../../diagrams/svg/ryve-claim-flow.svg)
 
-↓
-
-Conduit Creates Claim
-
-↓
-
-CCC Receives PNG
-
-↓
-
-CCC Displays QR
-
-↓
-
-User Scans QR
+*Conduit ادعا را می‌سازد؛ CCC فقط QR موقت را درخواست و نمایش می‌دهد، کاربر پیش از انقضا آن را با اپ Ryve اسکن می‌کند و سپس از حافظه پاک می‌شود.*
 
 **نکته مهم**
 

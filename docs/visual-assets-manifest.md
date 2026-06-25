@@ -82,7 +82,7 @@ Status values: `available` = asset produced on disk; `superseded` = retired plac
 | DGM-18 | `security-trust-boundaries.svg` | 14 | Security trust boundaries | available |
 | DGM-19 | `csrf-double-submit.svg` | 14 | CSRF double-submit | available |
 
-> DGM-01–12 are integrated in **both** editions (EN + FA). DGM-13–19 are produced and integrated in the **English** edition (ch 10/11/12/14); their Persian integration is tracked separately — see Remaining issues.
+> All 19 diagrams (DGM-01–19) are integrated in **both** editions (EN + FA): DGM-01–12 in FA ch04/04a/05 and DGM-13–19 in FA ch10/11/12/14. Full EN↔FA diagram parity (Epic D).
 
 ### Non-asset prose mention
 
@@ -135,4 +135,4 @@ Status values: `available` = asset produced on disk; `superseded` = retired plac
 
 ## Remaining issues
 
-- **FA feature-diagram parity:** DGM-13–19 are integrated in the English edition only. Persian integration of these 7 diagrams is **out of scope** for the K.5 screenshot program and is tracked as a separate future task.
+- **FA feature-diagram parity — complete.** DGM-13–19 are now integrated into the Persian guide (ch10/11/12/14) under Epic D, replacing the legacy Persian ASCII-art diagrams. All 19 diagrams (DGM-01–19) are at full EN↔FA parity. No remaining diagram-parity issues.

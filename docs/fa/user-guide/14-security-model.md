@@ -67,17 +67,9 @@ Least Privilege
 
 **معماری کلی**
 
-Internet
-    ↓
-Cloudflare
-    ↓
-Nginx
-    ↓
-CCC (conduit-cc)
-    ↓
-Validated Helpers
-    ↓
-conduit / root
+![مرزهای اعتماد: اینترنت، Cloudflare، Nginx، وب‌اپ غیر-root با نام CCC، Helperهای اعتبارسنجی‌شده و سرویس conduit / عملیات root](../../diagrams/svg/security-trust-boundaries.svg)
+
+*درخواست‌ها از Cloudflare و Nginx به وب‌اپ غیر-root با نام CCC می‌رسند که تنها از طریق Helperهای اعتبارسنجی‌شده به عملیات دارای امتیاز دسترسی پیدا می‌کند — دسترسی مستقیم root هرگز در اختیار مرورگر قرار نمی‌گیرد.*
 
 **نکته مهم**
 
@@ -207,13 +199,9 @@ X-CSRF-Token
 
 **فرآیند**
 
-Cookie
-↓
-Header
-↓
-Comparison
-↓
-Allowed
+![Double-Submit در CSRF: کوکی csrf_token و هدر X-CSRF-Token مقایسه می‌شوند؛ تطابق مجاز است و عدم تطابق ۴۰۳ برمی‌گرداند](../../diagrams/svg/csrf-double-submit.svg)
+
+*CCC در هر درخواست کوکی csrf_token را با هدر X-CSRF-Token مقایسه می‌کند؛ اگر مطابقت داشته باشند درخواست مجاز است، در غیر این صورت با ۴۰۳ Forbidden رد می‌شود.*
 
 در صورت عدم تطابق:
 

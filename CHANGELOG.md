@@ -19,6 +19,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   references to language-routed markdown links — English chapters → `docs/tls-setup.md`,
   Persian chapters → `docs/fa/tls-setup.md` (`957d497`). The 8 redacted Cloudflare
   TLS screenshots are shared by both guides (single image set, no duplicates).
+- FA diagram parity completed (Epic D / D4): all 19 diagrams (DGM-01–19) are now
+  integrated into the Persian user guide — DGM-01–12 in ch04/04a/05 and DGM-13–19
+  in ch10/11/12/14 — replacing the legacy Persian ASCII-art diagram blocks they
+  superseded (EN-paralleled navigation/micro-flows preserved). Full EN↔FA diagram parity.
 
 ### Fixed
 

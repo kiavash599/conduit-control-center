@@ -13,7 +13,7 @@
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.13 | Reconciled · clean baseline |
+| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.15 | Reconciled · clean baseline |
 
 Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; Epic C complete (unreleased).
 
@@ -49,7 +49,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 
 | Epic | Description | Priority |
 |---|---|---|
-| **D — Diagram Parity + Persian RTL/LTR Formatting** | D4: integrate DGM-13–19 into the Persian guide · D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code) | Next |
+| **D — Persian RTL/LTR Formatting** | D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code). _(D4 diagram parity is complete — DGM-01–19 integrated EN + FA, uncommitted.)_ | Next |
 
 ## 5. Known Issues
 
@@ -58,7 +58,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | D1 | Root URL `/` returns 404; only `/login` works, though docs instruct opening the root URL | High (P0) | ✅ Resolved — `f5233ff` (`/`→`/dashboard` 307); CI PASS; Raspberry Pi runtime validation PASS | Epic B / v0.3.1 |
 | D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | ✅ Resolved — in-place relabel to root domain `example.com`; same filename/path/dimensions; Parity Guard PASS | Epic B / v0.3.1 |
 | D3 | TLS/Origin-cert workflow not integrated into the guide flow | Medium (P1) | ✅ Resolved — EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); bilingual TLS guides `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), language-routed chapter links (`957d497`), 8 shared redacted screenshots | Epic C / D |
-| D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | Open | Epic D |
+| D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | ✅ Resolved — DGM-13–19 integrated into FA ch10/11/12/14 (Epic D Batch 3); DGM-01–12 into FA ch04/04a/05 (Batches 1–2); full DGM-01–19 EN↔FA parity (uncommitted) | Epic D |
 | D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | Open | Epic D |
 | D6 | Governance / release-narrative drift (roadmap vs shipped tags) | — | ✅ Resolved by Epic A.1 + Epic A.2 | Epic A |
 
@@ -79,7 +79,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 |---|---|
 | English Guide | ✅ Complete (18 chapters) |
 | Persian Guide | ✅ Complete (text; 18 chapters; heading parity 17/17) |
-| Diagrams | 19 on disk; EN integrated; **DGM-13–19 FA pending → Epic D** |
+| Diagrams | 19 on disk; **integrated EN + FA (DGM-01–19)**; full EN↔FA diagram parity |
 | Screenshots | 21 integrated EN+FA; 0 placeholders |
 | Parity Guard | ✅ PASS (Existence · EN↔FA parity · Orphans · Hygiene) |
 
@@ -96,7 +96,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 
 ## 9. Next Recommended Action
 
-**Start Epic D — Diagram Parity + Persian RTL/LTR Formatting.** Epic C (TLS onboarding) is complete (unreleased).
+**Epic D — D4 (diagram parity) is complete (uncommitted); D5 (Persian RTL/LTR formatting) is the remaining workstream.** Epic C (TLS onboarding) is complete (unreleased).
 
 ---
 

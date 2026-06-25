@@ -60,9 +60,9 @@ DHCP این کار را به صورت خودکار انجام می‌دهد.
 - عدم نیاز به تنظیم دستی IP
 - کاهش خطاهای پیکربندی
 
-**دیاگرام مورد نیاز**
+![سرور DHCP روتر هنگام درخواست یک آدرس IP اختصاص می‌دهد](../../diagrams/svg/network-dhcp.svg)
 
-network-dhcp.svg
+*سرور DHCP روتر هنگام پیوستن دستگاه به شبکه به‌طور خودکار یک آدرس IP به آن اختصاص می‌دهد.*
 
 ## 4.6 چرا IP دستگاه‌ها تغییر می‌کند؟
 
@@ -162,9 +162,9 @@ B8:27:EB:12:34:56
 
 را دریافت خواهد کرد.
 
-**دیاگرام مورد نیاز**
+![DHCP Reservation آدرس MAC دستگاه را به یک IP ثابت گره می‌زند](../../diagrams/svg/network-dhcp-reservation.svg)
 
-network-dhcp-reservation.svg
+*یک DHCP Reservation آدرس MAC دستگاه را به یک IP ثابت گره می‌زند تا همیشه همان آدرس را دریافت کند.*
 
 ## 4.8 چرا Raspberry Pi باید همیشه IP ثابتی داشته باشد؟
 
@@ -252,9 +252,9 @@ Port Forwarding به روتر می‌گوید:
 
 Port Forwarding نیز نقش مشابهی دارد.
 
-**دیاگرام مورد نیاز**
+![Port Forwarding ترافیک ورودی روی یک پورت را به Raspberry Pi می‌فرستد](../../diagrams/svg/network-port-forwarding.svg)
 
-network-port-forwarding.svg
+*Port Forwarding به روتر می‌گوید ترافیک ورودی روی یک پورت مشخص را به Raspberry Pi بفرستد.*
 
 ## 4.10 اعتبارسنجی اتصال
 
