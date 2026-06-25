@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.13  
+**Revision:** 1.14  
 **Date:** 2026-06-24  
 **Status:** Reconciled  
 **Author:** CCC Development Team
@@ -728,7 +728,7 @@ Documentation-quality and onboarding improvements (open):
 | Item | Description | Status | Priority |
 |---|---|---|---|
 | D2 — Cloudflare screenshot correction | Replace `cloudflare-domain-active.png` so the activated zone is the root domain (`example.com`), not a subdomain | ✅ Released v0.3.1 (2026-06-24) | P1 |
-| D3 — TLS onboarding | Origin-Certificate workflow integrated into the guide flow (EN ch05 §5.15 + ch06 §6.4 note; FA parity); detailed guide canonical in English (`docs/tls-setup.md`) — no `docs/fa/tls-setup.md` | ✅ Done (Epic C, unreleased) | P1 |
+| D3 — TLS onboarding | Origin-Certificate workflow integrated into the guide flow (EN ch05 §5.15 + ch06 §6.4; FA parity); **bilingual** detailed guides — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA), language-routed chapter links, 8 shared redacted screenshots | ✅ Done (Epic C; FA guide via Epic D, unreleased) | P1 |
 | _(future)_ | Reserved for onboarding / documentation-accuracy items surfaced after v0.3.0 | Open | — |
 
 ### Documentation Milestones
@@ -788,6 +788,7 @@ delivered; none are scheduled.
 | 1.11 | 2026-06-24 | CCC Development Team | **Roadmap reconciliation (Epic A.1).** Re-anchored §7/§8 from version-numbered titles to feature catalogues ("Operations & Analytics"; "Personal Mode & Ryve"). Corrected all "DELIVERED v0.4.0" → "v0.3.0" (Personal Mode + Ryve Claim + Backup shipped under tag v0.3.0 — first public release). Relabelled genuinely-future items (Automatic Mode, Update Centre, Health Score, Per-direction bandwidth, Regional-Analytics scope filter, full pairing) as **v0.4 candidates**; chart/traffic references re-labelled v0.2.x. Added Release History (product releases only), Documentation Workstream (Delivery + Accuracy & Onboarding + Documentation Milestones, with docs-v0.3 classified as a documentation milestone, not a product release), Maintenance & Patch Releases (v0.3.1 = D1 + D2), and v0.4 Candidates sections. Diagram Program marked CLOSED (EN); DGM-13–19 Persian parity assigned to Epic D and does not reopen it. Bannered "Approved Delivery Priority" as a historical planning artifact. Historical revision rows (≤1.10) left intact and not reordered. Status → Reconciled. No feature scope changed. |
 | 1.12 | 2026-06-24 | CCC Development Team | **Post-v0.3.1 state reconciliation.** Marked v0.3.1 as **released 2026-06-24** in the Release History table, the Documentation Accuracy D2 row, and the Maintenance/Patch section (previously "planned/TBD"). No feature scope changed; documentation-only. (Backup Contract Alignment is internal correctness, tracked in `docs/PROJECT-STATUS.md`, not the roadmap.) |
 | 1.13 | 2026-06-24 | CCC Development Team | **Epic C (TLS / Origin Certificate Onboarding, D3) closed.** EN onboarding (ch05 §5.15 + ch06 §6.4 note, `83d2ed0`) and FA parity (`652f028`) integrate the Cloudflare Origin Certificate workflow into the guide flow; text-only (no screenshots); the detailed guide remains canonical in English (`docs/tls-setup.md`) — `docs/fa/tls-setup.md` intentionally not created. D3 row marked Done. Documentation-only; unreleased (next patch). |
+| 1.14 | 2026-06-24 | CCC Development Team | **TLS onboarding made bilingual (Epic D Phases 1–3) — supersedes the rev-1.13 "English-only" decision.** `docs/fa/tls-setup.md` created (`05366fe`); EN/FA chapter references converted to language-routed markdown links — EN → `../tls-setup.md`, FA → `../tls-setup.md`→`docs/fa/tls-setup.md` (`957d497`); the 8 redacted TLS screenshots are **shared** by both guides (no duplicate FA images). D3 row updated to bilingual. Manifest/INTEGRATION-SYNC/PROJECT-STATUS reconciled. Historical rev-1.13 row left intact. Documentation-only; unreleased. |
 
 ---
 

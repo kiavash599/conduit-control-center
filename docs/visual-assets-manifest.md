@@ -6,7 +6,7 @@
 ## Summary
 
 - Diagrams: **19 unique** (`cloudflare-ddns-flow.svg` referenced twice → 20 references). All `available`.
-- Screenshots: **28 unique** (`cloudflare-add-dns-record.png` reused in §5.12 + §5.13; `cloudflare-domain-active.png` reused in `docs/tls-setup.md`). 21 in the bilingual guide + 7 TLS-onboarding shots in `docs/tls-setup.md` (English canonical). All `available`; **0 pending**.
+- Screenshots: **28 unique** (`cloudflare-add-dns-record.png` reused in §5.12 + §5.13; `cloudflare-domain-active.png` reused in the TLS guides). 21 in the bilingual chapters + 7 TLS-onboarding shots **shared** by `docs/tls-setup.md` (EN) and `docs/fa/tls-setup.md` (FA) — single image set, no duplicate FA copies. All `available`; **0 pending**.
 - Superseded placeholder names (historical, never produced as files): **4** — `advanced-settings.png`, `cloudflare-a-record.png`, `cloudflare-orange-cloud.png`, `dashboard-navigation.png`.
 - Educational images: **0**.
 - Total unique assets: **47** (19 diagrams + 28 screenshots).
@@ -111,7 +111,7 @@ Status values: `available` = asset produced on disk; `superseded` = retired plac
 | 14-security-model | DGM-18, DGM-19 |
 | 15-advanced-administration | none |
 | 16-faq | none |
-| docs/tls-setup.md (Path A, EN canonical) | `cloudflare-domain-active` (reused) + `cloudflare-ssl-domain-overview`, `cloudflare-ssl-overview`, `cloudflare-ssl-full-strict`, `cloudflare-origin-server`, `cloudflare-origin-create`, `cloudflare-origin-configure`, `cloudflare-origin-cert-key` (7 new) |
+| docs/tls-setup.md + docs/fa/tls-setup.md (Path A, **shared EN + FA**) | `cloudflare-domain-active` (reused) + `cloudflare-ssl-domain-overview`, `cloudflare-ssl-overview`, `cloudflare-ssl-full-strict`, `cloudflare-origin-server`, `cloudflare-origin-create`, `cloudflare-origin-configure`, `cloudflare-origin-cert-key` (7 new; one shared image set, both editions) |
 
 ## Ambiguities (Challenge → Evidence → Recommendation)
 

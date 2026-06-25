@@ -12,9 +12,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - TLS onboarding (Epic C / D3): the user guide now routes operators to the
-  Cloudflare Origin Certificate workflow — EN Chapter 5 §5.15 + Chapter 6 §6.4
-  note, mirrored in the Persian guide. The detailed procedure remains canonical
-  in English at docs/tls-setup.md. (`83d2ed0`, `652f028`)
+  Cloudflare Origin Certificate workflow — EN Chapter 5 §5.15 + Chapter 6 §6.4,
+  mirrored in the Persian guide. (`83d2ed0`, `652f028`)
+- Bilingual TLS guide (Epic D): added the Persian TLS guide `docs/fa/tls-setup.md`
+  as a translation of `docs/tls-setup.md` (`05366fe`), and converted the chapter
+  references to language-routed markdown links — English chapters → `docs/tls-setup.md`,
+  Persian chapters → `docs/fa/tls-setup.md` (`957d497`). The 8 redacted Cloudflare
+  TLS screenshots are shared by both guides (single image set, no duplicates).
 
 ### Fixed
 
