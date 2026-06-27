@@ -26,6 +26,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | Diagram Program (EN) | ✅ Closed | DGM-01–19; 19 SVG/PNG integrated EN | `c898201`…`8a8379b` |
 | Screenshot Program (K.5) | ✅ Closed | 21 assets; parity 22=22; 0 placeholders; Guard PASS | `c354993`; `INTEGRATION-SYNC.md` (19/19) |
 | Documentation Governance | ✅ Closed | governance + `docs/release-checklist.md` | `971b1bf` |
+| Documentation Platform (MkDocs Phase 1) | ✅ Completed | MkDocs Material site; Persian RTL; self-hosted Vazirmatn + Inter (no Google Fonts/CDN/analytics); bilingual landing page; RTL/LTR Authoring Style Guide v1.0; documentation governance foundation | `website/`, `mkdocs.yml`, `CONTRIBUTING.md` (Phase 1 close commit) |
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
@@ -49,7 +50,10 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 
 | Epic | Description | Priority |
 |---|---|---|
-| **D — Persian RTL/LTR Formatting** | D5: fix Persian RTL/LTR formatting of mixed-language technical content (URLs, commands, paths, API names, inline code). _(D4 diagram parity is complete — DGM-01–19 integrated EN + FA, uncommitted.)_ | Next |
+| **Cloudflare-compatible HTTPS port selection** | Install/update behaviour selects an HTTPS port compatible with the Cloudflare proxy | Next |
+| **One-click update system** | Separate CCC and Conduit Core updates; no auto-update; rollback: CCC supported, Conduit Core best-effort | Next |
+
+> Documentation work that was tracked here (D5 RTL/LTR formatting) is now split: **platform RTL/LTR support is complete** under Documentation Platform Phase 1; **content normalization of existing chapters is Deferred** — see §6 *Documentation Normalization*.
 
 ## 5. Known Issues
 
@@ -59,7 +63,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | ✅ Resolved — in-place relabel to root domain `example.com`; same filename/path/dimensions; Parity Guard PASS | Epic B / v0.3.1 |
 | D3 | TLS/Origin-cert workflow not integrated into the guide flow | Medium (P1) | ✅ Resolved — EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); bilingual TLS guides `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), language-routed chapter links (`957d497`), 8 shared redacted screenshots | Epic C / D |
 | D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | ✅ Resolved — DGM-13–19 integrated into FA ch10/11/12/14 (Epic D Batch 3); DGM-01–12 into FA ch04/04a/05 (Batches 1–2); full DGM-01–19 EN↔FA parity (uncommitted) | Epic D |
-| D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | Open | Epic D |
+| D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | ✅ Platform support complete (MkDocs Phase 1 — per-page `dir=rtl`, code/command LTR protection, `.tech-list`); content normalization of existing chapters **Deferred** (see §6) | Docs Platform Phase 1 |
 | D6 | Governance / release-narrative drift (roadmap vs shipped tags) | — | ✅ Resolved by Epic A.1 + Epic A.2 | Epic A |
 
 ## 6. Deferred Work
@@ -67,6 +71,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | Item | Reason / revisit trigger | Evidence |
 |---|---|---|
 | Deep Persian rewrite | Only if Epic D's light formatting pass proves insufficient | structural parity already strong (17/17 headings) |
+| **Documentation Normalization** | Normalize existing documentation to the RTL/LTR Authoring Style Guide v1.0. Scope: identifier backticks · command fencing · `.tech-list` tagging · EN/FA parity review. **Status: Deferred** (do chapter-by-chapter with a read-only audit first). | Style Guide v1.0 in `CONTRIBUTING.md` |
 | Parity Guard → CI integration | Guard is manual-only | `.github/workflows/ci.yml` has no parity step |
 | `errors="replace"` in canonical guard | Mount-robustness; only the run-copy is patched | `scripts/check-screenshot-parity.py` |
 | Roadmap §4 maintenance | `db-perms-600`, `root-crontab-cleanup` (ops/security); `pairing-neutralise` → v0.4 candidate | roadmap §4 |
@@ -82,6 +87,8 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | Diagrams | 19 on disk; **integrated EN + FA (DGM-01–19)**; full EN↔FA diagram parity |
 | Screenshots | 21 integrated EN+FA; 0 placeholders |
 | Parity Guard | ✅ PASS (Existence · EN↔FA parity · Orphans · Hygiene) |
+| Docs Website (MkDocs) | ✅ Phase 1 complete — Material, Persian RTL, self-hosted fonts, bilingual landing page |
+| Authoring Style Guide | ✅ RTL/LTR v1.0 (`CONTRIBUTING.md`); existing chapters not yet normalized → Deferred (§6) |
 
 ## 8. Release Timeline
 
@@ -96,7 +103,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 
 ## 9. Next Recommended Action
 
-**Epic D — D4 (diagram parity) is complete (uncommitted); D5 (Persian RTL/LTR formatting) is the remaining workstream.** Epic C (TLS onboarding) is complete (unreleased).
+**Documentation Platform Phase 1 is closed** (MkDocs Material, Persian RTL, self-hosted fonts, bilingual landing page, RTL/LTR Authoring Style Guide v1.0, documentation governance foundation). Documentation Normalization of existing chapters is **Deferred** (§6). Next product work: (1) Cloudflare-compatible HTTPS port selection; (2) one-click update system (separate CCC + Conduit Core; no auto-update; rollback: CCC supported, Core best-effort).
 
 ---
 

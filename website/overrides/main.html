@@ -3,12 +3,15 @@
 {% block extrahead %}
   {{ super() }}
   <link rel="stylesheet" href="{{ 'assets/stylesheets/extra.css' | url }}">
-{% endblock %}
-
-{% block content %}
-  {% if page and page.url.startswith('fa/') %}
-    <div class="ccc-rtl" dir="rtl" lang="fa">{{ super() }}</div>
-  {% else %}
-    {{ super() }}
-  {% endif %}
+  <script>
+    (function () {
+      if (!location.pathname.split('/').includes('fa')) return;
+      var html = document.documentElement;
+      html.setAttribute('dir', 'rtl');
+      html.classList.add('ccc-fa');
+      var setBody = function () { if (document.body) document.body.setAttribute('dir', 'rtl'); };
+      if (document.body) { setBody(); }
+      else { document.addEventListener('DOMContentLoaded', setBody); }
+    })();
+  </script>
 {% endblock %}

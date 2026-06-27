@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.15  
-**Date:** 2026-06-25  
+**Revision:** 1.16  
+**Date:** 2026-06-27  
 **Status:** Reconciled  
 **Author:** CCC Development Team
 
@@ -720,6 +720,9 @@ Completed documentation milestones:
 | Diagram Program | ✅ **CLOSED** — DGM-01–19 produced and integrated in **both editions**: English (ch04–14) and Persian parity completed under Epic D (FA ch04/04a/05/10/11/12/14). Full EN↔FA diagram parity. | `c898201` … `8a8379b`; Epic D (rev 1.15) |
 | Screenshot Program (K.5) | ✅ **CLOSED** | `c354993`; Parity Guard PASS |
 | Documentation Governance | ✅ **CLOSED** | `971b1bf`; `docs/release-checklist.md` |
+| Documentation Platform (MkDocs Phase 1) | ✅ **CLOSED** | MkDocs Material site, Persian RTL, self-hosted fonts, bilingual landing page, RTL/LTR Authoring Style Guide v1.0; `website/`, `mkdocs.yml`, `CONTRIBUTING.md` (rev 1.16) |
+
+> **Deferred — Documentation Normalization:** normalize existing chapters to the RTL/LTR Authoring Style Guide v1.0 (identifier backticks, command fencing, `.tech-list` tagging, EN/FA parity). Tracked in `docs/PROJECT-STATUS.md` → Deferred Work. This is **separate** from the completed Documentation Platform milestone.
 
 ### Documentation Accuracy & Onboarding
 
@@ -790,6 +793,7 @@ delivered; none are scheduled.
 | 1.13 | 2026-06-24 | CCC Development Team | **Epic C (TLS / Origin Certificate Onboarding, D3) closed.** EN onboarding (ch05 §5.15 + ch06 §6.4 note, `83d2ed0`) and FA parity (`652f028`) integrate the Cloudflare Origin Certificate workflow into the guide flow; text-only (no screenshots); the detailed guide remains canonical in English (`docs/tls-setup.md`) — `docs/fa/tls-setup.md` intentionally not created. D3 row marked Done. Documentation-only; unreleased (next patch). |
 | 1.14 | 2026-06-24 | CCC Development Team | **TLS onboarding made bilingual (Epic D Phases 1–3) — supersedes the rev-1.13 "English-only" decision.** `docs/fa/tls-setup.md` created (`05366fe`); EN/FA chapter references converted to language-routed markdown links — EN → `../tls-setup.md`, FA → `../tls-setup.md`→`docs/fa/tls-setup.md` (`957d497`); the 8 redacted TLS screenshots are **shared** by both guides (no duplicate FA images). D3 row updated to bilingual. Manifest/INTEGRATION-SYNC/PROJECT-STATUS reconciled. Historical rev-1.13 row left intact. Documentation-only; unreleased. |
 | 1.15 | 2026-06-25 | CCC Development Team | **Epic D — D4 (FA diagram parity) completed.** All 19 diagrams (DGM-01–19) integrated into the Persian guide: DGM-01–12 in FA ch04/04a/05 (Batches 1–2) and DGM-13–19 in FA ch10/11/12/14 (Batch 3), with the legacy Persian ASCII-art diagram blocks they replace removed and EN-paralleled navigation/micro-flows preserved. Full EN↔FA diagram parity. Diagram Program note updated to CLOSED (both editions); D4 marked Resolved in `docs/PROJECT-STATUS.md`; Manifest reconciled; CHANGELOG `[Unreleased]` entry added. Historical rev-≤1.14 rows left intact. Documentation-only; unreleased. |
+| 1.16 | 2026-06-27 | CCC Development Team | **Documentation Platform (MkDocs Phase 1) closed** as a platform/governance milestone. Added the MkDocs Material site (renders existing `docs/` in place, curated nav, `exclude_docs` for internal files), Persian RTL/LTR base support, self-hosted Vazirmatn + Inter (no Google Fonts/CDN/analytics), a bilingual landing page, and the **RTL/LTR Documentation Authoring Style Guide v1.0** (frozen into `CONTRIBUTING.md`). Added `.tech-list` CSS support. **Documentation Normalization** of existing chapters is explicitly **Deferred** (PROJECT-STATUS Deferred Work) — no chapter content changed. Documentation-only; unreleased. |
 
 ---
 

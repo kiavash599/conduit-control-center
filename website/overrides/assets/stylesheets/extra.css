@@ -17,23 +17,38 @@
 /* Explicit fallbacks so text is readable even before the woff2 files are added */
 body, .md-typeset{ font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
 
-/* Persian pages render in Vazirmatn */
-.ccc-rtl{ font-family:'Vazirmatn','Inter',Tahoma,system-ui,sans-serif;
-  direction:rtl; text-align:right; line-height:1.95; }
-.ccc-rtl ul,.ccc-rtl ol{ padding-inline-start:1.4rem; padding-inline-end:0; }
-.ccc-rtl table{ text-align:right; }
-.ccc-rtl blockquote{ border-inline-start:4px solid var(--md-default-fg-color--lighter); border-inline-end:0; }
+/* ---- Persian pages (document-level dir="rtl" + class "ccc-fa" set per page in main.html) ---- */
+/* Persian typography */
+.ccc-fa .md-typeset{ font-family:'Vazirmatn','Inter',Tahoma,system-ui,sans-serif; }
 
-/* ---- LTR protection: code, commands, paths, URLs, filenames, services, IPs/ports ---- */
-.ccc-rtl code,
-.ccc-rtl kbd,
-.ccc-rtl pre,
-.ccc-rtl .highlight,
-.ccc-rtl .md-typeset pre > code{
-  direction:ltr;
-  unicode-bidi:isolate;
-  text-align:left;
-  font-family:var(--md-code-font);
+/* Force true RTL on the page chrome + content (Material sets body dir=ltr otherwise) */
+.ccc-fa body,
+.ccc-fa .md-content,
+.ccc-fa .md-typeset,
+.ccc-fa .md-sidebar,
+.ccc-fa .md-nav,
+.ccc-fa .md-nav--secondary{
+  direction:rtl;
+  text-align:right;
 }
-.ccc-rtl pre{ display:block; }
-.ccc-rtl td code,.ccc-rtl th code{ direction:ltr; unicode-bidi:isolate; }
+
+/* ---- LTR protection: commands, code, paths, URLs, filenames, services, ports, domains ---- */
+.ccc-fa .md-typeset code,
+.ccc-fa .md-typeset kbd,
+.ccc-fa .md-typeset pre,
+.ccc-fa .md-typeset pre > code,
+.ccc-fa .md-typeset .highlight,
+.ccc-fa .md-typeset .highlighttable{
+  direction:ltr !important;
+  unicode-bidi:isolate !important;
+  text-align:left !important;
+}
+
+/* ---- TOC + nav: mixed Persian/English — each entry picks its own base direction ---- */
+.ccc-fa .md-nav__link,
+.ccc-fa .md-nav__title{ unicode-bidi:plaintext; }
+
+/* ---- Category-typed lists: { .tech-list } renders the whole list LTR (identifier / command lists) ---- */
+/* Authors tag a list with {: .tech-list } (attr_list). Works on RTL pages without per-item detection. */
+.md-typeset .tech-list{ direction:ltr; text-align:left; }
+.md-typeset .tech-list li{ direction:ltr; text-align:left; }
