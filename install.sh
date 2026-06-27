@@ -65,6 +65,7 @@ CF_ZONE_ID=""
 CF_RECORD_NAME=""
 TLS_CERT_PATH=""
 TLS_KEY_PATH=""
+HTTPS_PORT=""       # selected Cloudflare-supported public HTTPS port (Feature 1)
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""   # cleared immediately after hashing in Phase 2g
 
@@ -149,6 +150,47 @@ cf_api() {
 # Usage: echo "$json" | json_get "d['result'][0]['id']"
 json_get() {
     python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null || true
+}
+
+# Cloudflare-supported HTTPS ports, in selection-preference order (443 first,
+# then 8443 as the most recognizable alternate, then the 20xx set). Feature 1.
+readonly CF_HTTPS_PORTS=(443 8443 2053 2083 2087 2096)
+
+# Echo the set of occupied local TCP listening ports (space-separated, padded).
+detect_occupied_tcp_ports() {
+    ss -Htln 2>/dev/null | awk '{print $4}' | sed 's/.*://' \
+        | grep -E '^[0-9]+$' | sort -un | tr '\n' ' '
+}
+
+# Choose the public HTTPS port from CF_HTTPS_PORTS minus occupied ports.
+# Default = 443 if free, else the first free port in preference order. On a
+# re-run, the currently-configured port is treated as available (own listener).
+# Result stored in HTTPS_PORT. Cloudflare-only; no custom ports.
+select_https_port() {
+    local occupied current p avail=()
+    occupied=" $(detect_occupied_tcp_ports) "
+    current=""
+    [[ -f "${CONF_DIR}/config.json" ]] && current="$(json_get \
+        "d.get('web',{}).get('https_port','')" < "${CONF_DIR}/config.json")"
+    for p in "${CF_HTTPS_PORTS[@]}"; do
+        if [[ "${occupied}" != *" ${p} "* || "${p}" == "${current}" ]]; then
+            avail+=("${p}")
+        fi
+    done
+    [[ ${#avail[@]} -gt 0 ]] || die \
+        "No Cloudflare-supported HTTPS port is free (${CF_HTTPS_PORTS[*]})." \
+        "Free one of those ports (see 'ss -ltn'), then re-run."
+    local default="${avail[0]}" choice ok
+    printf "\n  Cloudflare-supported HTTPS ports available: %s\n" "${avail[*]}"
+    printf "  Press Enter for the default. Custom ports are not allowed.\n"
+    while true; do
+        prompt choice "HTTPS port" "${default}"
+        ok=""
+        for p in "${avail[@]}"; do [[ "${choice}" == "${p}" ]] && ok=1 && break; done
+        [[ -n "${ok}" ]] && { HTTPS_PORT="${choice}"; break; }
+        warn "Choose one of: ${avail[*]} (Cloudflare-supported and currently free)."
+    done
+    info "HTTPS port selected: ${HTTPS_PORT}"
 }
 
 # --------------------------------------------------------------------------- #
@@ -262,6 +304,10 @@ phase1_validate() {
 
     info "A record '${CF_RECORD_NAME}' found, proxy ON"
 
+    # ---- 1f2  HTTPS port selection (Feature 1) ----------------------------- #
+    step "1f2 — HTTPS port"
+    select_https_port
+
     # ---- 1g  TLS certificate — must exist and be issued by Cloudflare ------ #
     step "1g — TLS certificate"
     local _default_cert="${TLS_DIR}/origin.pem"
@@ -368,6 +414,7 @@ phase1_validate() {
     printf '  %bInstallation summary%b\n' "${BOLD}" "${RESET}"
     printf "  %-24s %s\n" "Zone:"        "${CF_ZONE_NAME}"
     printf "  %-24s %s\n" "Hostname:"    "${CF_RECORD_NAME}"
+    printf "  %-24s %s\n" "HTTPS port:"  "${HTTPS_PORT}"
     printf "  %-24s %s\n" "API token:"   "${_token_preview}  (hidden)"
     printf "  %-24s %s\n" "Certificate:" "${TLS_CERT_PATH}"
     printf "  %-24s %s\n" "Private key:" "${TLS_KEY_PATH}"
@@ -565,14 +612,9 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
         info "Removed nginx default site symlink"
     fi
 
-    # Substitute CF_RECORD_NAME placeholder in the nginx template.
-    sed "s|<CF_RECORD_NAME>|${CF_RECORD_NAME}|g" \
-        "${APP_DIR}/deployment/conduit-cc.nginx" > "${NGINX_AVAILABLE}"
-    info "nginx config written to ${NGINX_AVAILABLE}"
-
-    # Create sites-enabled symlink (ln -sf is idempotent).
-    ln -sf "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
-    info "nginx symlink: ${NGINX_ENABLED}"
+    # The nginx site is rendered, validated, reloaded, and symlinked below by the
+    # shared ccc-apply-https-port helper — after the rate-limit zone exists, so
+    # `nginx -t` passes (the site references the login_limit zone).
 
     # Write the rate-limiting zone into the http context.
     #
@@ -600,26 +642,44 @@ RATELIMIT_EOF
     chmod 644 ${NGINX_RATELIMIT}
     info "Rate limiting zone written to ${NGINX_RATELIMIT}"
 
-    nginx -t 2>/dev/null || {
-        nginx -t   # re-run without redirect so user sees the error
-        die "nginx configuration test failed." \
-            "Check ${NGINX_AVAILABLE} for syntax errors."
-    }
-    info "nginx config valid"
+    # Install the shared HTTPS-port apply helper (root:root 0755) so install.sh,
+    # update.sh, and a future CLI share one validated render/reload/UFW path.
+    install -d -o root -g root -m 0755 /opt/conduit-cc/bin
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-apply-https-port" \
+        /opt/conduit-cc/bin/ccc-apply-https-port
 
-    # Reload if nginx is already running; otherwise it will start via systemd.
-    if systemctl is-active --quiet nginx; then
-        systemctl reload nginx
-        info "nginx reloaded"
-    fi
+    # Render the site for the selected HTTPS port, validate, reload, open UFW.
+    # The helper renders <CF_RECORD_NAME>/<CF_HTTPS_PORT>/redirect-suffix, creates
+    # the sites-enabled symlink, backs up any prior site, runs `nginx -t`, and
+    # reloads only on success (restoring the backup on failure).
+    /opt/conduit-cc/bin/ccc-apply-https-port apply \
+        --port "${HTTPS_PORT}" --hostname "${CF_RECORD_NAME}" \
+        || die "Failed to apply HTTPS port ${HTTPS_PORT}." \
+               "The previous nginx site (if any) was restored; see output above."
+    info "nginx site applied on HTTPS port ${HTTPS_PORT}"
+
+    # Persist the selected port to config.json (single source of truth) only
+    # after a successful apply, so the SoT never diverges from the live config.
+    python3 - "${CONF_DIR}/config.json" "${HTTPS_PORT}" <<'PYEOF'
+import json, sys
+path, port = sys.argv[1], int(sys.argv[2])
+with open(path) as fh:
+    cfg = json.load(fh)
+cfg.setdefault("web", {})["https_port"] = port
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write("\n")
+PYEOF
+    info "config.json web.https_port set to ${HTTPS_PORT}"
 
     # ---- 2j  UFW firewall -------------------------------------------------- #
     step "2j — Configuring UFW firewall"
     ufw allow 22/tcp  comment 'SSH'     &>/dev/null
     ufw allow 80/tcp  comment 'HTTP'    &>/dev/null
-    ufw allow 443/tcp comment 'HTTPS'   &>/dev/null
+    # The selected HTTPS port is opened by ccc-apply-https-port (comment 'CCC HTTPS').
     ufw --force enable &>/dev/null
-    info "UFW: 22/80/443 open, firewall enabled"
+    info "UFW: 22/80 + HTTPS port ${HTTPS_PORT} open, firewall enabled"
 
     # ---- 2k  Systemd service ----------------------------------------------- #
     step "2k — Installing systemd service"
@@ -993,8 +1053,13 @@ phase3_summary() {
     printf "\n"
     printf '  %bOK%b Conduit Control Center is installed and running.\n' "${GREEN}" "${RESET}"
     printf "\n"
-    printf '  %bDashboard URL:%b  https://%s/\n' "${BOLD}" "${RESET}" "${CF_RECORD_NAME}"
+    local _url_suffix=""
+    [[ "${HTTPS_PORT}" != "443" ]] && _url_suffix=":${HTTPS_PORT}"
+    printf '  %bDashboard URL:%b  https://%s%s/\n' "${BOLD}" "${RESET}" "${CF_RECORD_NAME}" "${_url_suffix}"
     printf '  %bAdmin user:%b     %s\n' "${BOLD}" "${RESET}" "${ADMIN_USERNAME}"
+    if [[ "${HTTPS_PORT}" != "443" ]]; then
+        printf '  %bNote:%b non-default HTTPS port %s — ensure your router forwards it and the Cloudflare record stays proxied.\n' "${YELLOW}" "${RESET}" "${HTTPS_PORT}"
+    fi
     printf "\n"
     printf "  Service management:\n"
     printf "    systemctl status  conduit-cc\n"
@@ -1017,7 +1082,7 @@ phase3_summary() {
     printf "    sudo ccc-unlock\n"
     printf "\n"
     printf '  %bNext steps:%b\n' "${BOLD}" "${RESET}"
-    printf '    1. Open https://%s/ and log in.\n' "${CF_RECORD_NAME}"
+    printf '    1. Open https://%s%s/ and log in.\n' "${CF_RECORD_NAME}" "${_url_suffix}"
     printf "    2. Add UFW rules for Conduit UDP port(s):\n"
     printf "         ss -ulnp | grep conduit\n"
     printf "         ufw allow <port>/udp comment 'Conduit'\n"

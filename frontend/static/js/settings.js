@@ -164,8 +164,27 @@
        Form submit handler
     ------------------------------------------------------------------ */
 
+    /* ------------------------------------------------------------------
+       loadConfigInfo
+       Read-only operational display: fetch GET /api/settings/info and show
+       the configured HTTPS port. Best-effort; failure leaves the placeholder.
+    ------------------------------------------------------------------ */
+
+    function loadConfigInfo() {
+        var portEl = el('settings-https-port');
+        if (!portEl) return;
+        apiFetch('/api/settings/info')
+            .then(function (data) {
+                if (data && typeof data.https_port !== 'undefined') {
+                    portEl.textContent = String(data.https_port);
+                }
+            })
+            .catch(function () { /* non-critical; leave the placeholder */ });
+    }
+
     onReady(function () {
         wireThemeToggle();   // independent of the password form below
+        loadConfigInfo();    // read-only HTTPS port display (transparency)
 
         var form      = el('settings-password-form');
         var submitBtn = el('settings-submit-btn');

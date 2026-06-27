@@ -59,7 +59,7 @@ server {
     listen      [::]:80;
     server_name <CF_RECORD_NAME>;   # replaced by install.sh (Issue #9)
 
-    return 301 https://$host$request_uri;
+    return 301 https://$host<CF_HTTPS_REDIRECT_SUFFIX>$request_uri;
 }
 
 # =============================================================================
@@ -67,8 +67,8 @@ server {
 # =============================================================================
 
 server {
-    listen      443 ssl;
-    listen      [::]:443 ssl;
+    listen      <CF_HTTPS_PORT> ssl;
+    listen      [::]:<CF_HTTPS_PORT> ssl;
     server_name <CF_RECORD_NAME>;   # replaced by install.sh (Issue #9)
 
     # ------------------------------------------------------------------

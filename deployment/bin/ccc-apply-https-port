@@ -1,0 +1,250 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-apply-https-port -- privileged helper that renders the CCC nginx site with
+the selected Cloudflare-compatible HTTPS port, validates it, reloads nginx, and
+reconciles the CCC-managed UFW rule. Shared by install.sh and update.sh (and
+reserved for a future management CLI).
+
+Security contract (do not weaken):
+  * argv-only; NEVER a shell (no shell=True / os.system / eval).
+  * Subcommands: only `apply` and `rollback`.
+  * `apply` accepts ONLY:
+        --port N        one of the Cloudflare-supported HTTPS ports
+        --hostname H    a validated DNS hostname (the dashboard record)
+    No path/unit/file arguments are ever accepted.
+  * STATELESS: config.json is NOT read here. The CALLER owns the single source
+    of truth (config.json web.https_port) and passes the validated port; the
+    helper re-validates independently (defense in depth).
+  * Hardcoded template/site/enabled paths and unit name.
+  * Atomic site write; back up the previous site first; run `nginx -t` BEFORE
+    reload; restore the backup and fail if validation fails.
+  * UFW: only add, or remove, the rule tagged with the comment "CCC HTTPS".
+    User-created firewall rules are never touched.
+  * flock-serialized; structured stderr/syslog-style logging; no secrets exist.
+
+Exit codes: 0 success; 2 validation/usage error; 3 filesystem/safety error;
+4 nginx / systemctl / ufw error.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+ALLOWED_PORTS = (443, 8443, 2053, 2083, 2087, 2096)
+TEMPLATE = "/opt/conduit-cc/deployment/conduit-cc.nginx"
+SITE = "/etc/nginx/sites-available/conduit-cc"
+ENABLED = "/etc/nginx/sites-enabled/conduit-cc"
+BACKUP = SITE + ".ccc.bak"
+UFW_COMMENT = "CCC HTTPS"
+LOCK_PATH = "/run/lock/ccc-apply-https-port.lock"
+
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)([A-Za-z0-9](-?[A-Za-z0-9])*\.)+[A-Za-z]{2,}$"
+)
+
+
+def log(msg: str) -> None:
+    sys.stderr.write(f"ccc-apply-https-port: {msg}\n")
+
+
+def die(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+    log(msg)
+    sys.exit(code)
+
+
+def validate_port(value: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        die(2, f"port must be an integer, got {value!r}")
+    if port not in ALLOWED_PORTS:
+        die(2, f"port {port} is not a Cloudflare-supported HTTPS port "
+               f"(allowed: {', '.join(str(p) for p in ALLOWED_PORTS)})")
+    return port
+
+
+def validate_hostname(value: str) -> str:
+    if not value or not _HOSTNAME_RE.match(value):
+        die(2, f"invalid hostname: {value!r}")
+    return value
+
+
+def run(argv: list[str]) -> subprocess.CompletedProcess:
+    # argv-only; never shell.
+    return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+def render(port: int, hostname: str) -> str:
+    try:
+        with open(TEMPLATE, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        die(3, f"cannot read template {TEMPLATE}: {exc}")
+    suffix = "" if port == 443 else f":{port}"
+    text = text.replace("<CF_RECORD_NAME>", hostname)
+    text = text.replace("<CF_HTTPS_PORT>", str(port))
+    text = text.replace("<CF_HTTPS_REDIRECT_SUFFIX>", suffix)
+    # Guard: no unresolved placeholders may remain.
+    leftover = re.findall(r"<CF_[A-Z_]+>", text)
+    if leftover:
+        die(3, f"unresolved placeholders in rendered site: {sorted(set(leftover))}")
+    return text
+
+
+def atomic_write(path: str, content: str) -> None:
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".ccc-nginx.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(3, f"cannot write {path}: {exc}")
+
+
+def ensure_symlink() -> None:
+    try:
+        if os.path.islink(ENABLED):
+            if os.readlink(ENABLED) == SITE:
+                return
+            os.unlink(ENABLED)
+        elif os.path.exists(ENABLED):
+            die(3, f"{ENABLED} exists and is not a symlink; refusing to replace")
+        os.symlink(SITE, ENABLED)
+    except OSError as exc:
+        die(3, f"cannot manage sites-enabled symlink: {exc}")
+
+
+def nginx_test() -> bool:
+    cp = run(["nginx", "-t"])
+    if cp.returncode != 0:
+        log("nginx -t failed:\n" + (cp.stderr or cp.stdout or "").strip())
+    return cp.returncode == 0
+
+
+def nginx_reload() -> None:
+    # Reload only if active; install.sh starts nginx via systemd otherwise.
+    active = run(["systemctl", "is-active", "--quiet", "nginx"]).returncode == 0
+    if not active:
+        log("nginx not active; skipping reload (will start via systemd)")
+        return
+    cp = run(["systemctl", "reload", "nginx"])
+    if cp.returncode != 0:
+        die(4, "systemctl reload nginx failed: " + (cp.stderr or "").strip())
+    log("nginx reloaded")
+
+
+def ufw_reconcile(port: int) -> None:
+    if not _have("ufw"):
+        log("ufw not present; skipping firewall reconcile")
+        return
+    status = run(["ufw", "status"])
+    if status.returncode != 0:
+        log("ufw status failed; skipping firewall reconcile")
+        return
+    # Remove only rules carrying our comment whose port differs from the target.
+    for line in status.stdout.splitlines():
+        if UFW_COMMENT not in line:
+            continue
+        m = re.match(r"\s*(\d{1,5})/tcp\b", line)
+        if not m:
+            continue
+        old = int(m.group(1))
+        if old != port:
+            cp = run(["ufw", "delete", "allow", f"{old}/tcp"])
+            if cp.returncode == 0:
+                log(f"removed stale CCC HTTPS rule {old}/tcp")
+            else:
+                log(f"warning: could not remove {old}/tcp: {(cp.stderr or '').strip()}")
+    # Ensure the selected port is allowed (idempotent).
+    cp = run(["ufw", "allow", f"{port}/tcp", "comment", UFW_COMMENT])
+    if cp.returncode != 0:
+        die(4, f"ufw allow {port}/tcp failed: " + (cp.stderr or "").strip())
+    log(f"ufw allows {port}/tcp (comment '{UFW_COMMENT}')")
+
+
+def _have(binary: str) -> bool:
+    dirs = os.environ.get("PATH", "").split(os.pathsep)
+    dirs += ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+    return any(os.access(os.path.join(d, binary), os.X_OK) for d in dirs if d)
+
+
+def cmd_apply(args: argparse.Namespace) -> None:
+    port = validate_port(args.port)
+    hostname = validate_hostname(args.hostname)
+    content = render(port, hostname)
+
+    had_prev = os.path.exists(SITE)
+    if had_prev:
+        try:
+            with open(SITE, encoding="utf-8") as fh:
+                prev = fh.read()
+            atomic_write(BACKUP, prev)
+        except OSError as exc:
+            die(3, f"cannot back up current site: {exc}")
+
+    atomic_write(SITE, content)
+    ensure_symlink()
+
+    if not nginx_test():
+        if had_prev:
+            atomic_write(SITE, prev)
+            log("restored previous site after failed nginx -t")
+        die(4, "nginx configuration invalid; no changes applied")
+
+    nginx_reload()
+    ufw_reconcile(port)
+    log(f"applied HTTPS port {port} for {hostname}")
+
+
+def cmd_rollback(_args: argparse.Namespace) -> None:
+    if not os.path.exists(BACKUP):
+        die(3, f"no backup found at {BACKUP}")
+    try:
+        with open(BACKUP, encoding="utf-8") as fh:
+            prev = fh.read()
+    except OSError as exc:
+        die(3, f"cannot read backup: {exc}")
+    atomic_write(SITE, prev)
+    ensure_symlink()
+    if not nginx_test():
+        die(4, "restored site failed nginx -t; manual intervention required")
+    nginx_reload()
+    log("rolled back to previous site")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="ccc-apply-https-port", add_help=True)
+    sub = parser.add_subparsers(dest="command", required=True)
+    p_apply = sub.add_parser("apply")
+    p_apply.add_argument("--port", required=True)
+    p_apply.add_argument("--hostname", required=True)
+    p_apply.set_defaults(func=cmd_apply)
+    p_rb = sub.add_parser("rollback")
+    p_rb.set_defaults(func=cmd_rollback)
+    args = parser.parse_args()
+
+    os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+    lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        args.func(args)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+if __name__ == "__main__":
+    main()

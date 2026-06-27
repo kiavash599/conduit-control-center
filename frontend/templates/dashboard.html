@@ -946,6 +946,20 @@
                 settings-error             — inline validation error paragraph
                 settings-success           — inline success message paragraph
             -->
+            <!-- Read-only configuration (operational transparency). API: GET /api/settings/info -->
+            <div class="card" id="settings-info-card">
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Configuration</h2>
+                        <p class="card__subtitle">Read-only operational details</p>
+                    </div>
+                </div>
+                <dl class="settings-info">
+                    <dt class="label">HTTPS port (configured)</dt>
+                    <dd id="settings-https-port">—</dd>
+                </dl>
+            </div>
+
             <div class="card" id="settings-card">
 
                 <div class="card__header">

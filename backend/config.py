@@ -177,6 +177,11 @@ class AppConfig:
         self.max_failed_login_attempts: int = app.get("max_failed_login_attempts", 5)
         self.lockout_duration_minutes: int = app.get("lockout_duration_minutes", 15)
 
+        # config.json "web" section. Missing key (older installs) -> 443, so the
+        # displayed/configured HTTPS port stays backward-compatible.
+        web = data.get("web", {})
+        self.web_https_port: int = int(web.get("https_port", 443))
+
         conduit = data.get("conduit", {})
         self.conduit_service_name: str = conduit.get("service_name", "conduit")
         self.conduit_action_timeout_seconds: int = conduit.get(

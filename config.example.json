@@ -9,6 +9,11 @@
     "lockout_duration_minutes": 15
   },
 
+  "web": {
+    "_comment_https_port": "Public HTTPS port served via the Cloudflare proxy. Cloudflare-supported HTTPS ports ONLY: 443, 8443, 2053, 2083, 2087, 2096. Written by install.sh; preserved and re-applied by update.sh. Visitors use https://<host>:<port>/ (the :port is omitted when 443). Apply with deployment/bin/ccc-apply-https-port.",
+    "https_port": 443
+  },
+
   "conduit": {
     "service_name": "conduit",
     "action_timeout_seconds": 10,

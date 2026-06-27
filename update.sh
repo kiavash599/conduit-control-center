@@ -667,7 +667,7 @@ phase3_deploy() {
     # and rewrite the sudoers file. The bin dir is created by install.sh; ensure
     # it exists for robustness.
     install -d -o root -g root -m 0755 /opt/conduit-cc/bin
-    for _h in ccc-apply-conduit-config ccc-personal-compartment ccc-ryve-claim ccc-restore-apply; do
+    for _h in ccc-apply-conduit-config ccc-personal-compartment ccc-ryve-claim ccc-restore-apply ccc-apply-https-port; do
         install -o root -g root -m 0755 \
             "${APP_DIR}/deployment/bin/${_h}" "/opt/conduit-cc/bin/${_h}"
         _h_meta="$(stat -c '%U:%a' "/opt/conduit-cc/bin/${_h}")"
@@ -710,12 +710,44 @@ EOF
     info "${SYSTEMD_UNIT} updated"
 
     step "3d - Updating nginx site configuration"
-    # Re-apply CF_RECORD_NAME substitution to the new template.
-    # CF_RECORD_NAME is read from /etc/conduit-cc/.env - no prompt needed.
-    # Idempotent: re-applying with the same hostname produces identical output.
-    sed "s|<CF_RECORD_NAME>|${CF_RECORD_NAME}|g" \
-        "${APP_DIR}/deployment/conduit-cc.nginx" > "${NGINX_AVAILABLE}"
-    info "nginx site config updated"
+    # Preserve the configured HTTPS port (single source of truth:
+    # config.json web.https_port). Legacy installs without the key infer 443 and
+    # persist it, so behaviour is unchanged. update.sh NEVER resets a non-443
+    # install to 443 and NEVER migrates the port automatically.
+    local _https_port
+    _https_port="$(json_get "d.get('web',{}).get('https_port',443)" \
+        < "${CONF_DIR}/config.json" 2>/dev/null || true)"
+    [[ "${_https_port}" =~ ^[0-9]+$ ]] || _https_port=443
+    # Persist inferred 443 for legacy installs (idempotent for current ones).
+    python3 - "${CONF_DIR}/config.json" "${_https_port}" <<'PYEOF'
+import json, sys
+path, port = sys.argv[1], int(sys.argv[2])
+try:
+    with open(path) as fh:
+        cfg = json.load(fh)
+except FileNotFoundError:
+    cfg = {}
+cfg.setdefault("web", {})["https_port"] = port
+with open(path, "w") as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write("\n")
+PYEOF
+    # Fail safe: if the persisted port is held by a DIFFERENT (non-nginx)
+    # listener, abort rather than silently changing a working deployment.
+    if ss -Htln 2>/dev/null | awk '{print $4}' | sed 's/.*://' \
+            | grep -qx "${_https_port}"; then
+        if ! ss -Htlnp 2>/dev/null | grep -E ":${_https_port}([[:space:]]|\$)" \
+                | grep -q nginx; then
+            die "HTTPS port ${_https_port} is in use by a non-nginx service." \
+                "Resolve the conflict, then re-run update. The port was not changed."
+        fi
+    fi
+    # Apply via the shared helper (renders host + port + redirect suffix, runs
+    # nginx -t, reloads, reconciles UFW, restores the prior site on failure).
+    /opt/conduit-cc/bin/ccc-apply-https-port apply \
+        --port "${_https_port}" --hostname "${CF_RECORD_NAME}" \
+        || die "Failed to apply HTTPS port ${_https_port}; previous nginx site restored."
+    info "nginx site config updated (HTTPS port ${_https_port})"
 
     step "3e - Updating nginx rate-limiting zone"
     cat > "${NGINX_RATELIMIT}" << 'RATELIMIT_EOF'

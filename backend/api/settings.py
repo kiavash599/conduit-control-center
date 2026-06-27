@@ -61,7 +61,7 @@ from backend.auth.cookies import (
 )
 from backend.auth.login import hash_password, verify_password
 from backend.auth.sessions import delete_all_sessions
-from backend.config import get_env_file_path, get_settings
+from backend.config import get_app_config, get_env_file_path, get_settings
 from backend.dependencies import (
     AuthenticatedUser,
     get_current_user,
@@ -141,6 +141,39 @@ async def set_theme(
         )
     set_theme_cookie(response, body.theme)
     return {"theme": body.theme}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/settings/info  (read-only operational transparency)
+# ---------------------------------------------------------------------------
+
+
+class SettingsInfo(BaseModel):
+    """Read-only configuration surfaced on the dashboard. No secrets."""
+
+    https_port: int
+
+
+@router.get(
+    "/info",
+    response_model=SettingsInfo,
+    summary="Read-only configuration info (operational transparency)",
+    responses={
+        200: {"description": "Configuration info returned"},
+        401: {"description": "Not authenticated"},
+    },
+)
+async def get_settings_info(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> SettingsInfo:
+    """
+    Return read-only configuration values for display on the dashboard.
+
+    Currently exposes the configured public HTTPS port (config.json
+    web.https_port; defaults to 443 on older installs). Read-only by design:
+    the port is changed only via install.sh / a future CLI, never here.
+    """
+    return SettingsInfo(https_port=get_app_config().web_https_port)
 
 
 # ---------------------------------------------------------------------------
