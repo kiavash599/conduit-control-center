@@ -1,0 +1,39 @@
+/* ---- Self-hosted fonts (no Google Fonts, no CDN) ---- */
+@font-face{ font-family:'Inter'; font-style:normal; font-weight:400 700;
+  font-display:swap; src:url('../fonts/Inter-Variable.woff2') format('woff2'); }
+@font-face{ font-family:'Vazirmatn'; font-style:normal; font-weight:400 700;
+  font-display:swap; src:url('../fonts/Vazirmatn-Variable.woff2') format('woff2'); }
+
+:root{
+  --md-text-font:'Inter';
+  --md-code-font: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  /* CCC brand palette — adjust to exact hex from docs/brand/ccc-logo-master.svg */
+  --md-primary-fg-color:#0F6E56;
+  --md-primary-fg-color--light:#1D9E75;
+  --md-primary-fg-color--dark:#085041;
+  --md-accent-fg-color:#1D9E75;
+}
+
+/* Explicit fallbacks so text is readable even before the woff2 files are added */
+body, .md-typeset{ font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+
+/* Persian pages render in Vazirmatn */
+.ccc-rtl{ font-family:'Vazirmatn','Inter',Tahoma,system-ui,sans-serif;
+  direction:rtl; text-align:right; line-height:1.95; }
+.ccc-rtl ul,.ccc-rtl ol{ padding-inline-start:1.4rem; padding-inline-end:0; }
+.ccc-rtl table{ text-align:right; }
+.ccc-rtl blockquote{ border-inline-start:4px solid var(--md-default-fg-color--lighter); border-inline-end:0; }
+
+/* ---- LTR protection: code, commands, paths, URLs, filenames, services, IPs/ports ---- */
+.ccc-rtl code,
+.ccc-rtl kbd,
+.ccc-rtl pre,
+.ccc-rtl .highlight,
+.ccc-rtl .md-typeset pre > code{
+  direction:ltr;
+  unicode-bidi:isolate;
+  text-align:left;
+  font-family:var(--md-code-font);
+}
+.ccc-rtl pre{ display:block; }
+.ccc-rtl td code,.ccc-rtl th code{ direction:ltr; unicode-bidi:isolate; }

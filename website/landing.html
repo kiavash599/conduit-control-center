@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conduit Control Center — Documentation</title>
+<link rel="icon" href="assets/branding/favicon.svg">
+<link rel="stylesheet" href="assets/stylesheets/extra.css">
+<style>
+:root{--ccc:#0F6E56;--ccc-d:#085041;--ink:#1b1b1b;--muted:#5f5e5a;--card:#fff;--bg:#f6f7f6;--line:#e3e3e0}
+@media (prefers-color-scheme:dark){:root{--ink:#ececec;--muted:#b4b2a9;--card:#1e1e1c;--bg:#141413;--line:#33332f}}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+.wrap{max-width:880px;margin:0 auto;padding:3rem 1.25rem 4rem;text-align:center}
+.logo{width:84px;height:84px;margin:0 auto 1rem;display:block}
+h1{font-size:30px;font-weight:600;margin:0 0 .4rem}
+.tag{color:var(--muted);font-size:17px;margin:0 auto 2.2rem;max-width:640px}
+.doors{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:0 0 1.8rem}
+.door{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.4rem 1.25rem;text-decoration:none;color:inherit;transition:border-color .15s}
+.door:hover{border-color:var(--ccc)}
+.door .k{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--ccc-d)}
+.door .t{font-size:21px;font-weight:600;margin:.25rem 0 .15rem}
+.door .s{color:var(--muted);font-size:14px}
+.fa-door{direction:rtl;font-family:'Vazirmatn','Inter',Tahoma,sans-serif}
+.links{display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:center;font-size:15px}
+.links a{color:var(--ccc-d);text-decoration:none}.links a:hover{text-decoration:underline}
+.foot{margin-top:2.5rem;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <img class="logo" src="assets/branding/logo.svg" alt="Conduit Control Center logo">
+  <h1>Conduit Control Center</h1>
+  <p class="tag">An open-source dashboard to manage Psiphon Conduit on a Raspberry Pi — secure, lightweight, beginner-friendly. مدیریت Psiphon Conduit روی رزبری‌پای.</p>
+  <div class="doors">
+    <a class="door" href="user-guide/01-introduction/">
+      <div class="k">Documentation</div><div class="t">English guide</div>
+      <div class="s">16 chapters — install, configure, operate</div>
+    </a>
+    <a class="door fa-door" href="fa/user-guide/01-introduction/">
+      <div class="k">مستندات</div><div class="t">راهنمای فارسی</div>
+      <div class="s">۱۶ فصل — نصب، پیکربندی و بهره‌برداری</div>
+    </a>
+  </div>
+  <div class="links">
+    <a href="pre-install/">Quick Start</a>
+    <a href="https://github.com/kiavash599/conduit-control-center">GitHub repository</a>
+    <a href="https://github.com/kiavash599/conduit-control-center/releases/latest">Latest release</a>
+  </div>
+  <p class="foot">The Markdown sources in docs/ remain the canonical source of truth.</p>
+</main>
+</body>
+</html>

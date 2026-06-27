@@ -1,0 +1,123 @@
+site_name: Conduit Control Center — Documentation
+site_description: Manage Psiphon Conduit on a Raspberry Pi — bilingual (English / فارسی) guide.
+site_url: https://kiavash599.github.io/conduit-control-center/
+repo_url: https://github.com/kiavash599/conduit-control-center
+repo_name: conduit-control-center
+edit_uri: ""
+
+docs_dir: docs
+site_dir: site
+use_directory_urls: true
+
+theme:
+  name: material
+  custom_dir: website/overrides
+  language: en
+  logo: assets/branding/logo.svg
+  favicon: assets/branding/favicon.svg
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle: { icon: material/weather-night, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle: { icon: material/weather-sunny, name: Switch to light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+extra:
+  generator: false
+  analytics: {}
+  social: []
+
+hooks:
+  - website/hooks.py
+
+plugins:
+  - search:
+      lang: [en]
+      separator: '[\s\-\.‌]+'
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+validation:
+  nav: { omitted_files: warn, not_found: warn }
+  links: { not_found: warn, unrecognized_links: warn, absolute_links: ignore }
+
+exclude_docs: |
+  README.md
+  PROJECT-STATUS.md
+  visual-assets-manifest.md
+  architecture.md
+  dev-setup.md
+  release-checklist.md
+  conduit-metrics-source.md
+  CCC_v0.1_GitHub_Issues.md
+  roadmap/
+  closure/
+  health-checks/
+  diagrams/source/
+  diagrams/specifications/
+  diagrams/STYLE.md
+  screenshots/INTEGRATION-SYNC.md
+
+nav:
+  - English:
+      - Introduction: user-guide/01-introduction.md
+      - Hardware Requirements: user-guide/02-hardware-requirements.md
+      - Installing Ubuntu: user-guide/03-installing-ubuntu.md
+      - Networking Fundamentals (Part 1): user-guide/04-networking-fundamentals.md
+      - Networking Fundamentals (Part 2): user-guide/04a-understanding-home-internet-equipment.md
+      - Domains, DNS & Cloudflare: user-guide/05-domains-dns-and-cloudflare.md
+      - Installing CCC: user-guide/06-installing-ccc.md
+      - First Login & Dashboard Tour: user-guide/07-first-login-and-dashboard-tour.md
+      - Contribution Advisor: user-guide/08-contribution-advisor.md
+      - Conduit Configuration: user-guide/09-conduit-configuration.md
+      - Personal Mode: user-guide/10-personal-mode.md
+      - Ryve Integration: user-guide/11-ryve-integration.md
+      - Backup & Restore: user-guide/12-backup-and-restore.md
+      - Maintenance & Troubleshooting: user-guide/13-system-maintenance-and-troubleshooting.md
+      - Security Model: user-guide/14-security-model.md
+      - Advanced Administration: user-guide/15-advanced-administration.md
+      - FAQ: user-guide/16-faq.md
+      - TLS / Origin Certificate Setup: tls-setup.md
+      - Pre-install Checklist: pre-install.md
+  - فارسی (Persian):
+      - مقدمه: fa/user-guide/01-introduction.md
+      - نیازمندی‌های سخت‌افزاری: fa/user-guide/02-hardware-requirements.md
+      - نصب Ubuntu: fa/user-guide/03-installing-ubuntu.md
+      - مفاهیم پایه شبکه (بخش اول): fa/user-guide/04-networking-fundamentals.md
+      - مفاهیم پایه شبکه (بخش دوم): fa/user-guide/04a-understanding-home-internet-equipment.md
+      - دامنه، DNS و Cloudflare: fa/user-guide/05-domains-dns-and-cloudflare.md
+      - نصب CCC: fa/user-guide/06-installing-ccc.md
+      - اولین ورود و معرفی داشبورد: fa/user-guide/07-first-login-and-dashboard-tour.md
+      - مشاور مشارکت: fa/user-guide/08-contribution-advisor.md
+      - پیکربندی Conduit: fa/user-guide/09-conduit-configuration.md
+      - حالت شخصی: fa/user-guide/10-personal-mode.md
+      - یکپارچه‌سازی Ryve: fa/user-guide/11-ryve-integration.md
+      - پشتیبان‌گیری و بازیابی: fa/user-guide/12-backup-and-restore.md
+      - نگهداری و عیب‌یابی: fa/user-guide/13-system-maintenance-and-troubleshooting.md
+      - مدل امنیتی: fa/user-guide/14-security-model.md
+      - مدیریت پیشرفته: fa/user-guide/15-advanced-administration.md
+      - پرسش‌های متداول: fa/user-guide/16-faq.md
+      - راه‌اندازی TLS: fa/tls-setup.md

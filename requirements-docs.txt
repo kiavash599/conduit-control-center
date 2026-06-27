@@ -1,0 +1,4 @@
+# CCC documentation site — pinned for reproducible builds.
+# Confirm latest stable at install time; bump deliberately.
+mkdocs==1.6.1
+mkdocs-material==9.5.39

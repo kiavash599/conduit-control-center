@@ -175,6 +175,13 @@ Full details: [docs/architecture.md](docs/architecture.md).
 
 ## Documentation
 
+📖 **Read the docs online:** **https://kiavash599.github.io/conduit-control-center/**
+
+- **English guide:** https://kiavash599.github.io/conduit-control-center/user-guide/01-introduction/
+- **راهنمای فارسی:** https://kiavash599.github.io/conduit-control-center/fa/user-guide/01-introduction/
+
+The published website is built from the Markdown in [`docs/`](docs/), which remains the canonical source of truth.
+
 ### User Guide
 
 The complete CCC user guide is a 17-chapter walkthrough covering hardware, networking, installation, the dashboard, and day-to-day operation. It is published in two editions:
