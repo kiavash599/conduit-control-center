@@ -34,19 +34,16 @@ Conduit and CCC can run on many types of Linux systems, but the Raspberry Pi is 
 
 ## 2.2 Which Raspberry Pi model is suitable?
 
-**Validated configuration**
+**Validated configurations**
 
-Raspberry Pi 4 (2 GB RAM)
+- Raspberry Pi 4 (2 GB RAM)
+- Raspberry Pi 3 Model B (1 GB RAM)
 
-CCC has been successfully run and validated on this configuration.
+CCC v0.3.1 has been successfully installed, configured, and operated on these configurations (see the validation record under `docs/health-checks/`).
 
 **Recommended configuration**
 
 Raspberry Pi 4 (4 GB RAM)
-
-**Future validation (planned)**
-
-Raspberry Pi 3 B (1 GB RAM)
 
 **Other options**
 

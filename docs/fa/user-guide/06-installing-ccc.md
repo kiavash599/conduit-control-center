@@ -250,25 +250,35 @@ Cloudflare API Token
 
 مثال:
 
-example.com
+`example.com`
 
 **Record Name**
 
 مثال:
 
-conduit.example.com
+`conduit.example.com`
+
+**HTTPS Port**
+
+نصب‌کننده فقط پورت‌های HTTPS سازگار با Cloudflare را که در حال حاضر آزاد هستند پیشنهاد می‌دهد: `443`، `8443`، `2053`، `2083`، `2087`، `2096`. برای پذیرفتن مقدار پیش‌فرض (`443` در صورت آزاد بودن) کلید Enter را بزنید. پورت دلخواه مجاز نیست.
+
+اگر پورتی غیر از `443` انتخاب کنید، داشبورد را در نشانی `https://<host>:<port>/` باز کنید و مطمئن شوید روتر شما آن پورت را به Pi هدایت می‌کند و رکورد DNS در Cloudflare همچنان پراکسی‌شده (ابر نارنجی) است.
+
+مثال:
+
+`443`
 
 **TLS Certificate**
 
 مثال:
 
-/home/ubuntu/origin.pem
+`/home/ubuntu/origin.pem`
 
 **TLS Key**
 
 مثال:
 
-/home/ubuntu/origin.key
+`/home/ubuntu/origin.key`
 
 **Admin Username**
 

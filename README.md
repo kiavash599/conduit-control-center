@@ -3,7 +3,7 @@
 [![CI](https://github.com/kiavash599/conduit-control-center/actions/workflows/ci.yml/badge.svg)](https://github.com/kiavash599/conduit-control-center/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%204%20%7C%20ARM64-lightgrey.svg)](docs/architecture.md)
+[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%203%2F4%20%7C%20ARM64-lightgrey.svg)](docs/architecture.md)
 
 **Conduit Control Center (CCC)** is a lightweight, open-source web dashboard that turns a Raspberry Pi into a managed [Psiphon Conduit](https://conduit.psiphon.ca) node — helping people in censored regions reach the open internet. Install it once, then run, monitor, configure, and back up your node from any browser. No command line required.
 
@@ -86,7 +86,13 @@ The full dashboard is shown above; see [Chapter 7 — First Login & Dashboard To
 
 ### Hardware
 
-- Raspberry Pi 4 (2 GB RAM minimum, 4 GB recommended)
+**Validated platforms** — CCC v0.3.1 installed, configured, and operated successfully:
+
+- Raspberry Pi 3 Model B (1 GB RAM)
+- Raspberry Pi 4 (2 GB RAM)
+
+**Recommended:** Raspberry Pi 4 (4 GB RAM)
+
 - Ubuntu 22.04 LTS ARM64
 - A stable internet connection with a public IP address
 

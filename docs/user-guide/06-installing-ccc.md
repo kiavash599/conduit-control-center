@@ -243,25 +243,35 @@ Cloudflare API Token
 
 Example:
 
-example.com
+`example.com`
 
 **Record Name**
 
 Example:
 
-conduit.example.com
+`conduit.example.com`
+
+**HTTPS Port**
+
+The installer offers only Cloudflare-supported HTTPS ports that are currently free: `443`, `8443`, `2053`, `2083`, `2087`, `2096`. Press Enter to accept the default (`443` when it is free). Custom ports are not allowed.
+
+If you choose a port other than `443`, open the dashboard at `https://<host>:<port>/`, and make sure your router forwards that port to the Pi and the Cloudflare DNS record stays proxied (orange cloud).
+
+Example:
+
+`443`
 
 **TLS Certificate**
 
 Example:
 
-/home/ubuntu/origin.pem
+`/home/ubuntu/origin.pem`
 
 **TLS Key**
 
 Example:
 
-/home/ubuntu/origin.key
+`/home/ubuntu/origin.key`
 
 **Admin Username**
 

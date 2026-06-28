@@ -89,6 +89,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | Parity Guard | ✅ PASS (Existence · EN↔FA parity · Orphans · Hygiene) |
 | Docs Website (MkDocs) | ✅ Phase 1 complete — Material, Persian RTL, self-hosted fonts, bilingual landing page |
 | Authoring Style Guide | ✅ RTL/LTR v1.0 (`CONTRIBUTING.md`); existing chapters not yet normalized → Deferred (§6) |
+| Hardware validation | ✅ v0.3.1 validated on Raspberry Pi 4 (2 GB) and Raspberry Pi 3 Model B (1 GB) — see `docs/health-checks/v0.3.1-hardware-validation.md` |
 
 ## 8. Release Timeline
 
