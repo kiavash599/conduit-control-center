@@ -136,6 +136,30 @@
     /* ------------------------------------------------------------------
        Install
     ------------------------------------------------------------------ */
+    /* Render a backend error payload's `detail` as readable text.
+       - string         -> the string itself
+       - array (FastAPI 422 validation list) -> join the entries' `msg` fields,
+                           falling back to the generic message if none are simple
+       - object         -> its `msg` if it is a simple string, else generic
+       - missing/other  -> "Could not start the update."
+       Prevents FastAPI's structured 422 detail from rendering as "[object Object]". */
+    function formatDetail(d) {
+        var generic = 'Could not start the update.';
+        if (!d) return generic;
+        var detail = d.detail;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail)) {
+            var msgs = detail
+                .map(function (e) { return (e && typeof e.msg === 'string') ? e.msg : null; })
+                .filter(function (m) { return !!m; });
+            return msgs.length ? msgs.join('; ') : generic;
+        }
+        if (detail && typeof detail === 'object' && typeof detail.msg === 'string') {
+            return detail.msg;
+        }
+        return generic;
+    }
+
     function doInstall(version) {
         if (!version) return;
         show('upd-confirm-modal', false);
@@ -145,12 +169,13 @@
 
         rawFetch('/api/update/install', {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ version: version })
         })
             .then(function (r) {
                 if (r && r.status === 202) { pollStatus(); return; }
                 return (r ? r.json() : Promise.resolve(null))
-                    .then(function (d) { setText('upd-progress-msg', (d && d.detail) || 'Could not start the update.'); },
+                    .then(function (d) { setText('upd-progress-msg', formatDetail(d)); },
                           function () { setText('upd-progress-msg', 'Could not start the update.'); })
                     .then(function () { if (btn) btn.disabled = false; });
             })
