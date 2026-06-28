@@ -7,6 +7,7 @@
 #   sudo bash update.sh              Update from the directory containing
 #                                    this script (same pattern as install.sh)
 #   sudo bash update.sh --source DIR Update from an explicit source directory
+#   sudo bash update.sh --ccc-only   Update CCC only; skip the Conduit Core binary
 #   sudo bash update.sh --help       Show this help
 #
 # The source directory must be a checkout or unpacked tarball of the new
@@ -88,6 +89,10 @@ readonly CONDUIT_DATA_DIR="/var/lib/conduit"
 
 # Populated by _parse_args; defaults to SCRIPT_DIR.
 SOURCE_DIR=""
+
+# Populated by _parse_args; when true, skip the Conduit Core binary update
+# (Phase 2b). Used by the one-click CCC-only update path (Feature 2).
+CCC_ONLY=false
 
 # Populated by phase1_backup; used by phase5_rollback.
 BACKUP_DIR=""
@@ -224,6 +229,9 @@ _parse_args() {
             --source=*)
                 SOURCE_DIR="${_arg#--source=}"
                 ;;
+            --ccc-only)
+                CCC_ONLY=true
+                ;;
             --help|-h)
                 sed -n '2,/^set -euo pipefail/p' "$0" \
                     | grep '^#' | sed 's/^#[[:space:]]\{0,1\}//'
@@ -231,7 +239,7 @@ _parse_args() {
                 ;;
             *)
                 printf "Unknown option: %s\n" "${_arg}" >&2
-                printf "Usage: sudo bash %s [--source DIR|--help]\n" "$0" >&2
+                printf "Usage: sudo bash %s [--source DIR|--ccc-only|--help]\n" "$0" >&2
                 exit 1
                 ;;
         esac
@@ -667,7 +675,7 @@ phase3_deploy() {
     # and rewrite the sudoers file. The bin dir is created by install.sh; ensure
     # it exists for robustness.
     install -d -o root -g root -m 0755 /opt/conduit-cc/bin
-    for _h in ccc-apply-conduit-config ccc-personal-compartment ccc-ryve-claim ccc-restore-apply ccc-apply-https-port; do
+    for _h in ccc-apply-conduit-config ccc-personal-compartment ccc-ryve-claim ccc-restore-apply ccc-apply-https-port ccc-update-apply; do
         install -o root -g root -m 0755 \
             "${APP_DIR}/deployment/bin/${_h}" "/opt/conduit-cc/bin/${_h}"
         _h_meta="$(stat -c '%U:%a' "/opt/conduit-cc/bin/${_h}")"
@@ -691,6 +699,7 @@ ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl stop conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart conduit
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-apply-conduit-config
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-restore-apply
+${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-update-apply
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-personal-compartment
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-ryve-claim
 EOF
@@ -1267,7 +1276,11 @@ _parse_args "$@"
 phase0_preflight
 phase1_backup
 phase2_preinstall
-phase2b_conduit_update
+if [[ "${CCC_ONLY}" == true ]]; then
+    info "CCC-only update (--ccc-only): skipping Conduit Core binary update (Phase 2b)"
+else
+    phase2b_conduit_update
+fi
 phase3_deploy
 phase_m2_config_write_artifacts
 phase_bs1_reduced_guard

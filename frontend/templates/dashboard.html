@@ -106,6 +106,21 @@
                 </svg>
                 Settings
             </a>
+
+            <a href="#updates"
+               class="nav__item"
+               id="nav-updates"
+               data-section="updates"
+               aria-current="false">
+                <!-- Icon: download / update -->
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+                     aria-hidden="true" focusable="false">
+                    <path d="M8 2v7M5 6l3 3 3-3M2.5 13h11"
+                          stroke="currentColor" stroke-width="1.5"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Software Updates
+            </a>
         </nav>
 
         <!-- Sidebar footer: logout -->
@@ -924,6 +939,75 @@
         </div><!-- /#section-system -->
 
         <!-- ── Section: Settings ─────────────────────────────────────── -->
+        <!--
+          Software Updates — Feature 2
+          ----------------------------
+          JS: frontend/static/js/updates.js
+          API: GET /api/update/check · POST /api/update/install · GET /api/update/status
+          One-click CCC update (no auto-update, no Conduit Core). Read-only check;
+          install is operator-initiated and reconnects across the service restart.
+        -->
+        <div id="section-updates" class="section" aria-labelledby="page-title" hidden>
+            <div class="card" id="updates-card">
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Software Updates</h2>
+                        <p class="card__subtitle">Conduit Control Center</p>
+                    </div>
+                </div>
+
+                <dl class="settings-info">
+                    <dt class="label">Current</dt>
+                    <dd id="upd-current">—</dd>
+                    <dt class="label">Latest</dt>
+                    <dd id="upd-latest">—</dd>
+                    <dt class="label">Status</dt>
+                    <dd id="upd-status">—</dd>
+                    <dt class="label">Last checked</dt>
+                    <dd id="upd-last-checked">—</dd>
+                </dl>
+
+                <div id="upd-offline" class="banner" role="status" hidden>
+                    Couldn't reach GitHub. Showing the last known result. You can still
+                    update manually over SSH.
+                </div>
+
+                <div id="upd-notes-wrap" hidden>
+                    <p class="label">What's new</p>
+                    <ul id="upd-notes"></ul>
+                </div>
+
+                <div id="upd-core-warning" class="banner" role="status" hidden>
+                    This release recommends a newer Conduit Core.
+                    Current Core: <span id="upd-core-current">—</span> ·
+                    Recommended Core: <span id="upd-core-recommended">—</span>.
+                    CCC will still update; Conduit Core is not changed.
+                </div>
+
+                <div class="form-group">
+                    <button type="button" class="btn" id="upd-check-btn">Check Now</button>
+                    <button type="button" class="btn btn--primary" id="upd-install-btn" hidden>Install Update</button>
+                </div>
+
+                <!-- Core-warning confirmation (inline; operator decides) -->
+                <div id="upd-confirm-modal" class="banner" role="alertdialog"
+                     aria-labelledby="upd-confirm-text" hidden>
+                    <p id="upd-confirm-text">
+                        This release recommends a newer Conduit Core than is installed.
+                        Continue with the CCC-only update anyway?
+                    </p>
+                    <div class="form-group">
+                        <button type="button" class="btn btn--primary" id="upd-confirm-yes">Continue Anyway</button>
+                        <button type="button" class="btn" id="upd-confirm-no">Cancel</button>
+                    </div>
+                </div>
+
+                <div id="upd-progress" class="banner" role="status" hidden>
+                    <span id="upd-progress-msg"></span>
+                </div>
+            </div>
+        </div>
+
         <div id="section-settings" class="section" aria-labelledby="page-title" hidden>
 
             <!--
@@ -1726,4 +1810,7 @@
 <!-- Epic #4 S4A.2c: Backup Create UI behaviour + download flow.
      Wires the Create Backup card; uses the shared rawFetch() helper (api.js). -->
 <script src="{{ static_url('js/backup.js') }}"></script>
+
+<!-- Feature 2: Software Updates card — check / install / reconnect status. -->
+<script src="{{ static_url('js/updates.js') }}"></script>
 {% endblock %}

@@ -741,6 +741,19 @@ PYEOF
         "Restore helper ownership/perms wrong (${rs_helper_meta}); expected root:755"
     info "Restore helper installed (root:root 0755)"
 
+    # ---- 2l-up  Update helper (Feature 2) ---------------------------------- #
+    # Privileged CCC updater. Runs AS root (via the (root) sudoers grant below):
+    # reads a verified CCC release tarball on stdin, then runs the installed
+    # update.sh --ccc-only. argv-only ("apply"); never takes a tag/ref/path.
+    # Root-owned 0755; not writable by ${APP_USER}.
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-update-apply" \
+        /opt/conduit-cc/bin/ccc-update-apply
+    up_helper_meta="$(stat -c '%U:%a' /opt/conduit-cc/bin/ccc-update-apply)"
+    [ "${up_helper_meta}" = "root:755" ] || die \
+        "Update helper ownership/perms wrong (${up_helper_meta}); expected root:755"
+    info "Update helper installed (root:root 0755)"
+
     # ---- 2l  sudoers rule for Conduit controls ----------------------------- #
     # adapter.py calls "sudo systemctl start|stop|restart conduit" and, for the
     # M2 config write path, "sudo /opt/conduit-cc/bin/ccc-apply-conduit-config".
@@ -760,6 +773,7 @@ ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl stop conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart conduit
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-apply-conduit-config
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-restore-apply
+${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-update-apply
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-personal-compartment
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-ryve-claim
 EOF

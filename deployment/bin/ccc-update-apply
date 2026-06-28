@@ -1,0 +1,233 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-update-apply -- privileged, single-purpose CCC updater (Feature 2).
+
+Security contract (DO NOT WEAKEN):
+  * argv-only CONTROL: the ONLY accepted invocation is exactly `apply`.
+    It NEVER accepts a tag, ref, branch, version, path, URL, or command.
+  * The update PAYLOAD (a CCC release SOURCE tarball, .tar.gz) is read from
+    STDIN ONLY -- never a filesystem path argument (mirrors ccc-restore-apply).
+  * Hardcoded action and nothing else: extract the payload to a temp tree,
+    validate it, then run the HARDCODED, INSTALLED updater
+        /opt/conduit-cc/update.sh --ccc-only --source <tree>
+    The helper NEVER executes any script contained in the payload; the payload
+    is treated as DATA only (rsynced in by the trusted installed update.sh).
+  * No generic runner, no command framework, no extensibility hooks.
+  * Refuses anything that is not a strict version INCREASE over the installed
+    APP_VERSION (no downgrade, no reinstall).
+  * flock-serialized; double-fork + setsid worker that outlives conduit-cc;
+    outcome written atomically to /var/lib/conduit-cc/update-status.json.
+  * No secrets are handled or logged.
+
+Exit codes (pre-detach foreground): 0 accepted (worker detached);
+  2 usage/validation error; 3 filesystem/safety error.
+After detach, the outcome lives in the status file (this process exits 0).
+"""
+from __future__ import annotations
+
+import datetime
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+import uuid
+
+# ---- Hardcoded, non-overridable constants ----------------------------------
+STATE_DIR = "/var/lib/conduit-cc"
+STATUS_PATH = f"{STATE_DIR}/update-status.json"
+LOCK_PATH = "/run/lock/ccc-update-apply.lock"
+INSTALLED_UPDATE_SH = "/opt/conduit-cc/update.sh"          # trusted, installed
+INSTALLED_VERSION_PY = "/opt/conduit-cc/backend/_version.py"
+PAYLOAD_VERSION_REL = "backend/_version.py"
+PAYLOAD_UPDATE_REL = "update.sh"
+MAX_PAYLOAD_BYTES = 200 * 1024 * 1024                      # 200 MiB hard cap
+_VERSION_RE = re.compile(r'APP_VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
+
+
+def log(msg: str) -> None:
+    sys.stderr.write(f"ccc-update-apply: {msg}\n")
+
+
+def die(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+    log(msg)
+    sys.exit(code)
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_version(text: str) -> tuple[int, int, int] | None:
+    m = _VERSION_RE.search(text)
+    if not m:
+        return None
+    return tuple(int(p) for p in m.group(1).split("."))  # type: ignore[return-value]
+
+
+def _version_str(v: tuple[int, int, int]) -> str:
+    return ".".join(str(p) for p in v)
+
+
+def write_status(state: str, **fields) -> None:
+    doc = {"schema": 1, "state": state, "updated_at": _now()}
+    doc.update(fields)
+    tmp = f"{STATUS_PATH}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, STATUS_PATH)
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: str) -> None:
+    # Reject absolute paths and parent traversal; prefer the stdlib data filter.
+    dest_abs = os.path.realpath(dest)
+    for member in tar.getmembers():
+        target = os.path.realpath(os.path.join(dest, member.name))
+        if not (target == dest_abs or target.startswith(dest_abs + os.sep)):
+            die(3, f"unsafe path in tarball: {member.name!r}")
+        if member.issym() or member.islnk():
+            die(3, f"links not allowed in tarball: {member.name!r}")
+    try:
+        tar.extractall(dest, filter="data")  # Python >= 3.12
+    except TypeError:
+        tar.extractall(dest)  # older Python; guarded by the checks above
+
+
+def _read_installed_version() -> tuple[int, int, int]:
+    try:
+        with open(INSTALLED_VERSION_PY, encoding="utf-8") as fh:
+            v = _parse_version(fh.read())
+    except OSError as exc:
+        die(3, f"cannot read installed version: {exc}")
+    if v is None:
+        die(3, "installed APP_VERSION not found")
+    return v
+
+
+def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
+    """Read the tarball from stdin, extract, locate the source tree, validate.
+    Returns (tree_path, payload_version)."""
+    payload = os.path.join(work, "payload.tar.gz")
+    total = 0
+    with open(payload, "wb") as fh:
+        while True:
+            chunk = sys.stdin.buffer.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_PAYLOAD_BYTES:
+                die(2, "payload exceeds size limit")
+            fh.write(chunk)
+    if total == 0:
+        die(2, "empty payload on stdin")
+
+    extract_dir = os.path.join(work, "src")
+    os.makedirs(extract_dir, exist_ok=True)
+    try:
+        with tarfile.open(payload, "r:gz") as tar:
+            _safe_extract(tar, extract_dir)
+    except tarfile.TarError as exc:
+        die(2, f"cannot read payload tarball: {exc}")
+
+    # GitHub source tarballs wrap everything in a single top-level directory.
+    entries = [os.path.join(extract_dir, e) for e in os.listdir(extract_dir)]
+    dirs = [e for e in entries if os.path.isdir(e)]
+    tree = dirs[0] if len(dirs) == 1 else extract_dir
+
+    if not os.path.isfile(os.path.join(tree, PAYLOAD_UPDATE_REL)) or \
+       not os.path.isfile(os.path.join(tree, PAYLOAD_VERSION_REL)):
+        die(2, "payload is not a CCC source tree (missing update.sh/_version.py)")
+
+    with open(os.path.join(tree, PAYLOAD_VERSION_REL), encoding="utf-8") as fh:
+        pv = _parse_version(fh.read())
+    if pv is None:
+        die(2, "payload APP_VERSION not found")
+    return tree, pv
+
+
+def _detach() -> bool:
+    """Double-fork + setsid. Returns True in the worker, False in the parent."""
+    if os.fork() > 0:
+        return False  # original process: return to print ack and exit
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)  # intermediate child exits
+    return True  # grandchild = detached worker
+
+
+def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
+            update_id: str) -> None:
+    # Detach stdio from the (about-to-stop) parent service.
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    write_status("in_progress", id=update_id, pid=os.getpid(),
+                 from_version=_version_str(frm), to_version=_version_str(to),
+                 started_at=_now(), message="Applying CCC update")
+    try:
+        proc = subprocess.run(
+            ["bash", INSTALLED_UPDATE_SH, "--ccc-only", "--source", tree],
+            check=False,
+        )
+        rc = proc.returncode
+    except OSError as exc:
+        write_status("failed", id=update_id, from_version=_version_str(frm),
+                     to_version=_version_str(to), finished_at=_now(),
+                     message=f"could not launch updater: {exc}")
+        os._exit(3)
+
+    new_installed = _read_installed_version()
+    if rc == 0 and new_installed == to:
+        write_status("success", id=update_id, from_version=_version_str(frm),
+                     to_version=_version_str(to), finished_at=_now(),
+                     message="Update complete")
+    elif new_installed == frm:
+        write_status("rolled_back", id=update_id, from_version=_version_str(frm),
+                     to_version=_version_str(to), finished_at=_now(),
+                     message=f"Update failed (rc={rc}); rolled back to {_version_str(frm)}")
+    else:
+        write_status("failed", id=update_id, from_version=_version_str(frm),
+                     to_version=_version_str(to), finished_at=_now(),
+                     message=f"Update ended in an unexpected state (rc={rc}); see /var/backups/conduit-cc")
+    os._exit(0)
+
+
+def main() -> None:
+    if sys.argv[1:] != ["apply"]:
+        die(2, "usage: ccc-update-apply apply   (payload tarball on stdin)")
+
+    os.makedirs(STATE_DIR, exist_ok=True)
+    lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        die(2, "another update is already in progress")
+
+    installed = _read_installed_version()
+    work = tempfile.mkdtemp(prefix="ccc-update-", dir=STATE_DIR)
+    tree, payload_v = _ingest_payload(work)
+
+    if payload_v <= installed:
+        die(2, f"refusing non-upgrade: payload {_version_str(payload_v)} "
+               f"<= installed {_version_str(installed)} (no downgrade/reinstall)")
+
+    update_id = uuid.uuid4().hex[:12]
+    sys.stdout.write(f"accepted {update_id}\n")
+    sys.stdout.flush()
+
+    # Keep the flock across detach (inheritable) so a second invocation is rejected.
+    if _detach():
+        _worker(tree, installed, payload_v, update_id)
+    # Parent: ack already printed; exit success, leaving the worker running.
+    os._exit(0)
+
+
+if __name__ == "__main__":
+    main()

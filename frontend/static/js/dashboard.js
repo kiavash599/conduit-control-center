@@ -65,6 +65,12 @@
             title:    'Settings',
             subtitle: 'Account and application settings',
         },
+        updates: {
+            id:       'section-updates',
+            navId:    'nav-updates',
+            title:    'Software Updates',
+            subtitle: 'Update Conduit Control Center',
+        },
     };
 
     var DEFAULT_SECTION = 'dashboard';

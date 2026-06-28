@@ -60,6 +60,7 @@ from backend.api import (
     traffic_router,
 )
 from backend.api.backup import router as backup_router
+from backend.api.update import router as update_router
 from backend.api.advisor import ensure_advisor_state
 from backend.api.conduit import ensure_conduit_apply_lock
 from backend.api.ryve import ensure_ryve_store, router as ryve_router
@@ -304,6 +305,7 @@ app.include_router(ddns_router, prefix="/api/ddns")
 app.include_router(traffic_router, prefix="/api/traffic")
 app.include_router(advisor_router, prefix="/api")  # route path is "/advisor" -> /api/advisor
 app.include_router(backup_router, prefix="/api/backup")  # S4A.1 — POST /api/backup/create
+app.include_router(update_router, prefix="/api/update")  # Feature 2 — one-click CCC update
 
 # ---------------------------------------------------------------------------
 # Static files
