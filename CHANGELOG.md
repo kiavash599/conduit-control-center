@@ -11,6 +11,32 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.5] — 2026-06-28
+
+### Added
+
+- **Storage Protection** (Log Management / SD-Card Protection; `a6b6bd4`) —
+  long-term storage maintenance for SD-card-based Raspberry Pi installs:
+  - **logrotate integration** for `/var/log/conduit-cc/*.log`
+    (`deployment/conduit-cc.logrotate` — weekly, 4 rotations, compressed,
+    `su root conduit-cc`, no `copytruncate`; provisioned by `install.sh`,
+    re-provisioned by `update.sh`, removed by `uninstall.sh`);
+  - **automatic cleanup of `ccc-update-*` work directories** in `ccc-update-apply`
+    (a flock-guarded sweep of orphaned directories; the current work directory is
+    removed only after the terminal `update-status.json` is written);
+  - **improved long-term Raspberry Pi storage maintenance** overall.
+
+  Linux-native; no new privileged helper, sudoers rule, systemd timer, dashboard
+  action, or journald change.
+
+> **Release objective (not a feature of this release).** v0.3.5 is also the
+> milestone for the **first complete end-to-end Raspberry Pi validation of the
+> existing One-Click Update feature** (introduced in v0.3.2; lock-path fix in
+> v0.3.4). This release does **not** introduce or change One-Click Update
+> functionality — the validation is a release goal, not a changelog entry.
+
+---
+
 ## [0.3.4] — 2026-06-28
 
 ### Fixed
