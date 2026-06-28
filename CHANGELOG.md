@@ -11,6 +11,20 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.3] — 2026-06-28
+
+**Validation-only release — no functional changes.**
+
+This release exists solely to validate the Feature 2 one-click update path end to
+end (Dashboard → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect)
+against a real, stable, higher-version GitHub Release. It bumps the version stamp
+only; there are no changes to application logic, the installer, the updater, the
+privileged helpers, configuration, or documentation. A Pi running 0.3.2 detects
+0.3.3 as available and can perform a real dashboard-driven update to confirm the
+mechanism.
+
+---
+
 ## [0.3.2] — 2026-06-28
 
 ### Added
