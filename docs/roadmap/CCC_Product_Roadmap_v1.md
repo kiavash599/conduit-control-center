@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.19  
+**Revision:** 1.20  
 **Date:** 2026-06-28  
 **Status:** Reconciled  
 **Author:** CCC Development Team
@@ -74,7 +74,7 @@ tracked separately under [Documentation Workstream → Documentation Milestones]
 | 0.3.2 | `v0.3.2` | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); validated on Raspberry Pi 4 + Pi 3 B (1 GB) |
 | 0.3.3 | `v0.3.3` | 2026-06-28 | Validation release — exercised the one-click update path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
 | 0.3.4 | `v0.3.4` | 2026-06-28 | One-click update lock-path fix (EROFS): lock moved to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
-| 0.3.5 | *(planned)* | TBD | **Final planned manual Pi deployment** to validate the complete dashboard one-click update workflow; ships Log Management / SD-Card Protection (`a6b6bd4`). After success, one-click becomes the standard deployment mechanism (see *Deployment Strategy*) |
+| 0.3.5 | *(planned)* | TBD | **One-Click Update validation milestone** — installed once via manual SSH; the next update runs from the Dashboard solely to validate One-Click Update; ships Log Management / SD-Card Protection (`a6b6bd4`). Development then returns to SSH `update.sh` (see *Deployment Strategy*) |
 
 ---
 
@@ -767,14 +767,15 @@ Minimal, Linux-native log/disk hygiene for SD-card-based Raspberry Pi installs:
 
 Postponed (see *v0.4 Candidates*): journald drop-ins, dashboard cleanup action, scheduled cleanup timer, installer retention prompt, advanced log management.
 
-### Deployment Strategy — milestone (adopted 2026-06-28)
+### Deployment Strategy — One-Click Update validation milestone (adopted 2026-06-28; corrected 2026-06-28)
 
-A deployment-strategy milestone — **not** a removal of existing functionality.
+A One-Click Update *validation* milestone — it does **not** change the project's normal deployment workflow.
 
-- **v0.3.5 is the final *planned* manual Raspberry Pi deployment**, whose purpose is to validate the complete dashboard One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B.
-- **After successful validation, dashboard One-Click Update becomes the standard deployment mechanism** for routine updates.
-- **Manual SSH `update.sh` deployment remains supported**, with its role narrowed to: initial installation, disaster recovery, and emergency maintenance.
-- `install.sh` and `update.sh` are retained and maintained.
+- **v0.3.5 is the validation milestone for the One-Click Update feature.**
+- A **manual SSH deployment** (`update.sh`) is used **once** to install v0.3.5 on the Raspberry Pi.
+- The **next** update is then performed **from the Dashboard, intentionally and solely** to perform an end-to-end validation of the One-Click Update feature (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B.
+- **After successful validation, the normal development workflow returns to SSH-based deployment using `update.sh`.**
+- **Dashboard-based update remains a supported product capability for end users**, but it does **not** replace the project's normal development deployment workflow.
 
 ---
 
@@ -825,6 +826,7 @@ delivered; none are scheduled.
 | 1.17 | 2026-06-28 | CCC Development Team | **v0.3.2 released.** Cloudflare-compatible HTTPS port selection (Feature 1: installer prompt + `ccc-apply-https-port` + dashboard read-only display; `update.sh` preserves the chosen port) and one-click CCC update (Feature 2: dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases stable-only; async status + reconnect + automatic rollback; no auto-update; Conduit Core out of scope). Validated on Raspberry Pi 4 and Pi 3 B (1 GB). CHANGELOG stamped; `APP_VERSION` 0.3.2; closure record `docs/closure/v0.3.2-closure.md`. Historical rev-≤1.16 rows intact. |
 | 1.18 | 2026-06-28 | CCC Development Team | **Log Management / SD-Card Protection recorded (documentation-only; feature commit `a6b6bd4`, unreleased).** Added a "Log Management / SD-Card Protection — Delivered" subsection under *Maintenance & Patch Releases* (logrotate for `/var/log/conduit-cc/*.log` provisioned via install/update/uninstall; `ccc-update-apply` stale-`ccc-update-*` sweep under the update flock + current-workdir removal after the terminal `update-status.json`; Linux-native; no new helper/sudoers/timer/dashboard/journald) and five **postponed** items under *v0.4 Candidates* (journald drop-ins, dashboard cleanup, cleanup timer, installer retention prompt, advanced log management). Historical rev-≤1.17 rows intact; no feature scope changed. |
 | 1.19 | 2026-06-28 | CCC Development Team | **Release-status reconciliation + Deployment Strategy milestone.** Reconciled the Release History table (and `docs/PROJECT-STATUS.md`) to reflect **v0.3.2 released**, the **v0.3.3 validation release** (exposed the `/run/lock` EROFS), and **v0.3.4 released** (EROFS lock-path fix → `/var/lib/conduit-cc/.update.lock`); added planned **v0.3.5**. Marked Log Management / SD-Card Protection (`a6b6bd4`) **complete in code, validation scheduled for v0.3.5**. Added a **Deployment Strategy** milestone: v0.3.5 is the final *planned* manual Pi deployment to validate the full dashboard One-Click Update workflow; after success, dashboard One-Click Update becomes the standard deployment mechanism, with manual `update.sh` retained for initial install, disaster recovery, and emergency maintenance (not a removal). Postponed Log Management items and all historical rev-≤1.18 rows left intact; no feature scope changed. |
+| 1.20 | 2026-06-28 | CCC Development Team | **Deployment Strategy corrected.** The rev-1.19 wording wrongly implied dashboard One-Click Update would become the project's permanent/standard deployment workflow. Restated as a **One-Click Update *validation* milestone**: v0.3.5 is installed **once** via manual SSH (`update.sh`); the **next** update is performed from the Dashboard **solely** to validate One-Click Update end-to-end; **after success, the normal development workflow returns to SSH-based `update.sh` deployment**; Dashboard update remains a supported **end-user** capability but does **not** replace the project's normal development workflow. Updated the *Deployment Strategy* subsection, the 0.3.5 Release-History row, and `docs/PROJECT-STATUS.md` (§1/§3/§8/§9/§10). Rev-1.19 row left intact (history preserved); no feature scope changed. |
 
 ---
 

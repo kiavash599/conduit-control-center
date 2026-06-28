@@ -1,7 +1,7 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.19,
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.20,
 > Reconciled) owns forward planning and feature catalogues; the **CHANGELOG** owns
 > shipped history; **closure records** (`docs/closure/`) are optional per-epic
 > decision deep-dives. This file is the canonical closed-epic index and links the
@@ -13,9 +13,9 @@
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| **v0.3.4** (released 2026-06-28 — EROFS one-click lock-path fix) · v0.3.3 (validation release) · v0.3.2 (HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.19 | ✅ Released · clean baseline. Next: **v0.3.5** — final planned manual Pi deployment to validate the full one-click workflow (see §10) |
+| **v0.3.4** (released 2026-06-28 — EROFS one-click lock-path fix) · v0.3.3 (validation release) · v0.3.2 (HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.20 | ✅ Released · clean baseline. Next: **v0.3.5** — validation milestone for the One-Click Update feature (see §10) |
 
-Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), the v0.3.3 validation release (which exposed the `/run/lock` EROFS), and the v0.3.4 helper lock-path fix. Log Management / SD-Card Protection is **complete in code** (commit `a6b6bd4`) and **scheduled for validation in v0.3.5**. v0.3.5 is the final *planned* manual Raspberry Pi deployment, whose purpose is to validate the complete dashboard One-Click Update workflow end-to-end (see §10 Deployment Strategy).
+Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), the v0.3.3 validation release (which exposed the `/run/lock` EROFS), and the v0.3.4 helper lock-path fix. Log Management / SD-Card Protection is **complete in code** (commit `a6b6bd4`) and **scheduled for validation in v0.3.5**. v0.3.5 is the **validation milestone for the One-Click Update feature**: a manual SSH deployment installs v0.3.5 once, the **next** update is then performed from the Dashboard solely to validate One-Click Update end-to-end, after which the normal development workflow returns to SSH-based `update.sh` deployment (see §10 Deployment Strategy).
 
 ## 2. Closed Epics
 
@@ -48,7 +48,7 @@ Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: H
 
 ## 3. Active Epics
 
-**None blocking.** v0.3.2 → v0.3.4 released — HTTPS port selection + one-click update (Features 1 + 2, v0.3.2), the v0.3.3 validation release, and the v0.3.4 EROFS lock-path fix. Log Management / SD-Card Protection is complete in code (`a6b6bd4`), validation scheduled for **v0.3.5**. **v0.3.5 is the final *planned* manual Raspberry Pi deployment** — its purpose is to validate the complete dashboard One-Click Update workflow; after success, dashboard one-click becomes the standard deployment mechanism (see §10 Deployment Strategy). See Closed Epics.
+**None blocking.** v0.3.2 → v0.3.4 released — HTTPS port selection + one-click update (Features 1 + 2, v0.3.2), the v0.3.3 validation release, and the v0.3.4 EROFS lock-path fix. Log Management / SD-Card Protection is complete in code (`a6b6bd4`), validation scheduled for **v0.3.5**. **v0.3.5 is the validation milestone for One-Click Update** — manual SSH installs v0.3.5 once, the next update runs from the Dashboard solely to validate One-Click Update end-to-end, then development returns to SSH `update.sh`. Dashboard update stays a supported end-user capability but is **not** the project's normal development deployment workflow (see §10 Deployment Strategy). See Closed Epics.
 
 ## 4. Approved Next Epics
 
@@ -109,20 +109,21 @@ Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: H
 | v0.3.2 | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); Pi 4 + Pi 3 B validated |
 | v0.3.3 | 2026-06-28 | Validation release — exercised the one-click path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
 | v0.3.4 | 2026-06-28 | One-click update lock-path fix (EROFS): lock → `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
-| v0.3.5 (planned) | TBD | **Final planned manual Pi deployment** — validate the complete dashboard one-click update workflow; ships Log Management / SD-Card Protection (`a6b6bd4`). After success, one-click becomes the standard deployment mechanism (§10) |
+| v0.3.5 (planned) | TBD | **One-Click Update validation milestone** — installed once via manual SSH; the next update runs from the Dashboard solely to validate One-Click Update end-to-end; ships Log Management / SD-Card Protection (`a6b6bd4`). Development then returns to SSH `update.sh` (§10) |
 
 ## 9. Next Recommended Action
 
-**v0.3.4 released.** The v0.3.2 → v0.3.4 line shipped HTTPS port selection, one-click update, and the EROFS lock-path fix; Log Management / SD-Card Protection is complete in code (`a6b6bd4`). **Next: cut v0.3.5** — the final *planned* manual Raspberry Pi deployment — and use it to validate the complete dashboard-driven One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B, together with the Log Management feature. On success, **dashboard One-Click Update becomes the standard deployment mechanism** — manual `update.sh` retained for initial install, disaster recovery, and emergency maintenance (see §10). Then: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
+**v0.3.4 released.** The v0.3.2 → v0.3.4 line shipped HTTPS port selection, one-click update, and the EROFS lock-path fix; Log Management / SD-Card Protection is complete in code (`a6b6bd4`). **Next: cut v0.3.5** and install it **once** via manual SSH (`update.sh`); then perform the **next** update from the Dashboard **solely to validate** the One-Click Update feature end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B, together with the Log Management feature. **After successful validation, the normal development workflow returns to SSH-based `update.sh` deployment**; Dashboard update remains a supported end-user capability but does **not** replace the project's normal development workflow (see §10). Then: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
 
 ## 10. Deployment Strategy
 
-**Status: Policy adopted 2026-06-28 — a deployment-strategy milestone, not a removal of functionality.**
+**Status: Adopted 2026-06-28; corrected 2026-06-28. A One-Click Update *validation* milestone — it does not change the project's normal deployment workflow.**
 
-- **v0.3.5 is the final *planned* manual Raspberry Pi deployment.** Its purpose is to validate the complete dashboard-driven One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Raspberry Pi 4 and Pi 3 B.
-- **After successful validation, dashboard One-Click Update becomes the standard deployment mechanism** for routine CCC updates.
-- **Manual SSH deployment with `update.sh` remains fully supported**, with its role narrowed to: (1) **initial installation**, (2) **disaster recovery**, and (3) **emergency maintenance**.
-- This is a **deployment-strategy milestone, not a removal** of the manual path — `install.sh` and `update.sh` are retained and maintained.
+- **v0.3.5 is the validation milestone for the One-Click Update feature.**
+- A **manual SSH deployment** (`update.sh`) is used **once** to install v0.3.5 on the Raspberry Pi.
+- The **next** update is then performed **from the Dashboard, intentionally and solely to perform an end-to-end validation** of the One-Click Update feature.
+- **After successful validation, the normal development workflow returns to SSH-based deployment using `update.sh`.**
+- **Dashboard-based update remains a supported product capability for end users**, but it does **not** replace the project's normal development deployment workflow.
 
 ---
 
