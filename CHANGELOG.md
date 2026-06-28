@@ -11,7 +11,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.6] — 2026-06-28
+
+### Fixed
+
+- Dashboard One-Click Update install now sends `Content-Type: application/json`,
+  preventing `POST /api/update/install` from returning HTTP 422 before route
+  execution (the privileged helper never started and the update status stayed
+  `idle`). Frontend-only (`frontend/static/js/updates.js`, `e0c7891`); discovered
+  during v0.3.5 Raspberry Pi validation.
+- Dashboard now renders structured FastAPI validation errors readably instead of
+  displaying `[object Object]`.
+
+---
+
 ## [0.3.5] — 2026-06-28
+
+> **Known issue.** Dashboard One-Click Update install in v0.3.5 may fail with
+> HTTP 422 / `[object Object]`. Fixed in v0.3.6. A manual `update.sh` deployment is
+> required to reach v0.3.6 from v0.3.5 or earlier.
 
 ### Added
 
