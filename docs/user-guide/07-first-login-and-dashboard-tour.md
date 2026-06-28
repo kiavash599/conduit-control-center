@@ -490,7 +490,55 @@ Remove Claim
 
 The generated QR must be treated like a Secret.
 
-## 7.22 Logging out
+## 7.22 The Software Updates section
+
+**Purpose**
+
+Check for and install Conduit Control Center updates from the dashboard, without using the command line. Updates are always started by you — there is no automatic or background updating.
+
+**Scope**
+
+This updates Conduit Control Center only. It does not update Psiphon Conduit (the Core), which is managed separately.
+
+**What it shows**
+
+- Current — the version you are running.
+- Latest — the newest stable version available.
+- Status — whether you are up to date or an update is available.
+- Last checked — when CCC last contacted GitHub.
+- What's new — a short preview of the release notes.
+
+Updates come only from official, stable published releases.
+
+**Checking for updates**
+
+CCC checks automatically at most once a day. You can also select Check Now at any time.
+
+**Installing an update**
+
+When an update is available, select Install Update. CCC downloads the new version, applies it, and the dashboard restarts and reconnects automatically — after a short wait it shows the new version. Your settings, TLS certificate, and data are preserved. If anything goes wrong, CCC automatically rolls back to the previous version.
+
+**Conduit Core notice**
+
+If a release recommends a newer Conduit Core than the one installed, a notice appears with Continue Anyway and Cancel. You decide. Continuing updates Conduit Control Center only — Conduit Core is not changed.
+
+**If GitHub cannot be reached**
+
+CCC shows the last known result and keeps working. You can still update manually over SSH.
+
+**First update is manual**
+
+The one-click updater becomes available only after you are running a version that includes it. The first time, update once over SSH:
+
+```bash
+cd ~/conduit-control-center
+git pull
+sudo bash update.sh
+```
+
+After that, future updates can be done from this screen.
+
+## 7.23 Logging out
 
 **Purpose**
 
@@ -502,7 +550,7 @@ To log out, select Logout.
 
 On shared computers, always log out.
 
-## 7.23 Conclusion of this chapter
+## 7.24 Conclusion of this chapter
 
 Now:
 

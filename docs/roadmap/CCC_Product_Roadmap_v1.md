@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.16  
-**Date:** 2026-06-27  
+**Revision:** 1.17  
+**Date:** 2026-06-28  
 **Status:** Reconciled  
 **Author:** CCC Development Team
 
@@ -71,6 +71,7 @@ tracked separately under [Documentation Workstream → Documentation Milestones]
 | 0.2.0 | `v0.2.0` | 2026-06-17 | Smart Conduit Control — Conduit Configuration, Regional Analytics, Bandwidth Scheduling, Live Operations, Theme Support, Traffic/Historical charts, Contribution Advisor |
 | 0.3.0 | `v0.3.0` | 2026-06-21 | **First public release** — Personal Mode, Ryve Claim / Identity, Backup & Restore |
 | 0.3.1 | `v0.3.1` | 2026-06-24 | Hotfixes — D1 root-URL redirect, D2 Cloudflare screenshot correction |
+| 0.3.2 (RC) | `v0.3.2` *(pending)* | 2026-06-28 (prep) | **Release Candidate — not yet tagged/released.** HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); manual `update.sh` path validated on Raspberry Pi 4 + Pi 3 B (1 GB); real one-click validation pending against the published Release |
 
 ---
 
@@ -794,6 +795,7 @@ delivered; none are scheduled.
 | 1.14 | 2026-06-24 | CCC Development Team | **TLS onboarding made bilingual (Epic D Phases 1–3) — supersedes the rev-1.13 "English-only" decision.** `docs/fa/tls-setup.md` created (`05366fe`); EN/FA chapter references converted to language-routed markdown links — EN → `../tls-setup.md`, FA → `../tls-setup.md`→`docs/fa/tls-setup.md` (`957d497`); the 8 redacted TLS screenshots are **shared** by both guides (no duplicate FA images). D3 row updated to bilingual. Manifest/INTEGRATION-SYNC/PROJECT-STATUS reconciled. Historical rev-1.13 row left intact. Documentation-only; unreleased. |
 | 1.15 | 2026-06-25 | CCC Development Team | **Epic D — D4 (FA diagram parity) completed.** All 19 diagrams (DGM-01–19) integrated into the Persian guide: DGM-01–12 in FA ch04/04a/05 (Batches 1–2) and DGM-13–19 in FA ch10/11/12/14 (Batch 3), with the legacy Persian ASCII-art diagram blocks they replace removed and EN-paralleled navigation/micro-flows preserved. Full EN↔FA diagram parity. Diagram Program note updated to CLOSED (both editions); D4 marked Resolved in `docs/PROJECT-STATUS.md`; Manifest reconciled; CHANGELOG `[Unreleased]` entry added. Historical rev-≤1.14 rows left intact. Documentation-only; unreleased. |
 | 1.16 | 2026-06-27 | CCC Development Team | **Documentation Platform (MkDocs Phase 1) closed** as a platform/governance milestone. Added the MkDocs Material site (renders existing `docs/` in place, curated nav, `exclude_docs` for internal files), Persian RTL/LTR base support, self-hosted Vazirmatn + Inter (no Google Fonts/CDN/analytics), a bilingual landing page, and the **RTL/LTR Documentation Authoring Style Guide v1.0** (frozen into `CONTRIBUTING.md`). Added `.tech-list` CSS support. **Documentation Normalization** of existing chapters is explicitly **Deferred** (PROJECT-STATUS Deferred Work) — no chapter content changed. Documentation-only; unreleased. |
+| 1.17 | 2026-06-28 | CCC Development Team | **v0.3.2 released.** Cloudflare-compatible HTTPS port selection (Feature 1: installer prompt + `ccc-apply-https-port` + dashboard read-only display; `update.sh` preserves the chosen port) and one-click CCC update (Feature 2: dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases stable-only; async status + reconnect + automatic rollback; no auto-update; Conduit Core out of scope). Validated on Raspberry Pi 4 and Pi 3 B (1 GB). CHANGELOG stamped; `APP_VERSION` 0.3.2; closure record `docs/closure/v0.3.2-closure.md`. Historical rev-≤1.16 rows intact. |
 
 ---
 

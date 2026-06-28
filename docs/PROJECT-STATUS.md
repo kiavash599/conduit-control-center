@@ -13,9 +13,9 @@
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| v0.3.1 (2026-06-24, patch — D1 + D2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.15 | Reconciled · clean baseline |
+| v0.3.1 (released) · **v0.3.2 RC** (2026-06-28 prep — HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.17 | 🟡 v0.3.2 Release Candidate — pending CI green, Pi4/Pi3 functional sign-off, tag, GitHub Release, real one-click validation |
 
-Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; Epic C complete (unreleased).
+Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 1) + one-click CCC update (Feature 2) implemented; manual `update.sh` deployment path validated on Raspberry Pi 4 and Pi 3 B; `/api/update/check` + `/status` validated; GitHub release lookup reachable. **Pending:** CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation. v0.3.2 is **not yet released/tagged**.
 
 ## 2. Closed Epics
 
@@ -30,6 +30,8 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
+| HTTPS Port Selection (Feature 1) | 🟡 Implemented — v0.3.2 RC | Cloudflare-compatible HTTPS port chosen at install; preserved by `update.sh`; `ccc-apply-https-port`; dashboard read-only display; Pi 4 + Pi 3 B validated | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` *(pending)* |
+| One-Click CCC Update (Feature 2) | 🟡 Implemented — v0.3.2 RC | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable, lookup reachable); helper + sudoers deployed; `/api/update/check` + `/status` validated; manual `update.sh` path validated Pi4/Pi3. Real one-click E2E **pending** against the published Release; no auto-update; Conduit Core out of scope | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` *(pending)* |
 | Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
 | TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Complete (unreleased) | EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); **bilingual illustrated TLS guide** — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), 8 shared redacted screenshots; chapters language-routed (`957d497`) | commits `83d2ed0`, `652f028`, `05366fe`, `957d497` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
@@ -44,7 +46,7 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 
 ## 3. Active Epics
 
-**NONE.** Epic B (v0.3.1) released; Backup Contract Alignment complete (`043cb6a`); Epic C — TLS onboarding complete (`83d2ed0`, `652f028`, unreleased). See Closed Epics.
+**v0.3.2 Release Candidate** — Features 1 + 2 implemented and in release-prep; pending CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation. (Epic B (v0.3.1) released; Backup Contract Alignment complete (`043cb6a`); Epic C — TLS onboarding complete (`83d2ed0`, `652f028`, unreleased).) See Closed Epics.
 
 ## 4. Approved Next Epics
 
@@ -101,10 +103,11 @@ Branch `main` · HEAD `652f028` (Epic C — TLS onboarding) · v0.3.1 released; 
 | v0.3.0 | 2026-06-21 | First public release (Personal Mode, Ryve Claim, Backup & Restore) |
 | docs-v0.3 | 2026-06-22 | Documentation milestone (not a product release) |
 | v0.3.1 | released (2026-06-24) | Hotfixes (D1 + D2) |
+| v0.3.2 (RC) | 2026-06-28 (prep) | Release Candidate — HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); **not yet tagged/released** |
 
 ## 9. Next Recommended Action
 
-**Documentation Platform Phase 1 is closed** (MkDocs Material, Persian RTL, self-hosted fonts, bilingual landing page, RTL/LTR Authoring Style Guide v1.0, documentation governance foundation). Documentation Normalization of existing chapters is **Deferred** (§6). Next product work: (1) Cloudflare-compatible HTTPS port selection; (2) one-click update system (separate CCC + Conduit Core; no auto-update; rollback: CCC supported, Core best-effort).
+**v0.3.2 is a Release Candidate.** Features 1 + 2 implemented; manual `update.sh` path validated on Pi 4 and Pi 3 B; `/api/update/check` + `/status` validated; GitHub release lookup reachable; Software Updates docs added. **Pending:** release-prep CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation (any bug fixed forward in v0.3.3). After release: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
 
 ---
 

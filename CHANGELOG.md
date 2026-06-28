@@ -9,8 +9,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.3.2] — 2026-06-28
+
 ### Added
 
+- Cloudflare-compatible HTTPS port selection (Feature 1): the installer offers a
+  user-selectable, Cloudflare-supported HTTPS port (`443`, `8443`, `2053`, `2083`,
+  `2087`, `2096`; default `443`), skips occupied ports, and `update.sh` preserves
+  the chosen port across updates. The dashboard shows a read-only
+  "HTTPS port (configured)".
+- One-click CCC update system (Feature 2): a dashboard "Software Updates" section
+  checks GitHub Releases (stable only), previews release notes, and installs CCC
+  updates via a privileged helper (`ccc-update-apply`) with detached execution,
+  async status, reconnect-after-restart, and automatic rollback. Operator-initiated
+  only (no auto-update); Conduit Core is out of scope. The check is cached for 24h
+  and degrades gracefully when GitHub is unreachable.
+- Raspberry Pi 3 Model B (1 GB) validated and documented as a supported platform
+  (Chapter 2 + README; platform badge updated to Raspberry Pi 3/4).
 - TLS onboarding (Epic C / D3): the user guide now routes operators to the
   Cloudflare Origin Certificate workflow — EN Chapter 5 §5.15 + Chapter 6 §6.4,
   mirrored in the Persian guide. (`83d2ed0`, `652f028`)
@@ -26,6 +43,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- ShellCheck SC2034: removed unused `NGINX_AVAILABLE`/`NGINX_ENABLED` from
+  `install.sh` (orphaned by the HTTPS-port provisioning refactor); unblocks CI.
 - Backup key-exclusion guard (BCA-1): the fail-closed path guard now matches
   excluded locations cross-platform; it previously failed open under Windows-style
   path resolution (Linux production unaffected). (`043cb6a`)
