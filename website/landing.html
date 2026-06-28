@@ -12,7 +12,8 @@
 *{box-sizing:border-box}
 body{margin:0;font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
 .wrap{max-width:880px;margin:0 auto;padding:3rem 1.25rem 4rem;text-align:center}
-.logo{width:84px;height:84px;margin:0 auto 1rem;display:block}
+.hero{display:block;width:100%;max-width:720px;height:auto;margin:0 auto 1.5rem;border-radius:12px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 h1{font-size:30px;font-weight:600;margin:0 0 .4rem}
 .tag{color:var(--muted);font-size:17px;margin:0 auto 2.2rem;max-width:640px}
 .doors{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:0 0 1.8rem}
@@ -29,8 +30,8 @@ h1{font-size:30px;font-weight:600;margin:0 0 .4rem}
 </head>
 <body>
 <main class="wrap">
-  <img class="logo" src="assets/branding/logo.svg" alt="Conduit Control Center logo">
-  <h1>Conduit Control Center</h1>
+  <img class="hero" src="assets/branding/ccc-logo-lockup.png" alt="Conduit Control Center — Manage. Monitor. Contribute." width="1536" height="1024">
+  <h1 class="sr-only">Conduit Control Center</h1>
   <p class="tag">An open-source dashboard to manage Psiphon Conduit on a Raspberry Pi — secure, lightweight, beginner-friendly. مدیریت Psiphon Conduit روی رزبری‌پای.</p>
   <div class="doors">
     <a class="door" href="user-guide/01-introduction/">
