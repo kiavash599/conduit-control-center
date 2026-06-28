@@ -11,6 +11,23 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.4] — 2026-06-28
+
+### Fixed
+
+- One-click update (Feature 2) failed at the lock step with
+  `OSError: [Errno 30] Read-only file system: '/run/lock/ccc-update-apply.lock'`,
+  so `POST /api/update/install` returned HTTP 500 and no update ever started. The
+  privileged helper `ccc-update-apply` runs via `sudo` inside the `conduit-cc`
+  service's mount namespace, where `ProtectSystem=strict` makes `/run/lock`
+  read-only (sudo does not escape the namespace). The lock file is moved into the
+  service's writable StateDirectory — `/var/lib/conduit-cc/.update.lock` — and
+  opened with `O_NOFOLLOW`, matching the proven `ccc-restore-apply` pattern. Fix
+  is confined to the helper; no changes to the API, frontend, installer, updater,
+  systemd unit, or sudoers. (Exposed by the v0.3.3 validation release.)
+
+---
+
 ## [0.3.3] — 2026-06-28
 
 **Validation-only release — no functional changes.**
