@@ -469,6 +469,10 @@ phase6_purge() {
         warn "${LOG_DIR} could not be fully removed."
     fi
 
+    step "6b2 — Removing logrotate config"
+    rm -f /etc/logrotate.d/conduit-cc
+    info "/etc/logrotate.d/conduit-cc removed (if present)"
+
     # Correction A: delete the user only when all directories owned by
     # conduit-cc have been successfully removed.
     step "6c — Removing conduit-cc user and group"

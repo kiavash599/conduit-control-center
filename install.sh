@@ -798,6 +798,24 @@ EOF
     chmod 755 "${LOG_DIR}"
     info "${LOG_DIR} created (755, ${APP_USER})"
 
+    # ---- 2m2  logrotate config for CCC logs (SD-card protection) ----------- #
+    # Static config shipped in deployment/; rotates /var/log/conduit-cc/*.log.
+    # logrotate is run by the OS (cron.daily / logrotate.timer); CCC adds no
+    # timer of its own. No-op if logrotate is absent (warn only).
+    step "2m2 — Installing logrotate config for ${LOG_DIR}"
+    if command -v logrotate >/dev/null 2>&1; then
+        install -o root -g root -m 0644 \
+            "${APP_DIR}/deployment/conduit-cc.logrotate" \
+            /etc/logrotate.d/conduit-cc
+        if logrotate -d /etc/logrotate.d/conduit-cc >/dev/null 2>&1; then
+            info "logrotate config installed + validated (/etc/logrotate.d/conduit-cc)"
+        else
+            warn "logrotate config installed but failed dry-run; check /etc/logrotate.d/conduit-cc"
+        fi
+    else
+        warn "logrotate not found; install it (apt-get install -y logrotate) to rotate ${LOG_DIR}"
+    fi
+
     # Install cron job for conduit-cc user (every 5 minutes).
     # Removes any existing CCC DDNS entry first to stay idempotent.
     #

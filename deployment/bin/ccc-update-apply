@@ -31,6 +31,8 @@ import fcntl
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -161,8 +163,35 @@ def _detach() -> bool:
     return True  # grandchild = detached worker
 
 
+def _sweep_stale_workdirs() -> None:
+    """Best-effort removal of leftover 'ccc-update-*' extraction dirs from prior
+    runs (e.g. an interrupted or killed update). Called ONLY while holding the
+    update flock, which guarantees no concurrent update owns one, so any match is
+    an orphan. Hardening:
+      * matches ONLY the 'ccc-update-' prefix -- never update-status.json,
+        .update.lock, update-check.json, restore-status.json, or backups;
+      * uses os.lstat and removes ONLY real directories (symlinks are skipped,
+        never followed);
+      * never raises."""
+    try:
+        names = os.listdir(STATE_DIR)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith("ccc-update-"):
+            continue
+        path = os.path.join(STATE_DIR, name)
+        try:
+            st = os.lstat(path)            # lstat: do NOT follow symlinks
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode):   # real directories only
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
-            update_id: str) -> None:
+            update_id: str, work: str) -> None:
     # Detach stdio from the (about-to-stop) parent service.
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)
@@ -181,6 +210,8 @@ def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
         write_status("failed", id=update_id, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(),
                      message=f"could not launch updater: {exc}")
+        # Terminal status written -> safe to drop the extraction dir.
+        shutil.rmtree(work, ignore_errors=True)
         os._exit(3)
 
     new_installed = _read_installed_version()
@@ -196,6 +227,8 @@ def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
         write_status("failed", id=update_id, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(),
                      message=f"Update ended in an unexpected state (rc={rc}); see /var/backups/conduit-cc")
+    # Terminal status written above -> now remove the current extraction dir.
+    shutil.rmtree(work, ignore_errors=True)
     os._exit(0)
 
 
@@ -209,6 +242,11 @@ def main() -> None:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         die(2, "another update is already in progress")
+
+    # Flock held: no concurrent update can own a sibling work dir, so any
+    # leftover ccc-update-* directory is an orphan from a prior interrupted run.
+    # Sweep BEFORE creating this run's work dir so the current one is never hit.
+    _sweep_stale_workdirs()
 
     installed = _read_installed_version()
     work = tempfile.mkdtemp(prefix="ccc-update-", dir=STATE_DIR)
@@ -224,7 +262,7 @@ def main() -> None:
 
     # Keep the flock across detach (inheritable) so a second invocation is rejected.
     if _detach():
-        _worker(tree, installed, payload_v, update_id)
+        _worker(tree, installed, payload_v, update_id, work)
     # Parent: ack already printed; exit success, leaving the worker running.
     os._exit(0)
 

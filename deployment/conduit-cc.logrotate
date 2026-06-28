@@ -1,0 +1,25 @@
+# /etc/logrotate.d/conduit-cc
+# -----------------------------------------------------------------------------
+# Managed by Conduit Control Center (install.sh / update.sh). Do NOT edit this
+# file on the server -- edit deployment/conduit-cc.logrotate in the repository
+# and re-run install.sh or update.sh; otherwise update.sh will overwrite it.
+#
+# Rotates CCC application logs under /var/log/conduit-cc/ -- currently ddns.log,
+# appended every 5 minutes by the DDNS cron job. That writer opens, appends, and
+# closes the file on each run (it does not hold the file open), so a plain rotate
+# is safe and correct; copytruncate is intentionally NOT used.
+#
+# The log directory is owned by conduit-cc:conduit-cc (0755). logrotate runs as
+# root, so `su root conduit-cc` is required to rotate a non-root-owned directory,
+# and `create 0644 conduit-cc conduit-cc` keeps the cron writer able to append.
+# -----------------------------------------------------------------------------
+/var/log/conduit-cc/*.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 conduit-cc conduit-cc
+    su root conduit-cc
+}

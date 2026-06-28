@@ -798,6 +798,18 @@ RATELIMIT_EOF
     chown root:root "${DDNS_BIN}"
     info "${DDNS_BIN} updated"
 
+    # Re-provision the logrotate config (SD-card protection). Keeps an existing
+    # install current; installs it on systems updated from a pre-logrotate build.
+    step "3f2 - Updating logrotate config"
+    if command -v logrotate >/dev/null 2>&1; then
+        install -o root -g root -m 0644 \
+            "${APP_DIR}/deployment/conduit-cc.logrotate" \
+            /etc/logrotate.d/conduit-cc
+        info "logrotate config refreshed (/etc/logrotate.d/conduit-cc)"
+    else
+        warn "logrotate not found; skipping ${LOG_DIR} rotation config"
+    fi
+
     step "3g - Refreshing ccc-unlock symlink"
     ln -sf "${APP_DIR}/scripts/ccc-unlock" /usr/local/bin/ccc-unlock
     info "ccc-unlock → ${APP_DIR}/scripts/ccc-unlock"
