@@ -1,7 +1,7 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.17  
+**Revision:** 1.19  
 **Date:** 2026-06-28  
 **Status:** Reconciled  
 **Author:** CCC Development Team
@@ -71,7 +71,10 @@ tracked separately under [Documentation Workstream → Documentation Milestones]
 | 0.2.0 | `v0.2.0` | 2026-06-17 | Smart Conduit Control — Conduit Configuration, Regional Analytics, Bandwidth Scheduling, Live Operations, Theme Support, Traffic/Historical charts, Contribution Advisor |
 | 0.3.0 | `v0.3.0` | 2026-06-21 | **First public release** — Personal Mode, Ryve Claim / Identity, Backup & Restore |
 | 0.3.1 | `v0.3.1` | 2026-06-24 | Hotfixes — D1 root-URL redirect, D2 Cloudflare screenshot correction |
-| 0.3.2 (RC) | `v0.3.2` *(pending)* | 2026-06-28 (prep) | **Release Candidate — not yet tagged/released.** HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); manual `update.sh` path validated on Raspberry Pi 4 + Pi 3 B (1 GB); real one-click validation pending against the published Release |
+| 0.3.2 | `v0.3.2` | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); validated on Raspberry Pi 4 + Pi 3 B (1 GB) |
+| 0.3.3 | `v0.3.3` | 2026-06-28 | Validation release — exercised the one-click update path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
+| 0.3.4 | `v0.3.4` | 2026-06-28 | One-click update lock-path fix (EROFS): lock moved to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
+| 0.3.5 | *(planned)* | TBD | **Final planned manual Pi deployment** to validate the complete dashboard one-click update workflow; ships Log Management / SD-Card Protection (`a6b6bd4`). After success, one-click becomes the standard deployment mechanism (see *Deployment Strategy*) |
 
 ---
 
@@ -754,6 +757,25 @@ Documentation snapshots are **not** product releases and are tracked here:
 | D1 | Root URL `/` → `/dashboard` redirect (reuse existing auth flow) | **P0** | Backend route + test; no nginx / doc change |
 | D2 | Replace `cloudflare-domain-active.png` (root domain Active) | P1 | Image recapture + redaction |
 
+### Log Management / SD-Card Protection — ✅ Complete in code (commit `a6b6bd4`); validation scheduled for v0.3.5
+
+Minimal, Linux-native log/disk hygiene for SD-card-based Raspberry Pi installs:
+
+- **logrotate** config for `/var/log/conduit-cc/*.log` (`deployment/conduit-cc.logrotate`) — provisioned by `install.sh`, re-provisioned by `update.sh`, removed by `uninstall.sh`.
+- **Temp-dir cleanup** in `ccc-update-apply`: sweeps stale `ccc-update-*` work directories (under the existing update flock) and removes the current work directory **only after** the terminal `update-status.json` is written.
+- **No** new privileged helper, sudoers rule, systemd timer, dashboard cleanup feature, or journald change.
+
+Postponed (see *v0.4 Candidates*): journald drop-ins, dashboard cleanup action, scheduled cleanup timer, installer retention prompt, advanced log management.
+
+### Deployment Strategy — milestone (adopted 2026-06-28)
+
+A deployment-strategy milestone — **not** a removal of existing functionality.
+
+- **v0.3.5 is the final *planned* manual Raspberry Pi deployment**, whose purpose is to validate the complete dashboard One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B.
+- **After successful validation, dashboard One-Click Update becomes the standard deployment mechanism** for routine updates.
+- **Manual SSH `update.sh` deployment remains supported**, with its role narrowed to: initial installation, disaster recovery, and emergency maintenance.
+- `install.sh` and `update.sh` are retained and maintained.
+
 ---
 
 ## v0.4 Candidates (not yet scheduled)
@@ -771,6 +793,11 @@ delivered; none are scheduled.
 | Regional Analytics scope filter | §8 (D14 / D17) | Upstream-blocked (no personal-vs-common runtime metric) |
 | Full pairing implementation | §4 `pairing-neutralise` | `/api/conduit/pair` currently returns 501 |
 | Ryve rewards | §8 / §9 | Out of scope until Psiphon exposes the data via a metric or documented API |
+| journald size drop-ins | Log Mgmt (postponed) | System-wide journald config; deliberately not changed by CCC; revisit only under disk pressure |
+| Dashboard log-cleanup action | Log Mgmt (postponed) | Rejected for the minimal feature (attack surface, evidence loss, needs a privileged helper) |
+| Scheduled cleanup timer | Log Mgmt (postponed) | Not needed; OS-run logrotate + the flock-guarded sweep cover it |
+| Installer log-retention prompt | Log Mgmt (postponed) | Installer-managed retention sizing; future enhancement |
+| Advanced log management | Log Mgmt (postponed) | Broader retention/observability; only if the minimal approach proves insufficient |
 
 ---
 
@@ -796,6 +823,8 @@ delivered; none are scheduled.
 | 1.15 | 2026-06-25 | CCC Development Team | **Epic D — D4 (FA diagram parity) completed.** All 19 diagrams (DGM-01–19) integrated into the Persian guide: DGM-01–12 in FA ch04/04a/05 (Batches 1–2) and DGM-13–19 in FA ch10/11/12/14 (Batch 3), with the legacy Persian ASCII-art diagram blocks they replace removed and EN-paralleled navigation/micro-flows preserved. Full EN↔FA diagram parity. Diagram Program note updated to CLOSED (both editions); D4 marked Resolved in `docs/PROJECT-STATUS.md`; Manifest reconciled; CHANGELOG `[Unreleased]` entry added. Historical rev-≤1.14 rows left intact. Documentation-only; unreleased. |
 | 1.16 | 2026-06-27 | CCC Development Team | **Documentation Platform (MkDocs Phase 1) closed** as a platform/governance milestone. Added the MkDocs Material site (renders existing `docs/` in place, curated nav, `exclude_docs` for internal files), Persian RTL/LTR base support, self-hosted Vazirmatn + Inter (no Google Fonts/CDN/analytics), a bilingual landing page, and the **RTL/LTR Documentation Authoring Style Guide v1.0** (frozen into `CONTRIBUTING.md`). Added `.tech-list` CSS support. **Documentation Normalization** of existing chapters is explicitly **Deferred** (PROJECT-STATUS Deferred Work) — no chapter content changed. Documentation-only; unreleased. |
 | 1.17 | 2026-06-28 | CCC Development Team | **v0.3.2 released.** Cloudflare-compatible HTTPS port selection (Feature 1: installer prompt + `ccc-apply-https-port` + dashboard read-only display; `update.sh` preserves the chosen port) and one-click CCC update (Feature 2: dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases stable-only; async status + reconnect + automatic rollback; no auto-update; Conduit Core out of scope). Validated on Raspberry Pi 4 and Pi 3 B (1 GB). CHANGELOG stamped; `APP_VERSION` 0.3.2; closure record `docs/closure/v0.3.2-closure.md`. Historical rev-≤1.16 rows intact. |
+| 1.18 | 2026-06-28 | CCC Development Team | **Log Management / SD-Card Protection recorded (documentation-only; feature commit `a6b6bd4`, unreleased).** Added a "Log Management / SD-Card Protection — Delivered" subsection under *Maintenance & Patch Releases* (logrotate for `/var/log/conduit-cc/*.log` provisioned via install/update/uninstall; `ccc-update-apply` stale-`ccc-update-*` sweep under the update flock + current-workdir removal after the terminal `update-status.json`; Linux-native; no new helper/sudoers/timer/dashboard/journald) and five **postponed** items under *v0.4 Candidates* (journald drop-ins, dashboard cleanup, cleanup timer, installer retention prompt, advanced log management). Historical rev-≤1.17 rows intact; no feature scope changed. |
+| 1.19 | 2026-06-28 | CCC Development Team | **Release-status reconciliation + Deployment Strategy milestone.** Reconciled the Release History table (and `docs/PROJECT-STATUS.md`) to reflect **v0.3.2 released**, the **v0.3.3 validation release** (exposed the `/run/lock` EROFS), and **v0.3.4 released** (EROFS lock-path fix → `/var/lib/conduit-cc/.update.lock`); added planned **v0.3.5**. Marked Log Management / SD-Card Protection (`a6b6bd4`) **complete in code, validation scheduled for v0.3.5**. Added a **Deployment Strategy** milestone: v0.3.5 is the final *planned* manual Pi deployment to validate the full dashboard One-Click Update workflow; after success, dashboard One-Click Update becomes the standard deployment mechanism, with manual `update.sh` retained for initial install, disaster recovery, and emergency maintenance (not a removal). Postponed Log Management items and all historical rev-≤1.18 rows left intact; no feature scope changed. |
 
 ---
 

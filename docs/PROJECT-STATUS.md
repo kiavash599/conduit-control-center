@@ -1,21 +1,21 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.11,
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.19,
 > Reconciled) owns forward planning and feature catalogues; the **CHANGELOG** owns
 > shipped history; **closure records** (`docs/closure/`) are optional per-epic
 > decision deep-dives. This file is the canonical closed-epic index and links the
 > three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-24 · branch `main` · HEAD `652f028`.
+> Last reconciled: 2026-06-28 · branch `main` · HEAD `a6b6bd4`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| v0.3.1 (released) · **v0.3.2 RC** (2026-06-28 prep — HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.17 | 🟡 v0.3.2 Release Candidate — pending CI green, Pi4/Pi3 functional sign-off, tag, GitHub Release, real one-click validation |
+| **v0.3.4** (released 2026-06-28 — EROFS one-click lock-path fix) · v0.3.3 (validation release) · v0.3.2 (HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.19 | ✅ Released · clean baseline. Next: **v0.3.5** — final planned manual Pi deployment to validate the full one-click workflow (see §10) |
 
-Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 1) + one-click CCC update (Feature 2) implemented; manual `update.sh` deployment path validated on Raspberry Pi 4 and Pi 3 B; `/api/update/check` + `/status` validated; GitHub release lookup reachable. **Pending:** CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation. v0.3.2 is **not yet released/tagged**.
+Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), the v0.3.3 validation release (which exposed the `/run/lock` EROFS), and the v0.3.4 helper lock-path fix. Log Management / SD-Card Protection is **complete in code** (commit `a6b6bd4`) and **scheduled for validation in v0.3.5**. v0.3.5 is the final *planned* manual Raspberry Pi deployment, whose purpose is to validate the complete dashboard One-Click Update workflow end-to-end (see §10 Deployment Strategy).
 
 ## 2. Closed Epics
 
@@ -30,8 +30,10 @@ Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 
 | Roadmap Reconciliation (Epic A.1) | ✅ Closed | Rev 1.11 Reconciled | `2d42372` |
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
-| HTTPS Port Selection (Feature 1) | 🟡 Implemented — v0.3.2 RC | Cloudflare-compatible HTTPS port chosen at install; preserved by `update.sh`; `ccc-apply-https-port`; dashboard read-only display; Pi 4 + Pi 3 B validated | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` *(pending)* |
-| One-Click CCC Update (Feature 2) | 🟡 Implemented — v0.3.2 RC | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable, lookup reachable); helper + sudoers deployed; `/api/update/check` + `/status` validated; manual `update.sh` path validated Pi4/Pi3. Real one-click E2E **pending** against the published Release; no auto-update; Conduit Core out of scope | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` *(pending)* |
+| HTTPS Port Selection (Feature 1) | ✅ Released v0.3.2 | Cloudflare-compatible HTTPS port chosen at install; preserved by `update.sh`; `ccc-apply-https-port`; dashboard read-only display; Pi 4 + Pi 3 B validated | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` |
+| One-Click CCC Update (Feature 2) | ✅ Released v0.3.2 (lock-path fix v0.3.4) | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable); async status + reconnect + auto-rollback; no auto-update; Conduit Core out of scope. The v0.3.3 validation release exposed a `/run/lock` EROFS, fixed in v0.3.4 (lock → `/var/lib/conduit-cc/.update.lock`). **Full dashboard-driven one-click E2E scheduled for v0.3.5 validation.** | `docs/closure/v0.3.2-closure.md`; tags `v0.3.2` / `v0.3.3` / `v0.3.4` |
+| One-Click Update Lock-Path Fix (EROFS) | ✅ Released v0.3.4 | `ccc-update-apply` lock moved from `/run/lock` (read-only under `ProtectSystem=strict`) to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`); exposed by the v0.3.3 validation release | CHANGELOG `[0.3.4]`; tag `v0.3.4` |
+| Log Management / SD-Card Protection | ✅ Complete in code (`a6b6bd4`) — validation scheduled for v0.3.5 | logrotate for `/var/log/conduit-cc/*.log` (`deployment/conduit-cc.logrotate`; provisioned by install.sh, re-provisioned by update.sh, removed by uninstall.sh) + automatic cleanup of stale `ccc-update-*` work directories and the current work directory **after** the terminal `update-status.json` is written, inside `ccc-update-apply` under the existing update flock. Linux-native; **no** new helper, sudoers rule, systemd timer, dashboard cleanup feature, or journald change | commit `a6b6bd4` |
 | Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
 | TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Complete (unreleased) | EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); **bilingual illustrated TLS guide** — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), 8 shared redacted screenshots; chapters language-routed (`957d497`) | commits `83d2ed0`, `652f028`, `05366fe`, `957d497` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
@@ -46,7 +48,7 @@ Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 
 
 ## 3. Active Epics
 
-**v0.3.2 Release Candidate** — Features 1 + 2 implemented and in release-prep; pending CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation. (Epic B (v0.3.1) released; Backup Contract Alignment complete (`043cb6a`); Epic C — TLS onboarding complete (`83d2ed0`, `652f028`, unreleased).) See Closed Epics.
+**None blocking.** v0.3.2 → v0.3.4 released — HTTPS port selection + one-click update (Features 1 + 2, v0.3.2), the v0.3.3 validation release, and the v0.3.4 EROFS lock-path fix. Log Management / SD-Card Protection is complete in code (`a6b6bd4`), validation scheduled for **v0.3.5**. **v0.3.5 is the final *planned* manual Raspberry Pi deployment** — its purpose is to validate the complete dashboard One-Click Update workflow; after success, dashboard one-click becomes the standard deployment mechanism (see §10 Deployment Strategy). See Closed Epics.
 
 ## 4. Approved Next Epics
 
@@ -79,6 +81,7 @@ Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 
 | Roadmap §4 maintenance | `db-perms-600`, `root-crontab-cleanup` (ops/security); `pairing-neutralise` → v0.4 candidate | roadmap §4 |
 | D7 — health.py OpenAPI example `0.1.0` | Cosmetic; runtime returns correct APP_VERSION; excluded from v0.3.1 | `backend/api/health.py` |
 | CHANGELOG `[Unreleased]` section | Missing after 0.3.0 stamp; add when v0.3.1 work begins | `CHANGELOG.md` |
+| Advanced log management (postponed) | Explicitly postponed after the minimal log feature (`a6b6bd4`): journald drop-ins (system-wide; out of scope for CCC), dashboard cleanup action, scheduled cleanup timer, installer retention prompt, and broader advanced log management. **Revisit only** if SD-card pressure shows the minimal logrotate + temp-cleanup is insufficient. | roadmap § *v0.4 Candidates* |
 
 ## 7. Documentation Status
 
@@ -103,11 +106,23 @@ Branch `main` · v0.3.2 **Release Candidate** — HTTPS port selection (Feature 
 | v0.3.0 | 2026-06-21 | First public release (Personal Mode, Ryve Claim, Backup & Restore) |
 | docs-v0.3 | 2026-06-22 | Documentation milestone (not a product release) |
 | v0.3.1 | released (2026-06-24) | Hotfixes (D1 + D2) |
-| v0.3.2 (RC) | 2026-06-28 (prep) | Release Candidate — HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); **not yet tagged/released** |
+| v0.3.2 | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); Pi 4 + Pi 3 B validated |
+| v0.3.3 | 2026-06-28 | Validation release — exercised the one-click path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
+| v0.3.4 | 2026-06-28 | One-click update lock-path fix (EROFS): lock → `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
+| v0.3.5 (planned) | TBD | **Final planned manual Pi deployment** — validate the complete dashboard one-click update workflow; ships Log Management / SD-Card Protection (`a6b6bd4`). After success, one-click becomes the standard deployment mechanism (§10) |
 
 ## 9. Next Recommended Action
 
-**v0.3.2 is a Release Candidate.** Features 1 + 2 implemented; manual `update.sh` path validated on Pi 4 and Pi 3 B; `/api/update/check` + `/status` validated; GitHub release lookup reachable; Software Updates docs added. **Pending:** release-prep CI green → Pi4/Pi3 functional sign-off → tag `v0.3.2` → GitHub Release → real one-click validation (any bug fixed forward in v0.3.3). After release: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
+**v0.3.4 released.** The v0.3.2 → v0.3.4 line shipped HTTPS port selection, one-click update, and the EROFS lock-path fix; Log Management / SD-Card Protection is complete in code (`a6b6bd4`). **Next: cut v0.3.5** — the final *planned* manual Raspberry Pi deployment — and use it to validate the complete dashboard-driven One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B, together with the Log Management feature. On success, **dashboard One-Click Update becomes the standard deployment mechanism** — manual `update.sh` retained for initial install, disaster recovery, and emergency maintenance (see §10). Then: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
+
+## 10. Deployment Strategy
+
+**Status: Policy adopted 2026-06-28 — a deployment-strategy milestone, not a removal of functionality.**
+
+- **v0.3.5 is the final *planned* manual Raspberry Pi deployment.** Its purpose is to validate the complete dashboard-driven One-Click Update workflow end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Raspberry Pi 4 and Pi 3 B.
+- **After successful validation, dashboard One-Click Update becomes the standard deployment mechanism** for routine CCC updates.
+- **Manual SSH deployment with `update.sh` remains fully supported**, with its role narrowed to: (1) **initial installation**, (2) **disaster recovery**, and (3) **emergency maintenance**.
+- This is a **deployment-strategy milestone, not a removal** of the manual path — `install.sh` and `update.sh` are retained and maintained.
 
 ---
 
