@@ -8,6 +8,8 @@
 #                                    this script (same pattern as install.sh)
 #   sudo bash update.sh --source DIR Update from an explicit source directory
 #   sudo bash update.sh --ccc-only   Update CCC only; skip the Conduit Core binary
+#   sudo bash update.sh --non-interactive  Skip the confirmation prompt (automation;
+#                                    aliases --yes, -y). Required when no TTY.
 #   sudo bash update.sh --help       Show this help
 #
 # The source directory must be a checkout or unpacked tarball of the new
@@ -91,8 +93,14 @@ readonly CONDUIT_DATA_DIR="/var/lib/conduit"
 SOURCE_DIR=""
 
 # Populated by _parse_args; when true, skip the Conduit Core binary update
-# (Phase 2b). Used by the one-click CCC-only update path (Feature 2).
+# (Phase 2b). SCOPE ONLY — it does not affect interaction mode.
 CCC_ONLY=false
+
+# Populated by _parse_args; when true, skip the Phase 0g manual confirmation.
+# INTERACTION MODE ONLY — explicit, environment-independent. Set by automation
+# (the one-click helper passes --non-interactive). Decoupled from CCC_ONLY so the
+# update's behaviour is governed by the CLI contract, not by TTY availability.
+NONINTERACTIVE=false
 
 # Populated by phase1_backup; used by phase5_rollback.
 BACKUP_DIR=""
@@ -232,6 +240,9 @@ _parse_args() {
             --ccc-only)
                 CCC_ONLY=true
                 ;;
+            --non-interactive|--yes|-y)
+                NONINTERACTIVE=true
+                ;;
             --help|-h)
                 sed -n '2,/^set -euo pipefail/p' "$0" \
                     | grep '^#' | sed 's/^#[[:space:]]\{0,1\}//'
@@ -239,7 +250,7 @@ _parse_args() {
                 ;;
             *)
                 printf "Unknown option: %s\n" "${_arg}" >&2
-                printf "Usage: sudo bash %s [--source DIR|--ccc-only|--help]\n" "$0" >&2
+                printf "Usage: sudo bash %s [--source DIR|--ccc-only|--non-interactive|--help]\n" "$0" >&2
                 exit 1
                 ;;
         esac
@@ -325,12 +336,13 @@ phase0_preflight() {
     printf "  Source:  %s\n" "${SOURCE_DIR}"
     printf "  Backup:  %s/<timestamp>/\n" "${BACKUP_ROOT}"
     printf "\n"
-    # Non-interactive automation (one-click CCC update runs `--ccc-only` with
-    # stdin redirected to /dev/null) must NOT block on this prompt. Bypass the
-    # confirmation only for the CCC-only path or when stdin is not a TTY;
-    # normal interactive `update.sh` (TTY, no --ccc-only) still prompts.
-    if [[ "${CCC_ONLY}" == true || ! -t 0 ]]; then
-        info "Non-interactive update (CCC-only or no TTY): skipping manual confirmation."
+    # Interaction mode is governed by the explicit CLI contract, NOT by the
+    # environment. Automation must pass --non-interactive. Absence of a TTY is a
+    # fail-closed safety check (no way to confirm), never a silent proceed.
+    if [[ "${NONINTERACTIVE}" == true ]]; then
+        info "Non-interactive mode (--non-interactive): skipping manual confirmation."
+    elif [[ ! -t 0 ]]; then
+        die "No terminal available for confirmation; pass --non-interactive for automation."
     else
         local _confirm
         read -r -p "  Continue? [y/N]: " _confirm

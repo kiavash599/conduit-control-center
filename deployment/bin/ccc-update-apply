@@ -218,7 +218,8 @@ def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
                  started_at=_now(), message="Applying CCC update")
     try:
         proc = subprocess.run(
-            ["bash", INSTALLED_UPDATE_SH, "--ccc-only", "--source", tree],
+            ["bash", INSTALLED_UPDATE_SH,
+             "--ccc-only", "--non-interactive", "--source", tree],
             check=False,
         )
         rc = proc.returncode
