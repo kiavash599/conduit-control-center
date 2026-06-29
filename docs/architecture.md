@@ -6,6 +6,11 @@ document gives a high-level overview of how the pieces fit together. It is kept
 deliberately brief; the API surface is documented live (see
 [API reference](#api-reference)) rather than duplicated here.
 
+> **Update architecture:** the one-click update subsystem follows the Trusted
+> Update Engine architecture — see
+> [ADR-0001: Trusted Update Engine](adr/0001-trusted-update-engine.md)
+> (index: [docs/adr/](adr/README.md)).
+
 ## Component model
 
 CCC is organised as a four-layer chain. Each layer talks only to the one
