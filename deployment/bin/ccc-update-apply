@@ -4,28 +4,36 @@
 ccc-update-apply -- privileged, single-purpose CCC updater (Feature 2).
 
 Security contract (DO NOT WEAKEN):
-  * argv-only CONTROL: the ONLY accepted invocation is exactly `apply`.
-    It NEVER accepts a tag, ref, branch, version, path, URL, or command.
+  * Public argv-only CONTROL: the only externally-invoked action is `apply`.
+    `apply` NEVER accepts a tag, ref, branch, version, path, URL, or command.
   * The update PAYLOAD (a CCC release SOURCE tarball, .tar.gz) is read from
     STDIN ONLY -- never a filesystem path argument (mirrors ccc-restore-apply).
-  * Hardcoded action and nothing else: extract the payload to a temp tree,
-    validate it, then run the HARDCODED, INSTALLED updater
-        /opt/conduit-cc/update.sh --ccc-only --source <tree>
+  * Hardcoded action and nothing else: extract the payload to a temp tree under
+    the StateDirectory, validate it, then run the HARDCODED, INSTALLED updater
+        /opt/conduit-cc/update.sh --ccc-only --non-interactive --source <tree>
     The helper NEVER executes any script contained in the payload; the payload
     is treated as DATA only (rsynced in by the trusted installed update.sh).
-  * No generic runner, no command framework, no extensibility hooks.
   * Refuses anything that is not a strict version INCREASE over the installed
     APP_VERSION (no downgrade, no reinstall).
-  * flock-serialized; double-fork + setsid worker that outlives conduit-cc;
-    outcome written atomically to /var/lib/conduit-cc/update-status.json.
   * No secrets are handled or logged.
 
-Exit codes (pre-detach foreground): 0 accepted (worker detached);
-  2 usage/validation error; 3 filesystem/safety error.
-After detach, the outcome lives in the status file (this process exits 0).
+Execution model (Option B1):
+  `apply` runs inside the conduit-cc.service mount namespace (ProtectSystem=strict),
+  where deploy targets (/opt, /var/backups, ...) are read-only. It therefore only
+  ingests the payload into the writable StateDirectory, then launches a fixed-name
+  systemd TRANSIENT unit (ccc-update.service) that runs THIS trusted helper's
+  internal `__run-worker` subcommand in the HOST mount namespace, where update.sh
+  can write. Status / logging / cleanup / rollback remain owned by this helper.
+
+    Trusted installed engine decides. Downloaded payload describes.
+    Payload never commands privileged control flow.
+
+Exit codes (apply, pre-ack): 0 accepted (unit launched); 2 usage/validation;
+  3 filesystem/safety. After the ack the outcome lives in update-status.json.
 """
 from __future__ import annotations
 
+import argparse
 import datetime
 import fcntl
 import json
@@ -37,19 +45,26 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 
 # ---- Hardcoded, non-overridable constants ----------------------------------
 STATE_DIR = "/var/lib/conduit-cc"
 STATUS_PATH = f"{STATE_DIR}/update-status.json"
-LOCK_PATH = f"{STATE_DIR}/.update.lock"   # StateDirectory: writable under ProtectSystem=strict (mirrors ccc-restore-apply)
-WORKER_LOG = f"{STATE_DIR}/update-worker.log"   # latest-run update.sh stdout/stderr (root 0600); for diagnosis
+LOCK_PATH = f"{STATE_DIR}/.update.lock"   # StateDirectory: writable under ProtectSystem=strict
+WORKER_LOG = f"{STATE_DIR}/update-worker.log"   # update.sh stdout/stderr (root 0600); for diagnosis
 INSTALLED_UPDATE_SH = "/opt/conduit-cc/update.sh"          # trusted, installed
 INSTALLED_VERSION_PY = "/opt/conduit-cc/backend/_version.py"
+SELF_PATH = "/opt/conduit-cc/bin/ccc-update-apply"   # trusted installed helper; ExecStart of the transient unit
+UPDATE_UNIT = "ccc-update.service"                    # fixed name -> systemd serializes the run phase
+SYSTEMD_RUN = "/usr/bin/systemd-run"
+SYSTEMCTL = "/usr/bin/systemctl"
 PAYLOAD_VERSION_REL = "backend/_version.py"
 PAYLOAD_UPDATE_REL = "update.sh"
 MAX_PAYLOAD_BYTES = 200 * 1024 * 1024                      # 200 MiB hard cap
+_ACTIVE_WAIT_S = 10                                        # apply waits this long for the unit to register
 _VERSION_RE = re.compile(r'APP_VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
+_VER_ARG_RE = re.compile(r'^\d+\.\d+\.\d+$')
 
 
 def log(msg: str) -> None:
@@ -70,6 +85,12 @@ def _parse_version(text: str) -> tuple[int, int, int] | None:
     if not m:
         return None
     return tuple(int(p) for p in m.group(1).split("."))  # type: ignore[return-value]
+
+
+def _parse_ver_arg(s: str) -> tuple[int, int, int]:
+    if not _VER_ARG_RE.match(s or ""):
+        die(2, f"invalid version argument: {s!r}")
+    return tuple(int(p) for p in s.split("."))  # type: ignore[return-value]
 
 
 def _version_str(v: tuple[int, int, int]) -> str:
@@ -113,6 +134,15 @@ def _read_installed_version() -> tuple[int, int, int]:
     return v
 
 
+def _derive_tree(work_abs: str) -> str:
+    """Locate the CCC source tree under work/src/ (GitHub tarballs wrap everything
+    in a single top-level directory)."""
+    src = os.path.join(work_abs, "src")
+    entries = [os.path.join(src, e) for e in os.listdir(src)] if os.path.isdir(src) else []
+    dirs = [e for e in entries if os.path.isdir(e)]
+    return dirs[0] if len(dirs) == 1 else src
+
+
 def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     """Read the tarball from stdin, extract, locate the source tree, validate.
     Returns (tree_path, payload_version)."""
@@ -138,11 +168,7 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     except tarfile.TarError as exc:
         die(2, f"cannot read payload tarball: {exc}")
 
-    # GitHub source tarballs wrap everything in a single top-level directory.
-    entries = [os.path.join(extract_dir, e) for e in os.listdir(extract_dir)]
-    dirs = [e for e in entries if os.path.isdir(e)]
-    tree = dirs[0] if len(dirs) == 1 else extract_dir
-
+    tree = _derive_tree(work)
     if not os.path.isfile(os.path.join(tree, PAYLOAD_UPDATE_REL)) or \
        not os.path.isfile(os.path.join(tree, PAYLOAD_VERSION_REL)):
         die(2, "payload is not a CCC source tree (missing update.sh/_version.py)")
@@ -154,26 +180,12 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     return tree, pv
 
 
-def _detach() -> bool:
-    """Double-fork + setsid. Returns True in the worker, False in the parent."""
-    if os.fork() > 0:
-        return False  # original process: return to print ack and exit
-    os.setsid()
-    if os.fork() > 0:
-        os._exit(0)  # intermediate child exits
-    return True  # grandchild = detached worker
-
-
 def _sweep_stale_workdirs() -> None:
     """Best-effort removal of leftover 'ccc-update-*' extraction dirs from prior
-    runs (e.g. an interrupted or killed update). Called ONLY while holding the
-    update flock, which guarantees no concurrent update owns one, so any match is
-    an orphan. Hardening:
-      * matches ONLY the 'ccc-update-' prefix -- never update-status.json,
-        .update.lock, update-check.json, restore-status.json, or backups;
-      * uses os.lstat and removes ONLY real directories (symlinks are skipped,
-        never followed);
-      * never raises."""
+    runs (e.g. an interrupted/killed update). Called ONLY while holding the apply
+    flock AND with no active update unit, so any match is an orphan. Hardening:
+    matches ONLY the 'ccc-update-' prefix; uses os.lstat and removes ONLY real
+    directories (symlinks skipped, never followed); never raises."""
     try:
         names = os.listdir(STATE_DIR)
     except OSError:
@@ -191,45 +203,57 @@ def _sweep_stale_workdirs() -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
-            update_id: str, work: str) -> None:
-    # Detach stdio from the (about-to-stop) parent service.
-    #   stdin  -> /dev/null  (nothing to read; update.sh runs non-interactively)
-    #   stdout/stderr -> a per-run worker log under the StateDirectory so a
-    #   failing update.sh is diagnosable (previously discarded to /dev/null).
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
+def _unit_busy() -> bool:
+    """True if the fixed update unit is currently active/activating (run in flight)."""
     try:
-        logfd = os.open(WORKER_LOG,
-                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        r = subprocess.run([SYSTEMCTL, "is-active", UPDATE_UNIT],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
     except OSError:
-        logfd = os.open(os.devnull, os.O_WRONLY)   # never let logging block the update
-    os.dup2(logfd, 1)
-    os.dup2(logfd, 2)
-    if devnull > 2:
-        os.close(devnull)
-    if logfd > 2:
-        os.close(logfd)
-    sys.stdout.write(f"=== ccc-update-apply worker {update_id}: "
-                     f"{_version_str(frm)} -> {_version_str(to)} @ {_now()} ===\n")
-    sys.stdout.flush()
+        return False
+    return (r.stdout or "").strip() in ("active", "activating", "reloading", "deactivating")
+
+
+# --------------------------------------------------------------------------- #
+#  Worker  (runs INSIDE the transient unit, in the HOST mount namespace)       #
+# --------------------------------------------------------------------------- #
+def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
+                update_id: str, work: str) -> int:
+    """in_progress -> run installed update.sh -> terminal status -> cleanup.
+    update.sh stdout/stderr are captured to WORKER_LOG. Returns a process exit code."""
     write_status("in_progress", id=update_id, pid=os.getpid(),
                  from_version=_version_str(frm), to_version=_version_str(to),
                  started_at=_now(), message="Applying CCC update")
+
+    # Capture update.sh output to a per-run worker log (root 0600, O_NOFOLLOW).
     try:
-        proc = subprocess.run(
-            ["bash", INSTALLED_UPDATE_SH,
-             "--ccc-only", "--non-interactive", "--source", tree],
-            check=False,
-        )
-        rc = proc.returncode
-    except OSError as exc:
-        write_status("failed", id=update_id, from_version=_version_str(frm),
-                     to_version=_version_str(to), finished_at=_now(),
-                     message=f"could not launch updater: {exc}")
-        # Terminal status written -> safe to drop the extraction dir.
-        shutil.rmtree(work, ignore_errors=True)
-        os._exit(3)
+        logfd = os.open(WORKER_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        logf = os.fdopen(logfd, "w")
+    except OSError:
+        logf = None
+    try:
+        if logf is not None:
+            logf.write(f"=== ccc-update-apply worker {update_id}: "
+                       f"{_version_str(frm)} -> {_version_str(to)} @ {_now()} ===\n")
+            logf.flush()
+        try:
+            proc = subprocess.run(
+                ["bash", INSTALLED_UPDATE_SH,
+                 "--ccc-only", "--non-interactive", "--source", tree],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=(logf if logf is not None else None),
+                stderr=(subprocess.STDOUT if logf is not None else None),
+            )
+            rc = proc.returncode
+        except OSError as exc:
+            write_status("failed", id=update_id, from_version=_version_str(frm),
+                         to_version=_version_str(to), finished_at=_now(),
+                         message=f"could not launch updater: {exc}")
+            shutil.rmtree(work, ignore_errors=True)
+            return 3
+    finally:
+        if logf is not None:
+            logf.close()
 
     new_installed = _read_installed_version()
     if rc == 0 and new_installed == to:
@@ -246,13 +270,112 @@ def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
                      message=f"Update ended in an unexpected state (rc={rc}); see /var/backups/conduit-cc")
     # Terminal status written above -> now remove the current extraction dir.
     shutil.rmtree(work, ignore_errors=True)
-    os._exit(0)
+    return 0
 
 
-def main() -> None:
-    if sys.argv[1:] != ["apply"]:
-        die(2, "usage: ccc-update-apply apply   (payload tarball on stdin)")
+def run_worker_cmd(argv) -> None:
+    """Internal entrypoint executed by the transient unit. NOT a public action."""
+    p = argparse.ArgumentParser(prog="ccc-update-apply __run-worker", add_help=False)
+    p.add_argument("--work", required=True)
+    p.add_argument("--from", dest="frm", required=True)
+    p.add_argument("--to", dest="to", required=True)
+    p.add_argument("--id", dest="uid", required=True)
+    try:
+        a = p.parse_args(argv)
+    except SystemExit:
+        die(2, "invalid __run-worker arguments")
 
+    frm = _parse_ver_arg(a.frm)
+    to = _parse_ver_arg(a.to)
+    uid = a.uid
+
+    def _fail(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+        write_status("failed", id=uid, from_version=_version_str(frm),
+                     to_version=_version_str(to), finished_at=_now(), message=msg)
+        shutil.rmtree(a.work, ignore_errors=True)
+        sys.exit(code)
+
+    # Defensive work-dir validation (path is engine-generated; re-check anyway).
+    work_abs = os.path.realpath(a.work)
+    if not (work_abs == STATE_DIR or work_abs.startswith(STATE_DIR + os.sep)):
+        _fail(3, "work directory is outside the state directory")
+    if not os.path.basename(work_abs).startswith("ccc-update-"):
+        _fail(3, "work directory is not a ccc-update work directory")
+    try:
+        st = os.lstat(work_abs)
+    except OSError as exc:
+        _fail(3, f"work directory missing: {exc}")
+    if not stat.S_ISDIR(st.st_mode):
+        _fail(3, "work directory is not a real directory")
+
+    tree = _derive_tree(work_abs)
+    if not (os.path.isfile(os.path.join(tree, PAYLOAD_UPDATE_REL)) and
+            os.path.isfile(os.path.join(tree, PAYLOAD_VERSION_REL))):
+        _fail(3, "work tree is not a CCC source tree")
+    try:
+        with open(os.path.join(tree, PAYLOAD_VERSION_REL), encoding="utf-8") as fh:
+            pv = _parse_version(fh.read())
+    except OSError as exc:
+        _fail(3, f"cannot read payload version: {exc}")
+    if pv != to:
+        _fail(3, f"work tree version {pv} does not match expected {_version_str(to)}")
+
+    installed = _read_installed_version()
+    if not (to > installed and installed == frm):
+        _fail(2, f"refusing non-upgrade: installed {_version_str(installed)}, "
+                 f"from {_version_str(frm)}, to {_version_str(to)}")
+
+    sys.exit(_run_update(tree, installed, to, uid, work_abs))
+
+
+# --------------------------------------------------------------------------- #
+#  apply  (runs INSIDE conduit-cc.service ns: ingest only, then launch unit)   #
+# --------------------------------------------------------------------------- #
+def _launch_update_unit(work: str, frm: tuple[int, int, int],
+                        to: tuple[int, int, int], update_id: str) -> int:
+    """Start the fixed-name transient unit running THIS helper's worker subcommand
+    in the host namespace. Returns 0 on success."""
+    cmd = [
+        SYSTEMD_RUN, "--collect", "--no-block", "--quiet",
+        f"--unit={UPDATE_UNIT}",
+        "--description=Conduit Control Center one-click update",
+        SELF_PATH, "__run-worker",
+        "--work", work,
+        "--from", _version_str(frm),
+        "--to", _version_str(to),
+        "--id", update_id,
+    ]
+
+    def _try():
+        try:
+            return subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, check=False)
+        except OSError as exc:
+            log(f"systemd-run not runnable: {exc}")
+            return None
+
+    proc = _try()
+    if proc is None:
+        return 3
+    if proc.returncode != 0:
+        log(f"systemd-run failed (rc={proc.returncode}): {(proc.stdout or '').strip()}")
+        # Clear a possibly-lingering inactive/failed unit object, then retry once.
+        try:
+            subprocess.run([SYSTEMCTL, "reset-failed", UPDATE_UNIT],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, check=False)
+        except OSError:
+            pass
+        proc = _try()
+        if proc is None or proc.returncode != 0:
+            if proc is not None:
+                log(f"systemd-run retry failed (rc={proc.returncode}): {(proc.stdout or '').strip()}")
+            return (proc.returncode if proc else 1) or 1
+    return 0
+
+
+def apply_cmd() -> None:
     os.makedirs(STATE_DIR, exist_ok=True)
     lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
@@ -260,9 +383,12 @@ def main() -> None:
     except OSError:
         die(2, "another update is already in progress")
 
-    # Flock held: no concurrent update can own a sibling work dir, so any
-    # leftover ccc-update-* directory is an orphan from a prior interrupted run.
-    # Sweep BEFORE creating this run's work dir so the current one is never hit.
+    # Run-phase mutex: if the transient unit is already active, refuse and do NOT
+    # sweep (the active run owns a work dir). Held flock serializes apply calls.
+    if _unit_busy():
+        die(2, "another update is already in progress")
+
+    # Flock held + no active unit -> any leftover ccc-update-* dir is an orphan.
     _sweep_stale_workdirs()
 
     installed = _read_installed_version()
@@ -270,6 +396,7 @@ def main() -> None:
     tree, payload_v = _ingest_payload(work)
 
     if payload_v <= installed:
+        shutil.rmtree(work, ignore_errors=True)
         die(2, f"refusing non-upgrade: payload {_version_str(payload_v)} "
                f"<= installed {_version_str(installed)} (no downgrade/reinstall)")
 
@@ -277,11 +404,35 @@ def main() -> None:
     sys.stdout.write(f"accepted {update_id}\n")
     sys.stdout.flush()
 
-    # Keep the flock across detach (inheritable) so a second invocation is rejected.
-    if _detach():
-        _worker(tree, installed, payload_v, update_id, work)
-    # Parent: ack already printed; exit success, leaving the worker running.
-    os._exit(0)
+    # Launch the trusted worker in a fixed-name systemd transient unit, which runs
+    # in the HOST mount namespace (outside conduit-cc.service's ProtectSystem=strict),
+    # so update.sh can write /opt, /var/backups, etc.
+    rc = _launch_update_unit(work, installed, payload_v, update_id)
+    if rc != 0:
+        write_status("failed", id=update_id, from_version=_version_str(installed),
+                     to_version=_version_str(payload_v), finished_at=_now(),
+                     message="Could not launch the update unit; no changes were made.")
+        shutil.rmtree(work, ignore_errors=True)
+        os._exit(0)   # ack already sent; status reflects the failure
+
+    # Hold the flock until the unit registers as active, closing the launch gap so
+    # a concurrent apply is rejected (by flock, then by _unit_busy) before sweeping.
+    deadline = time.monotonic() + _ACTIVE_WAIT_S
+    while time.monotonic() < deadline:
+        if _unit_busy():
+            break
+        time.sleep(0.2)
+    os._exit(0)   # releasing the flock; the transient unit carries the run
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if args == ["apply"]:
+        apply_cmd()
+    elif args and args[0] == "__run-worker":
+        run_worker_cmd(args[1:])
+    else:
+        die(2, "usage: ccc-update-apply apply   (payload tarball on stdin)")
 
 
 if __name__ == "__main__":
