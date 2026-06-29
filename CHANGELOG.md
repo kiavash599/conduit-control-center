@@ -11,6 +11,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.8] — 2026-06-29
+
+**One-Click Update non-interactive fix release.** Restores the dashboard-driven
+One-Click Update path, which failed during the v0.3.6 → v0.3.7 validation.
+
+### Fixed
+
+- `update.sh` now skips the manual confirmation prompt for CCC-only /
+  non-interactive updates (`--ccc-only`, or when stdin is not a TTY); normal
+  interactive `update.sh` runs still prompt. The one-click helper runs the
+  updater with stdin redirected to `/dev/null`, so the prompt previously hit EOF
+  and aborted with `rc=1`.
+- `ccc-update-apply` now captures the worker's `update.sh` stdout/stderr to
+  `/var/lib/conduit-cc/update-worker.log` (root-only `0600`) instead of
+  discarding them to `/dev/null`, so update failures are diagnosable.
+
+This fixes the silent `rc=1` rollback discovered during the v0.3.6 → v0.3.7
+One-Click Update validation.
+
+---
+
 ## [0.3.7] — 2026-06-29
 
 **Validation release for the complete One-Click Update pipeline.** Cut to perform
@@ -18,6 +39,10 @@ the first full end-to-end Raspberry Pi validation of dashboard-driven One-Click
 Update (discover → install → `ccc-update-apply` → `update.sh --ccc-only` → restart
 → reconnect → success) updating a real device from v0.3.6. No application logic
 changed in this release; the user-visible content is the branding migration below.
+
+> **Known issue.** One-Click Update from v0.3.6 → v0.3.7 may roll back with `rc=1`
+> because `update.sh` still prompts for confirmation in the non-interactive helper
+> path (stdin is `/dev/null`, so the prompt aborts). **Fixed in v0.3.8.**
 
 ### Changed
 
