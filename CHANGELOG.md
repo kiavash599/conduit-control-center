@@ -11,6 +11,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.7] — 2026-06-29
+
+**Validation release for the complete One-Click Update pipeline.** Cut to perform
+the first full end-to-end Raspberry Pi validation of dashboard-driven One-Click
+Update (discover → install → `ccc-update-apply` → `update.sh --ccc-only` → restart
+→ reconnect → success) updating a real device from v0.3.6. No application logic
+changed in this release; the user-visible content is the branding migration below.
+
+### Changed
+
+- **Branding: adopted the CCC Logo System v1.0** as the official identity
+  (commit `d7c3823`). Replaces the historical B1 branding throughout:
+  - **Dashboard** favicon + app/maskable icons migrated to the new system
+    (`frontend/static/favicon/`, `frontend/static/icons/`).
+  - **MkDocs** logo and favicon migrated
+    (`website/overrides/assets/branding/{logo.svg,favicon.svg}`).
+  - The new asset system and Brand Usage Guide live under `branding/logo/`.
+
+### Removed
+
+- Retired the legacy **B1 branding assets** under `docs/brand/` (superseded by
+  `branding/logo/`; `docs/brand/README.md` now points to the Brand Usage Guide).
+
+---
+
 ## [0.3.6] — 2026-06-28
 
 ### Fixed
