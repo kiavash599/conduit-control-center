@@ -325,9 +325,17 @@ phase0_preflight() {
     printf "  Source:  %s\n" "${SOURCE_DIR}"
     printf "  Backup:  %s/<timestamp>/\n" "${BACKUP_ROOT}"
     printf "\n"
-    local _confirm
-    read -r -p "  Continue? [y/N]: " _confirm
-    [[ "${_confirm,,}" == "y" ]] || die "Update cancelled. No changes made."
+    # Non-interactive automation (one-click CCC update runs `--ccc-only` with
+    # stdin redirected to /dev/null) must NOT block on this prompt. Bypass the
+    # confirmation only for the CCC-only path or when stdin is not a TTY;
+    # normal interactive `update.sh` (TTY, no --ccc-only) still prompts.
+    if [[ "${CCC_ONLY}" == true || ! -t 0 ]]; then
+        info "Non-interactive update (CCC-only or no TTY): skipping manual confirmation."
+    else
+        local _confirm
+        read -r -p "  Continue? [y/N]: " _confirm
+        [[ "${_confirm,,}" == "y" ]] || die "Update cancelled. No changes made."
+    fi
 }
 
 # --------------------------------------------------------------------------- #

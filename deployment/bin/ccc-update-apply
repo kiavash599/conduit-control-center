@@ -43,6 +43,7 @@ import uuid
 STATE_DIR = "/var/lib/conduit-cc"
 STATUS_PATH = f"{STATE_DIR}/update-status.json"
 LOCK_PATH = f"{STATE_DIR}/.update.lock"   # StateDirectory: writable under ProtectSystem=strict (mirrors ccc-restore-apply)
+WORKER_LOG = f"{STATE_DIR}/update-worker.log"   # latest-run update.sh stdout/stderr (root 0600); for diagnosis
 INSTALLED_UPDATE_SH = "/opt/conduit-cc/update.sh"          # trusted, installed
 INSTALLED_VERSION_PY = "/opt/conduit-cc/backend/_version.py"
 PAYLOAD_VERSION_REL = "backend/_version.py"
@@ -193,10 +194,25 @@ def _sweep_stale_workdirs() -> None:
 def _worker(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
             update_id: str, work: str) -> None:
     # Detach stdio from the (about-to-stop) parent service.
+    #   stdin  -> /dev/null  (nothing to read; update.sh runs non-interactively)
+    #   stdout/stderr -> a per-run worker log under the StateDirectory so a
+    #   failing update.sh is diagnosable (previously discarded to /dev/null).
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.dup2(devnull, 2)
+    try:
+        logfd = os.open(WORKER_LOG,
+                        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        logfd = os.open(os.devnull, os.O_WRONLY)   # never let logging block the update
+    os.dup2(logfd, 1)
+    os.dup2(logfd, 2)
+    if devnull > 2:
+        os.close(devnull)
+    if logfd > 2:
+        os.close(logfd)
+    sys.stdout.write(f"=== ccc-update-apply worker {update_id}: "
+                     f"{_version_str(frm)} -> {_version_str(to)} @ {_now()} ===\n")
+    sys.stdout.flush()
     write_status("in_progress", id=update_id, pid=os.getpid(),
                  from_version=_version_str(frm), to_version=_version_str(to),
                  started_at=_now(), message="Applying CCC update")
