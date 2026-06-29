@@ -11,6 +11,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.9] — 2026-06-29
+
+**Validation release for the Trusted Update Engine.** This release exists only to
+validate the dashboard One-Click Update path end to end on Raspberry Pi, updating
+a real device from **v0.3.8 → v0.3.9**. There are **no application feature
+changes**.
+
+Expected validation path: dashboard check → install → `ccc-update-apply` →
+`update.sh --ccc-only --non-interactive` → restart → health → success.
+
+Expected observability after the run: `/var/lib/conduit-cc/update-worker.log`
+(captured updater output) and `/var/lib/conduit-cc/update-status.json` (terminal
+state).
+
+---
+
 ## [0.3.8] — 2026-06-29
 
 **One-Click Update non-interactive fix release.** Restores the dashboard-driven
