@@ -25,6 +25,22 @@ jobs:
       - name: Run ruff
         run: ruff check .
 
+      - name: Compile privileged helpers (extension-less)
+        # deployment/bin/* helpers have no .py extension, so ruff/pytest skip
+        # them. Byte-compile every Python-shebang helper so a syntax error in a
+        # privileged updater fails CI (the helpers are not import-tested by the
+        # backend coverage run).
+        run: |
+          status=0
+          for f in deployment/bin/*; do
+            [ -f "$f" ] || continue
+            if head -1 "$f" | grep -qi 'python'; then
+              echo "py_compile $f"
+              python -m py_compile "$f" || status=1
+            fi
+          done
+          exit $status
+
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-22.04
