@@ -677,12 +677,21 @@ phase3_deploy() {
     info "${SERVICE_NAME} stopped  [DOWNTIME STARTS]"
 
     step "3b - Deploying new code (rsync --delete)"
+    # --exclude '/bin/' is ANCHORED (leading slash) to the transfer root, so it
+    # excludes ONLY the top-level ${APP_DIR}/bin -- the privileged helper dir,
+    # which is owned and re-provisioned by step 3b2 below from deployment/bin.
+    # The source tree has no top-level bin/, so without this exclude --delete
+    # would try to remove ${APP_DIR}/bin while the running ccc-update-apply
+    # worker executes from it ("cannot delete non-empty directory: bin").
+    # The slash anchors the rule so deployment/bin/ (the helper SOURCE) is still
+    # deployed normally.
     rsync -a --delete \
         --exclude 'venv/' \
         --exclude 'ccc.db' \
         --exclude '__pycache__/' \
         --exclude '.git/' \
         --exclude '.env' \
+        --exclude '/bin/' \
         "${SOURCE_DIR}/" "${APP_DIR}/"
     chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
     info "Code deployed to ${APP_DIR}"
