@@ -11,6 +11,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.10] — 2026-07-01
+
+**Validation release for the Update Engine Test & CI Hardening milestone.** This
+release exists only to drive one real dashboard One-Click Update on Raspberry Pi
+(**v0.3.9 → v0.3.10**), validating the already-merged test/CI hardening and the
+Phase-3 deploy `rsync --exclude '/bin/'` fix. There are **no application feature
+changes** and **no update-logic changes**.
+
+---
+
 ## [0.3.9] — 2026-06-29
 
 **Validation release for the Trusted Update Engine.** This release exists only to
