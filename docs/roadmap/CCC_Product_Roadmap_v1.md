@@ -1,9 +1,9 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.20  
-**Date:** 2026-06-28  
-**Status:** Reconciled  
+**Revision:** 1.21  
+**Date:** 2026-07-02  
+**Status:** Reconciled to v0.3.12  
 **Author:** CCC Development Team
 
 ---
@@ -45,6 +45,7 @@
 - [Documentation Workstream](#documentation-workstream)
 - [Maintenance & Patch Releases](#maintenance--patch-releases)
 - [v0.4 Candidates](#v04-candidates-not-yet-scheduled)
+- [Next Phase / Candidate Drivers](#next-phase--candidate-drivers)
 10. [Revision History](#10-revision-history)
 
 ---
@@ -74,7 +75,14 @@ tracked separately under [Documentation Workstream → Documentation Milestones]
 | 0.3.2 | `v0.3.2` | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); validated on Raspberry Pi 4 + Pi 3 B (1 GB) |
 | 0.3.3 | `v0.3.3` | 2026-06-28 | Validation release — exercised the one-click update path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
 | 0.3.4 | `v0.3.4` | 2026-06-28 | One-click update lock-path fix (EROFS): lock moved to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
-| 0.3.5 | *(planned)* | TBD | **One-Click Update validation milestone** — installed once via manual SSH; the next update runs from the Dashboard solely to validate One-Click Update; ships Log Management / SD-Card Protection (`a6b6bd4`). Development then returns to SSH `update.sh` (see *Deployment Strategy*) |
+| 0.3.5 | `v0.3.5` | 2026-06-28 | Storage Protection (Log Management / SD-Card Protection, `a6b6bd4`) — logrotate for `/var/log/conduit-cc/*.log` + flock-guarded `ccc-update-*` work-dir cleanup. Also the milestone for the first end-to-end One-Click Update validation (surfaced a 422 install bug, fixed in v0.3.6) |
+| 0.3.6 | `v0.3.6` | 2026-06-28 | One-Click Update install fix — `Content-Type: application/json` on `POST /api/update/install` (was HTTP 422); readable FastAPI validation errors. Frontend-only |
+| 0.3.7 | `v0.3.7` | 2026-06-29 | Validation release for the full One-Click Update pipeline; adopted the CCC Logo System v1.0 branding. (Known issue: non-interactive prompt rollback `rc=1`, fixed in v0.3.8) |
+| 0.3.8 | `v0.3.8` | 2026-06-29 | One-Click Update non-interactive fix — `update.sh` skips the confirmation prompt for `--ccc-only` / non-TTY runs, restoring the dashboard-driven path |
+| 0.3.9 | `v0.3.9` | 2026-06-29 | Validation release — Trusted Update Engine end-to-end on Raspberry Pi (v0.3.8 → v0.3.9) |
+| 0.3.10 | `v0.3.10` | 2026-07-01 | Validation release — Update Engine Test & CI Hardening; deploy `rsync --exclude '/bin/'` fix (v0.3.9 → v0.3.10) |
+| 0.3.11 | `v0.3.11` | 2026-07-02 | **One-Click Update production-proven** — first fully successful end-to-end dashboard update on Raspberry Pi via the B1 transient-unit engine (v0.3.10 → v0.3.11) |
+| 0.3.12 | `v0.3.12` | 2026-07-02 | **Frontend polish** + final One-Click Update validation (v0.3.11 → v0.3.12): Install button hides when up to date; stale update messages no longer survive a reload; restore success uses a transient Toast. One-Click Update now **Completed / Production-Proven / Maintenance Only** |
 
 ---
 
@@ -757,7 +765,7 @@ Documentation snapshots are **not** product releases and are tracked here:
 | D1 | Root URL `/` → `/dashboard` redirect (reuse existing auth flow) | **P0** | Backend route + test; no nginx / doc change |
 | D2 | Replace `cloudflare-domain-active.png` (root domain Active) | P1 | Image recapture + redaction |
 
-### Log Management / SD-Card Protection — ✅ Complete in code (commit `a6b6bd4`); validation scheduled for v0.3.5
+### Log Management / SD-Card Protection — ✅ Released in v0.3.5 (commit `a6b6bd4`)
 
 Minimal, Linux-native log/disk hygiene for SD-card-based Raspberry Pi installs:
 
@@ -767,15 +775,25 @@ Minimal, Linux-native log/disk hygiene for SD-card-based Raspberry Pi installs:
 
 Postponed (see *v0.4 Candidates*): journald drop-ins, dashboard cleanup action, scheduled cleanup timer, installer retention prompt, advanced log management.
 
-### Deployment Strategy — One-Click Update validation milestone (adopted 2026-06-28; corrected 2026-06-28)
+### One-Click Update — Completed / Production-Proven / Maintenance Only
 
-A One-Click Update *validation* milestone — it does **not** change the project's normal deployment workflow.
+**Status: Completed / Production-Proven / Maintenance Only (v0.3.12).** The
+dashboard-driven One-Click Update (Feature 2, Trusted Update Engine) is delivered
+and was validated end-to-end on real Raspberry Pi hardware twice — v0.3.10 →
+v0.3.11 (B1 transient-unit engine) and the final frontend-polish v0.3.11 →
+v0.3.12. See the closure record: `docs/closure/one-click-update-closure.md`.
 
-- **v0.3.5 is the validation milestone for the One-Click Update feature.**
-- A **manual SSH deployment** (`update.sh`) is used **once** to install v0.3.5 on the Raspberry Pi.
-- The **next** update is then performed **from the Dashboard, intentionally and solely** to perform an end-to-end validation of the One-Click Update feature (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B.
-- **After successful validation, the normal development workflow returns to SSH-based deployment using `update.sh`.**
-- **Dashboard-based update remains a supported product capability for end users**, but it does **not** replace the project's normal development deployment workflow.
+- **Deployment.** One-Click Update is the delivered, production-proven update
+  mechanism for end users; a manual SSH `update.sh` deployment is retained for
+  initial install, disaster recovery, and emergency maintenance. The earlier
+  one-time *validation milestone* (rev 1.19 / 1.20) is now **historical**.
+- **Maintenance Only.** Future One-Click Update work is limited to **bug fixes,
+  security hardening, and maintenance**. No further feature development is planned.
+- **Architectural stability.** The Trusted Update Engine architecture is stable;
+  any functional expansion requires an **explicit new ADR** rather than an
+  incremental extension of this completed subsystem.
+- **Deferred hardening.** Artifact integrity / signing (ADR-0001 invariant 5)
+  remains deferred and is intentionally not part of the closure.
 
 ---
 
@@ -786,7 +804,6 @@ delivered; none are scheduled.
 
 | Candidate | Source | Note |
 |---|---|---|
-| Update Centre | §7 | One-click `update.sh`; depends on Backup (delivered v0.3.0) |
 | Automatic Mode | §7, §5.7 | Raspberry Pi restart-cascade risk; needs audit-log infrastructure |
 | Health Score | §7 | All inputs exist; unblocked |
 | Per-direction bandwidth display | §7, §5.6 | Read-only; not yet built |
@@ -799,6 +816,44 @@ delivered; none are scheduled.
 | Scheduled cleanup timer | Log Mgmt (postponed) | Not needed; OS-run logrotate + the flock-guarded sweep cover it |
 | Installer log-retention prompt | Log Mgmt (postponed) | Installer-managed retention sizing; future enhancement |
 | Advanced log management | Log Mgmt (postponed) | Broader retention/observability; only if the minimal approach proves insufficient |
+
+---
+
+## Next Phase / Candidate Drivers
+
+One-Click Update (Feature 2) is closed (Completed / Production-Proven /
+Maintenance Only). With no feature increment currently approved, the project
+**remains Idle between phases** until the Project Owner selects a driver. Per the
+Project Lifecycle, a new phase opens only on a real driver — **none is chosen
+here**.
+
+**"Idle between phases" means only that no _Implementation Phase_ is currently
+open — not that the project is inactive.** Consistent with
+`docs/ENGINEERING-PROCESS-GUIDE.md` and `docs/PROJECT-LIFECYCLE.md`, architecture
+work, documentation, ADR work, research, discovery, planning, and the
+Architecture Atlas may all continue during this state. Only the **implementation
+of a new feature** requires a new approved engineering driver and a Value Gate.
+
+The following are **candidate drivers only** (not selected, not scheduled). Each
+requires explicit Project-Owner approval and a Value-Gate pass before any work
+begins; those marked *(new ADR)* also require a new architectural decision record:
+
+- **Architecture Atlas** — the approved long-term architectural knowledge
+  infrastructure for CCC: an architectural-documentation and capability-discovery
+  initiative, **not** a product-feature implementation. It was intentionally
+  deferred until the architecture phase was complete and One-Click Update reached
+  Production-Proven status, both of which now hold.
+- **Conduit Core update design** *(new ADR)* — the successor to CCC-only updates;
+  a design/architecture effort, distinct from and building on the completed
+  Feature 2. It is a new architectural evolution, not an extension of the closed
+  subsystem.
+- **Artifact signing** — cryptographic integrity for update artifacts
+  (ADR-0001 invariant 5); the principal deferred security-hardening item.
+- **Documentation Normalization** — RTL/LTR authoring-style normalization of the
+  existing chapters (deferred; see *v0.4 Candidates* and PROJECT-STATUS §6).
+
+Selecting any of these is a Project-Owner decision. Until one is chosen, no next
+phase is active.
 
 ---
 
@@ -827,6 +882,7 @@ delivered; none are scheduled.
 | 1.18 | 2026-06-28 | CCC Development Team | **Log Management / SD-Card Protection recorded (documentation-only; feature commit `a6b6bd4`, unreleased).** Added a "Log Management / SD-Card Protection — Delivered" subsection under *Maintenance & Patch Releases* (logrotate for `/var/log/conduit-cc/*.log` provisioned via install/update/uninstall; `ccc-update-apply` stale-`ccc-update-*` sweep under the update flock + current-workdir removal after the terminal `update-status.json`; Linux-native; no new helper/sudoers/timer/dashboard/journald) and five **postponed** items under *v0.4 Candidates* (journald drop-ins, dashboard cleanup, cleanup timer, installer retention prompt, advanced log management). Historical rev-≤1.17 rows intact; no feature scope changed. |
 | 1.19 | 2026-06-28 | CCC Development Team | **Release-status reconciliation + Deployment Strategy milestone.** Reconciled the Release History table (and `docs/PROJECT-STATUS.md`) to reflect **v0.3.2 released**, the **v0.3.3 validation release** (exposed the `/run/lock` EROFS), and **v0.3.4 released** (EROFS lock-path fix → `/var/lib/conduit-cc/.update.lock`); added planned **v0.3.5**. Marked Log Management / SD-Card Protection (`a6b6bd4`) **complete in code, validation scheduled for v0.3.5**. Added a **Deployment Strategy** milestone: v0.3.5 is the final *planned* manual Pi deployment to validate the full dashboard One-Click Update workflow; after success, dashboard One-Click Update becomes the standard deployment mechanism, with manual `update.sh` retained for initial install, disaster recovery, and emergency maintenance (not a removal). Postponed Log Management items and all historical rev-≤1.18 rows left intact; no feature scope changed. |
 | 1.20 | 2026-06-28 | CCC Development Team | **Deployment Strategy corrected.** The rev-1.19 wording wrongly implied dashboard One-Click Update would become the project's permanent/standard deployment workflow. Restated as a **One-Click Update *validation* milestone**: v0.3.5 is installed **once** via manual SSH (`update.sh`); the **next** update is performed from the Dashboard **solely** to validate One-Click Update end-to-end; **after success, the normal development workflow returns to SSH-based `update.sh` deployment**; Dashboard update remains a supported **end-user** capability but does **not** replace the project's normal development workflow. Updated the *Deployment Strategy* subsection, the 0.3.5 Release-History row, and `docs/PROJECT-STATUS.md` (§1/§3/§8/§9/§10). Rev-1.19 row left intact (history preserved); no feature scope changed. |
+| 1.21 | 2026-07-02 | CCC Development Team | **Reconciled to v0.3.12.** One-Click Update / Trusted Update Engine marked **Completed / Production-Proven / Maintenance Only**. Added shipped releases **v0.3.5–v0.3.12** to Release History and removed the obsolete *v0.3.5 (planned)* validation-milestone row. Replaced the *Deployment Strategy — validation milestone* subsection with a *One-Click Update — Completed / Production-Proven / Maintenance Only* status subsection referencing `docs/closure/one-click-update-closure.md` (future work limited to bug fixes / security hardening / maintenance; functional expansion requires a new ADR; artifact signing deferred). Marked **Log Management / SD-Card Protection released in v0.3.5**; removed **Update Centre** from *v0.4 Candidates* (delivered as Feature 2). Added a **Next Phase / Candidate Drivers** section (Conduit Core update design, Artifact signing, Documentation Normalization) as candidates only — the project remains **Idle between phases** until the Project Owner selects a driver. Roadmap Markdown only; PDF not regenerated; `docs/PROJECT-STATUS.md` unchanged (separate pass); historical rev-≤1.20 rows intact; no feature scope changed. |
 
 ---
 
