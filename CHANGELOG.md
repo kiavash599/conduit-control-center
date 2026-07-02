@@ -11,6 +11,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.11] — 2026-07-02
+
+**Validation release for the One-Click Update end-to-end path.** This release
+exists only to drive one real dashboard One-Click Update on Raspberry Pi
+(**v0.3.10 → v0.3.11**) on the B1 transient-unit engine, confirming the update
+completes after the deployment-drift recovery. There are **no application feature
+changes** and **no update-logic changes**.
+
+---
+
 ## [0.3.10] — 2026-07-01
 
 **Validation release for the Update Engine Test & CI Hardening milestone.** This
