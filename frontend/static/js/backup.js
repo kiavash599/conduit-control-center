@@ -29,7 +29,7 @@
  *     download is triggered.
  *
  * Script loading order: api.js -> app.js -> [shell] -> ... -> backup.js.
- * Relies on globals: rawFetch (api.js), onReady (app.js).
+ * Relies on globals: rawFetch, Toast (api.js), onReady (app.js).
  */
 
 (function () {
@@ -612,7 +612,17 @@
             return _readStatusOnce().then(function (d) {
                 if (!d) return;              // tolerate transient/non-JSON (restart window)
                 if (d.state && d.state !== 'in_progress') {
-                    renderRestoreBanner(d);
+                    if (d.state === 'restored') {
+                        // Success is a transient notification, not a persistent
+                        // global status: emit it through the shared Toast (auto-
+                        // dismiss + dedupe) so it never lingers or re-appears on
+                        // reload/navigation. Failures stay in the banner below.
+                        var t = _restoreLabel(d.state);
+                        if (d.message) t += ' — ' + d.message;
+                        Toast.show(t, 'success');
+                    } else {
+                        renderRestoreBanner(d);   // failures persist until dismissed
+                    }
                     if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
                 } else if (Date.now() - started > 120000) {   // ~2 min cap
                     if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
@@ -624,6 +634,13 @@
     function loadRestoreStatus() {
         _readStatusOnce().then(function (d) {
             if (!d || !d.state || d.state === 'idle' || d.state === 'unknown') return;  // no banner
+            // The passive loader surfaces only persistent restore *status*
+            // (in-progress or a failure that still needs attention). A completed
+            // success is a past transient notification — it was shown once via
+            // Toast when the restore finished (see pollInProgress) and is never
+            // re-surfaced as a standing banner on reload/navigation. Audit lives
+            // in GET /api/backup/restore/status + the logs.
+            if (d.state === 'restored') return;
             renderRestoreBanner(d);
             if (d.state === 'in_progress') pollInProgress();
         });
@@ -631,7 +648,7 @@
 
     function dismissBanner() {
         var banner = el('restore-status-banner');
-        if (banner) banner.hidden = true;    // in-memory only; reappears on reload
+        if (banner) banner.hidden = true;    // failures reappear on reload until resolved; success is a toast, never a banner
         if (_inProgressPoller) { stopPolling(_inProgressPoller); _inProgressPoller = null; }
     }
 

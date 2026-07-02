@@ -338,6 +338,25 @@ def test_backup_js_restore_uses_size_cap():
     assert "file.size > MAX_UPLOAD_BYTES" in js
 
 
+def test_backup_js_restore_success_is_transient_toast():
+    # A completed restore is a transient notification, not a persistent global
+    # status. Success is emitted through the shared Toast (auto-dismiss + dedupe),
+    # and the passive loader skips a completed restore so it never re-appears as
+    # a standing banner on reload/navigation. No custom timer, no browser storage
+    # (still guarded by test_backup_js_no_unsafe_storage_or_logging).
+    js = _backup_js()
+    # success routed to the shared Toast with the success styling
+    assert "Toast.show(" in js
+    assert "'success'" in js
+    # no bespoke auto-dismiss timer was introduced for the success path
+    assert "RESTORE_SUCCESS_AUTODISMISS_MS" not in js
+    assert "setTimeout(" not in js
+    # passive load skips a completed restore so it never becomes a global banner
+    assert "d.state === 'restored'" in js
+    # failures still use the persistent banner
+    assert "renderRestoreBanner(d)" in js
+
+
 # --- S4B-2.3a: inert restore-zone + banner markup + 10 MiB cap --------------
 
 

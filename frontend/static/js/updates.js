@@ -204,6 +204,13 @@
     onReady(function () {
         if (!el('section-updates')) return;         // card not present
 
+        // Start from a clean slate so a terminal progress/rollback message from
+        // an earlier run is never carried across a page load. The live install
+        // flow repopulates this via renderStatus(); an interrupted run is
+        // re-surfaced below only when status is still in_progress.
+        show('upd-progress', false);
+        setText('upd-progress-msg', '');
+
         var checkBtn = el('upd-check-btn');
         if (checkBtn) checkBtn.addEventListener('click', function () { loadCheck(true); });
 

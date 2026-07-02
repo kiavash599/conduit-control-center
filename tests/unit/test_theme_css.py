@@ -60,6 +60,15 @@ def test_button_and_spinner_rules_have_no_hardcoded_white():
         assert "rgba(255, 255, 255" not in body, sel
 
 
+def test_hidden_button_actually_hides():
+    # `.btn { display: inline-flex }` overrides the user-agent `[hidden]` rule,
+    # so `button.hidden = true` (e.g. updates.js hiding #upd-install-btn when the
+    # dashboard is up to date) had no visible effect. A `.btn[hidden]` rule must
+    # restore the expected behaviour without !important.
+    assert re.search(r"\.btn\[hidden\]\s*\{\s*display:\s*none", _CSS), \
+        ".btn[hidden] { display: none } rule missing"
+
+
 def test_chart_down_not_hardcoded_in_root():
     # The chart :root block keeps the theme-aware chart-up but no longer
     # hard-codes chart-down. (There are two :root blocks; target the chart one

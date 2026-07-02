@@ -506,6 +506,14 @@ a:hover {
     line-height: 1;
 }
 
+/* The HTML `hidden` attribute must win over the explicit `display` above.
+   Without this, `button.hidden = true` in JS (e.g. updates.js hiding
+   #upd-install-btn when the dashboard is already up to date) has no visible
+   effect, because `.btn { display: inline-flex }` overrides the user-agent
+   `[hidden] { display: none }` rule. `.btn[hidden]` (specificity 0,2,0) beats
+   `.btn` (0,1,0), so no !important is needed. */
+.btn[hidden] { display: none; }
+
 .btn:disabled,
 .btn[aria-disabled="true"] {
     opacity: 0.5;
