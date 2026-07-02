@@ -1,21 +1,21 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.20,
-> Reconciled) owns forward planning and feature catalogues; the **CHANGELOG** owns
-> shipped history; **closure records** (`docs/closure/`) are optional per-epic
-> decision deep-dives. This file is the canonical closed-epic index and links the
-> three — it does not duplicate them.
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.21,
+> Reconciled to v0.3.12) owns forward planning and feature catalogues; the
+> **CHANGELOG** owns shipped history; **closure records** (`docs/closure/`) are
+> optional per-epic decision deep-dives. This file is the canonical closed-epic
+> index and links the three — it does not duplicate them.
 >
-> Last reconciled: 2026-06-28 · branch `main` · HEAD `a6b6bd4`.
+> Last reconciled: 2026-07-02 · branch `main` · latest release `v0.3.12`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| **v0.3.4** (released 2026-06-28 — EROFS one-click lock-path fix) · v0.3.3 (validation release) · v0.3.2 (HTTPS port selection + one-click update) | docs-v0.3 (2026-06-22, documentation milestone) | 1.20 | ✅ Released · clean baseline. Next: **v0.3.5** — validation milestone for the One-Click Update feature (see §10) |
+| **v0.3.12** (released 2026-07-02 — frontend polish; final One-Click Update validation) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (HTTPS port selection + one-click update, Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.21 | ✅ Released · One-Click Update **Completed / Production-Proven / Maintenance Only** (see §10 and `docs/closure/one-click-update-closure.md`) |
 
-Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), the v0.3.3 validation release (which exposed the `/run/lock` EROFS), and the v0.3.4 helper lock-path fix. Log Management / SD-Card Protection is **complete in code** (commit `a6b6bd4`) and **scheduled for validation in v0.3.5**. v0.3.5 is the **validation milestone for the One-Click Update feature**: a manual SSH deployment installs v0.3.5 once, the **next** update is then performed from the Dashboard solely to validate One-Click Update end-to-end, after which the normal development workflow returns to SSH-based `update.sh` deployment (see §10 Deployment Strategy).
+Branch `main` · **v0.3.12 released** — the v0.3.2 → v0.3.12 line delivered HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), Log Management / SD-Card Protection (v0.3.5, commit `a6b6bd4`), and the One-Click Update hardening/validation series culminating in **production-proven** on Raspberry Pi (v0.3.10 → v0.3.11) and the final frontend-polish validation (v0.3.11 → v0.3.12). One-Click Update / Trusted Update Engine is now **Completed / Production-Proven / Maintenance Only**: future work is limited to bug fixes, security hardening, and maintenance, and functional expansion requires a new ADR (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). See §10.
 
 ## 2. Closed Epics
 
@@ -33,7 +33,7 @@ Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: H
 | HTTPS Port Selection (Feature 1) | ✅ Released v0.3.2 | Cloudflare-compatible HTTPS port chosen at install; preserved by `update.sh`; `ccc-apply-https-port`; dashboard read-only display; Pi 4 + Pi 3 B validated | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` |
 | One-Click CCC Update (Feature 2) | ✅ Production-proven · **Maintenance Only** (v0.3.12) | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable); async status + reconnect + auto-rollback; no auto-update; Conduit Core out of scope. The v0.3.3 validation release exposed a `/run/lock` EROFS, fixed in v0.3.4 (lock → `/var/lib/conduit-cc/.update.lock`). **Validated end-to-end on a live Raspberry Pi: v0.3.10 → v0.3.11 (B1 transient-unit engine) and the final frontend-polish v0.3.11 → v0.3.12 (2026-07-02): `state=success`, `/api/health` ok at 0.3.12, `/opt/conduit-cc/bin` preserved, no "cannot delete non-empty directory", `ProtectSystem=strict` unchanged.** Now **Maintenance Only** — future work limited to bug fixes, security hardening, and maintenance; artifact signing (ADR-0001 inv. 5) deferred. | `docs/closure/one-click-update-closure.md`; tags `v0.3.2`…`v0.3.12` |
 | One-Click Update Lock-Path Fix (EROFS) | ✅ Released v0.3.4 | `ccc-update-apply` lock moved from `/run/lock` (read-only under `ProtectSystem=strict`) to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`); exposed by the v0.3.3 validation release | CHANGELOG `[0.3.4]`; tag `v0.3.4` |
-| Log Management / SD-Card Protection | ✅ Complete in code (`a6b6bd4`) — validation scheduled for v0.3.5 | logrotate for `/var/log/conduit-cc/*.log` (`deployment/conduit-cc.logrotate`; provisioned by install.sh, re-provisioned by update.sh, removed by uninstall.sh) + automatic cleanup of stale `ccc-update-*` work directories and the current work directory **after** the terminal `update-status.json` is written, inside `ccc-update-apply` under the existing update flock. Linux-native; **no** new helper, sudoers rule, systemd timer, dashboard cleanup feature, or journald change | commit `a6b6bd4` |
+| Log Management / SD-Card Protection | ✅ Released v0.3.5 (`a6b6bd4`) | logrotate for `/var/log/conduit-cc/*.log` (`deployment/conduit-cc.logrotate`; provisioned by install.sh, re-provisioned by update.sh, removed by uninstall.sh) + automatic cleanup of stale `ccc-update-*` work directories and the current work directory **after** the terminal `update-status.json` is written, inside `ccc-update-apply` under the existing update flock. Linux-native; **no** new helper, sudoers rule, systemd timer, dashboard cleanup feature, or journald change | commit `a6b6bd4`; tag `v0.3.5` |
 | Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
 | TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Complete (unreleased) | EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); **bilingual illustrated TLS guide** — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), 8 shared redacted screenshots; chapters language-routed (`957d497`) | commits `83d2ed0`, `652f028`, `05366fe`, `957d497` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
@@ -48,14 +48,11 @@ Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: H
 
 ## 3. Active Epics
 
-**None blocking.** v0.3.2 → v0.3.4 released — HTTPS port selection + one-click update (Features 1 + 2, v0.3.2), the v0.3.3 validation release, and the v0.3.4 EROFS lock-path fix. Log Management / SD-Card Protection is complete in code (`a6b6bd4`), validation scheduled for **v0.3.5**. **v0.3.5 is the validation milestone for One-Click Update** — manual SSH installs v0.3.5 once, the next update runs from the Dashboard solely to validate One-Click Update end-to-end, then development returns to SSH `update.sh`. Dashboard update stays a supported end-user capability but is **not** the project's normal development deployment workflow (see §10 Deployment Strategy). See Closed Epics.
+**None open.** The v0.3.2 → v0.3.12 line is released (see §1 and §8 Release Timeline). One-Click Update / Trusted Update Engine is **Completed / Production-Proven / Maintenance Only** (see §2 Closed Epics and §10). The project is currently **between implementation phases** — no implementation epic is open. See §9 Next Recommended Action.
 
 ## 4. Approved Next Epics
 
-| Epic | Description | Priority |
-|---|---|---|
-| **Cloudflare-compatible HTTPS port selection** | Install/update behaviour selects an HTTPS port compatible with the Cloudflare proxy | Next |
-| **One-click update system** | Separate CCC and Conduit Core updates; no auto-update; rollback: CCC supported, Conduit Core best-effort | Next |
+**None.** The two epics previously listed here — **HTTPS Port Selection (Feature 1)** and the **One-click update system (Feature 2)** — are delivered and now recorded under §2 Closed Epics (v0.3.2 → v0.3.12). No implementation epic is currently approved; the project is **between implementation phases** (see §9). Candidate drivers for a future phase — Architecture Atlas, Conduit Core update design, Artifact signing, Documentation Normalization — are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*).
 
 > Documentation work that was tracked here (D5 RTL/LTR formatting) is now split: **platform RTL/LTR support is complete** under Documentation Platform Phase 1; **content normalization of existing chapters is Deferred** — see §6 *Documentation Normalization*.
 
@@ -109,21 +106,26 @@ Branch `main` · **v0.3.4 released** — latest of the v0.3.2 → v0.3.4 line: H
 | v0.3.2 | 2026-06-28 | HTTPS port selection (Feature 1) + one-click CCC update (Feature 2); Pi 4 + Pi 3 B validated |
 | v0.3.3 | 2026-06-28 | Validation release — exercised the one-click path; exposed the `/run/lock` EROFS in `ccc-update-apply` |
 | v0.3.4 | 2026-06-28 | One-click update lock-path fix (EROFS): lock → `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`) |
-| v0.3.5 (planned) | TBD | **One-Click Update validation milestone** — installed once via manual SSH; the next update runs from the Dashboard solely to validate One-Click Update end-to-end; ships Log Management / SD-Card Protection (`a6b6bd4`). Development then returns to SSH `update.sh` (§10) |
+| v0.3.5 | 2026-06-28 | Storage Protection (Log Management / SD-Card Protection, `a6b6bd4`); also the first end-to-end One-Click Update validation milestone (a 422 install bug surfaced, fixed in v0.3.6) |
+| v0.3.6 | 2026-06-28 | One-Click Update install fix — `Content-Type: application/json` on `POST /api/update/install` (was HTTP 422); readable validation errors |
+| v0.3.7 | 2026-06-29 | Validation release for the full One-Click Update pipeline; CCC Logo System v1.0 branding (known issue: non-interactive prompt rollback, fixed in v0.3.8) |
+| v0.3.8 | 2026-06-29 | One-Click Update non-interactive fix — `update.sh` skips the confirmation prompt for `--ccc-only` / non-TTY runs |
+| v0.3.9 | 2026-06-29 | Validation release — Trusted Update Engine end-to-end on Raspberry Pi (v0.3.8 → v0.3.9) |
+| v0.3.10 | 2026-07-01 | Validation release — Update Engine Test & CI Hardening; deploy `rsync --exclude '/bin/'` fix (v0.3.9 → v0.3.10) |
+| v0.3.11 | 2026-07-02 | One-Click Update **production-proven** — first fully successful dashboard update on Raspberry Pi via the B1 transient-unit engine (v0.3.10 → v0.3.11) |
+| v0.3.12 | 2026-07-02 | Frontend polish + final One-Click Update validation (v0.3.11 → v0.3.12); One-Click Update now Completed / Production-Proven / Maintenance Only |
 
 ## 9. Next Recommended Action
 
-**v0.3.4 released.** The v0.3.2 → v0.3.4 line shipped HTTPS port selection, one-click update, and the EROFS lock-path fix; Log Management / SD-Card Protection is complete in code (`a6b6bd4`). **Next: cut v0.3.5** and install it **once** via manual SSH (`update.sh`); then perform the **next** update from the Dashboard **solely to validate** the One-Click Update feature end-to-end (download → `ccc-update-apply` → `update.sh --ccc-only` → restart → reconnect → success/rollback) on Pi 4 + Pi 3 B, together with the Log Management feature. **After successful validation, the normal development workflow returns to SSH-based `update.sh` deployment**; Dashboard update remains a supported end-user capability but does **not** replace the project's normal development workflow (see §10). Then: **Conduit Core update design** (separate from Feature 2) and **D5 Persian RTL/LTR documentation normalization** (phased; deferred per §6).
+**The project is currently between implementation phases.** One-Click Update / Trusted Update Engine is closed — **Completed / Production-Proven / Maintenance Only** (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). **Implementation is closed until a new engineering driver is selected** and passes the Value Gate; no next implementation phase is chosen here. Candidate drivers for a future phase — **Architecture Atlas, Conduit Core update design, Artifact signing, Documentation Normalization** — are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Being between implementation phases does not mean the project is inactive: architecture, documentation, ADR, research, discovery, and planning work may continue; only new-feature implementation requires an approved driver and a Value Gate.
 
 ## 10. Deployment Strategy
 
-**Status: Adopted 2026-06-28; corrected 2026-06-28. A One-Click Update *validation* milestone — it does not change the project's normal deployment workflow.**
+**Status: One-Click Update is delivered and production-proven (v0.3.12).** The one-time *validation milestone* (adopted/corrected 2026-06-28) is now **historical** — validation was completed on Raspberry Pi (v0.3.10 → v0.3.11 and v0.3.11 → v0.3.12; see `docs/closure/one-click-update-closure.md`).
 
-- **v0.3.5 is the validation milestone for the One-Click Update feature.**
-- A **manual SSH deployment** (`update.sh`) is used **once** to install v0.3.5 on the Raspberry Pi.
-- The **next** update is then performed **from the Dashboard, intentionally and solely to perform an end-to-end validation** of the One-Click Update feature.
-- **After successful validation, the normal development workflow returns to SSH-based deployment using `update.sh`.**
-- **Dashboard-based update remains a supported product capability for end users**, but it does **not** replace the project's normal development deployment workflow.
+- **One-Click Update** (dashboard Software Updates → `ccc-update-apply` → `update.sh --ccc-only`) is the delivered, production-proven update mechanism for end users.
+- **Manual SSH `update.sh`** is retained for initial install, disaster recovery, and emergency maintenance.
+- Future One-Click Update work is **Maintenance Only** (bug fixes, security hardening, maintenance); functional expansion requires a new ADR.
 
 ---
 
