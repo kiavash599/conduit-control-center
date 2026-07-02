@@ -1,6 +1,6 @@
 # ADR-0001: Trusted Update Engine
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-29
 **Deciders:** CCC maintainers
 **Supersedes:** —   **Superseded by:** —
