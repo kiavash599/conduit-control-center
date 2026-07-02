@@ -11,6 +11,29 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.12] — 2026-07-02
+
+**Frontend polish release.** Ships UI polish for the Software Updates and Restore
+status surfaces and drives one real dashboard One-Click Update on Raspberry Pi
+(**v0.3.11 → v0.3.12**) to validate the polished UI end to end. **No backend
+changes, no update-engine/logic changes, no capability-subsystem changes.**
+
+### Fixed
+
+- Software Updates: the **Install Update** button now correctly hides when the
+  system is already up to date. `.btn` set an explicit `display`, which overrode
+  the user-agent `[hidden]` rule, so `button.hidden = true` had no visual effect;
+  a scoped `.btn[hidden] { display: none }` rule restores the intended behaviour.
+- Software Updates: stale update progress/rollback messages no longer survive page
+  reloads — the progress area is reset on load.
+- Restore: restore success now uses a transient **Toast** notification (auto-dismiss
+  + de-duplication via the shared Toast) instead of a persistent global banner, so
+  a past "Restore complete" no longer re-appears on unrelated pages after a
+  refresh. Failure states (`rolled_back`, `rollback_failed`) remain persistent,
+  dismissible banners.
+
+---
+
 ## [0.3.11] — 2026-07-02
 
 **Validation release for the One-Click Update end-to-end path.** This release
