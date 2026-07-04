@@ -3,3 +3,9 @@
 
 *.sh text eol=lf
 deployment/bin/* text eol=lf
+
+# Deployment artifacts (systemd units, nginx, logrotate, etc.) are consumed
+# byte-for-byte by Linux-side guards (e.g. update.sh BS1 reduced-mode check,
+# which anchors on `^Environment=CCC_MAX_PERSONAL_CLIENTS=0$`). A CRLF checkout
+# would break those exact-line matches, so pin them to LF everywhere.
+deployment/* text eol=lf
