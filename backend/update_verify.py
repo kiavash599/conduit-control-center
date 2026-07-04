@@ -56,6 +56,73 @@ REASON_MANIFEST = "reject_manifest"       # manifest missing / malformed / unsup
 REASON_DIGEST = "reject_digest"           # artifact content does not match manifest
 
 
+# --- Outcome Taxonomy Registry (Phase E1) ----------------------------------- #
+#
+# The single canonical enumeration of update outcome classes. Taxonomy CUSTODY
+# lives here (the registry + its version); outcome PRODUCTION stays with the
+# stages that emit a class (verify_release below emits the verification codes via
+# the REASON_* constants). Every observable code MUST exist in this registry; no
+# component may invent a code at runtime. Evolution is additive-only under design
+# review, bumping TAXONOMY_VERSION. Authorization / cross-check / deploy /
+# operational classes are intentionally NOT defined yet (added by their owning
+# phases). This registry carries no wording — only stable message KEYS (IC-11).
+#
+# NOTE: TAXONOMY_VERSION is unrelated to the manifest SUPPORTED_MANIFEST_FORMATS
+# (format_version); they version different things and must not be conflated.
+
+TAXONOMY_VERSION = 1
+
+OUTCOME_STAGES = frozenset({"verify", "cross-check", "authorize", "deploy", "operational"})
+OUTCOME_CATEGORIES = frozenset({
+    "success", "trust-integrity", "readiness", "authorization-informational", "operational",
+})
+OUTCOME_RECOVERABILITY = frozenset({
+    "none", "permanent-for-artifact", "recoverable", "informational",
+})
+
+
+@dataclass(frozen=True)
+class OutcomeClass:
+    """One immutable taxonomy entry. `code` is the stable machine identity (the
+    same string emitted in VerifyResult.reason); `message_key` is a stable
+    identifier for the presentation layer — never human wording."""
+    code: str
+    stage: str
+    category: str
+    recoverability: str
+    message_key: str
+
+
+# Built from the REASON_* constants so each code string is defined exactly once.
+_OUTCOME_REGISTRY = {
+    entry.code: entry
+    for entry in (
+        OutcomeClass(REASON_VERIFIED,  "verify", "success",         "none",                   "update.verify.verified"),
+        OutcomeClass(REASON_STORE,     "verify", "readiness",       "recoverable",            "update.verify.store"),
+        OutcomeClass(REASON_TOOLING,   "verify", "readiness",       "recoverable",            "update.verify.tooling"),
+        OutcomeClass(REASON_SIGNATURE, "verify", "trust-integrity", "permanent-for-artifact", "update.verify.signature"),
+        OutcomeClass(REASON_MANIFEST,  "verify", "trust-integrity", "permanent-for-artifact", "update.verify.manifest"),
+        OutcomeClass(REASON_DIGEST,    "verify", "trust-integrity", "permanent-for-artifact", "update.verify.digest"),
+    )
+}
+
+# Fail-safe sentinel for an unrecognised code (never raise): consumers render a
+# safe generic outcome rather than crashing or implying success.
+UNKNOWN_OUTCOME = OutcomeClass(
+    "unknown", "operational", "operational", "informational", "update.outcome.unknown",
+)
+
+
+def outcome_for(code: str) -> "OutcomeClass":
+    """Return the registry entry for `code`, or UNKNOWN_OUTCOME (fail-safe; never raises)."""
+    return _OUTCOME_REGISTRY.get(code, UNKNOWN_OUTCOME)
+
+
+def outcome_codes() -> frozenset:
+    """The closed set of defined outcome codes."""
+    return frozenset(_OUTCOME_REGISTRY)
+
+
 class VerifyError(Exception):
     """Internal parse/validation failure (mapped to a REJECT reason)."""
 
