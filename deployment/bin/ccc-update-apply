@@ -41,6 +41,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -65,6 +66,19 @@ MAX_PAYLOAD_BYTES = 200 * 1024 * 1024                      # 200 MiB hard cap
 _ACTIVE_WAIT_S = 10                                        # apply waits this long for the unit to register
 _VERSION_RE = re.compile(r'APP_VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
 _VER_ARG_RE = re.compile(r'^\d+\.\d+\.\d+$')
+TRUST_STORE = "/opt/conduit-cc/trust/allowed_signers"   # ADR-0003 M2 trust store (root; service-read-only)
+_FRAME_MAGIC = b"CCCU\x01"                               # payload frame header (MUST match backend/api/update.py)
+
+# ADR-0003 verifier (trusted, installed, stdlib-only). Imported fail-closed:
+# if it cannot be loaded, verification cannot proceed and the update is rejected.
+try:
+    sys.path.insert(0, "/opt/conduit-cc")
+    from backend.update_verify import (  # noqa: E402
+        verify_release, cross_check_version, product_scope_ok,
+    )
+    _VERIFY_AVAILABLE = True
+except Exception:  # noqa: BLE001 - fail-closed on any import problem
+    _VERIFY_AVAILABLE = False
 
 
 def log(msg: str) -> None:
@@ -143,27 +157,59 @@ def _derive_tree(work_abs: str) -> str:
     return dirs[0] if len(dirs) == 1 else src
 
 
-def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
-    """Read the tarball from stdin, extract, locate the source tree, validate.
-    Returns (tree_path, payload_version)."""
-    payload = os.path.join(work, "payload.tar.gz")
+def _read_exact(n: int) -> bytes:
+    """Read exactly n bytes from stdin, or die on truncation."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sys.stdin.buffer.read(n - len(buf))
+        if not chunk:
+            die(2, "truncated payload frame")
+        buf += chunk
+    return bytes(buf)
+
+
+def _read_framed_payload(work: str) -> tuple[str, str, str]:
+    """Read the ADR-0003 framed payload {manifest, signature, artifact} from stdin
+    and write each to a file under work/. Returns their paths. Fail-closed on any
+    malformed frame (magic + three length-prefixed records)."""
+    if _read_exact(len(_FRAME_MAGIC)) != _FRAME_MAGIC:
+        die(2, "bad payload frame header")
+    names = ("manifest.json", "manifest.json.sig", "payload.tar.gz")
+    paths = []
     total = 0
-    with open(payload, "wb") as fh:
-        while True:
-            chunk = sys.stdin.buffer.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_PAYLOAD_BYTES:
-                die(2, "payload exceeds size limit")
-            fh.write(chunk)
-    if total == 0:
-        die(2, "empty payload on stdin")
+    for name in names:
+        (n,) = struct.unpack(">Q", _read_exact(8))
+        total += n
+        if n > MAX_PAYLOAD_BYTES or total > MAX_PAYLOAD_BYTES:
+            die(2, "payload exceeds size limit")
+        data = _read_exact(n) if n else b""
+        path = os.path.join(work, name)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        paths.append(path)
+    return paths[0], paths[1], paths[2]
+
+
+def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
+    """Read the framed signed payload from stdin, VERIFY it against the on-device
+    trust store (fail-closed, BEFORE extraction and the version gate), then extract
+    and locate the source tree. Returns (tree_path, payload_version)."""
+    if not _VERIFY_AVAILABLE:
+        die(2, "update rejected: verifier unavailable")
+    manifest_p, sig_p, artifact_p = _read_framed_payload(work)
+
+    # --- the single, fail-closed verification decision (ADR-0003) --------------
+    result = verify_release(manifest_path=manifest_p, signature_path=sig_p,
+                            artifact_path=artifact_p, trust_store_path=TRUST_STORE)
+    if not result.ok:
+        die(2, f"update rejected: {result.reason}")
+    if not product_scope_ok(result.metadata):
+        die(2, "update rejected: wrong product")
 
     extract_dir = os.path.join(work, "src")
     os.makedirs(extract_dir, exist_ok=True)
     try:
-        with tarfile.open(payload, "r:gz") as tar:
+        with tarfile.open(artifact_p, "r:gz") as tar:
             _safe_extract(tar, extract_dir)
     except tarfile.TarError as exc:
         die(2, f"cannot read payload tarball: {exc}")
@@ -177,6 +223,10 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
         pv = _parse_version(fh.read())
     if pv is None:
         die(2, "payload APP_VERSION not found")
+
+    # cross-check the verified manifest version against the payload's own version
+    if not cross_check_version(result.metadata, _version_str(pv)):
+        die(2, "update rejected: manifest/payload version mismatch")
     return tree, pv
 
 

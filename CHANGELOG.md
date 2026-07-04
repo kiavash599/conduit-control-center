@@ -11,6 +11,27 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.13] — 2026-07-04
+
+**Security hardening candidate.** Adds ADR-0003 artifact-signing groundwork:
+publisher-side signed release production, SSH-signature manifest verification,
+signed-asset update ingestion, and fail-closed verification before privileged
+update execution.
+
+### Added
+
+- Release tooling for canonical signed update artifacts.
+- Device-side verification core for signed manifests and content digests.
+- Signed-asset update framing between the Update API and update helper.
+- Unit coverage for signed release production and verification failure modes.
+
+### Changed
+
+- One-Click Update now consumes publisher-produced signed assets instead of
+  GitHub auto-generated source archives.
+
+---
+
 ## [0.3.12] — 2026-07-02
 
 **Frontend polish release.** Ships UI polish for the Software Updates and Restore

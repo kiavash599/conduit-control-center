@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import select
+import struct
 import subprocess
 import threading
 import time
@@ -48,7 +49,10 @@ router = APIRouter(tags=["update"])
 # --------------------------------------------------------------------------- #
 _REPO = "kiavash599/conduit-control-center"
 _GH_LATEST = f"https://api.github.com/repos/{_REPO}/releases/latest"
-_GH_RAW_UPDATE_SH = f"https://raw.githubusercontent.com/{_REPO}/%s/update.sh"  # %s = tag
+# ADR-0003: the update payload is the publisher-produced SIGNED asset set
+# {manifest, signature, content-addressed artifact}; GitHub auto-generated source
+# archives (tarball_url) are NOT part of the update trust model.
+_FRAME_MAGIC = b"CCCU\x01"   # payload frame header (MUST match ccc-update-apply)
 _ALLOWED_DL_HOSTS = {
     "api.github.com", "codeload.github.com",
     "github.com", "objects.githubusercontent.com",
@@ -148,13 +152,37 @@ def _gh_download(url: str) -> bytes:
     return data
 
 
-def _fetch_recommended_core(tag: str) -> str | None:
-    """Best-effort: read CONDUIT_VERSION from the target tag's update.sh.
-    Any failure returns None and must NOT fail the check."""
+def _release_assets(data: dict, version: str) -> dict:
+    """Resolve the canonical SIGNED release asset URLs by name (host-allow-listed).
+    Raises if any of the three assets is absent (the release is not signed)."""
+    want = {
+        "manifest_url": f"ccc-{version}.manifest.json",
+        "signature_url": f"ccc-{version}.manifest.json.sig",
+        "artifact_url": f"ccc-{version}.tar.gz",
+    }
+    by_name: dict = {}
+    for asset in data.get("assets") or []:
+        url = asset.get("browser_download_url") or ""
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+        if url.startswith("https://") and host in _ALLOWED_DL_HOSTS:
+            by_name[asset.get("name")] = url
+    resolved = {}
+    for key, name in want.items():
+        if name not in by_name:
+            raise RuntimeError(f"release is missing signed asset: {name}")
+        resolved[key] = by_name[name]
+    return resolved
+
+
+def _recommended_core_from_manifest(manifest_url: str) -> str | None:
+    """Best-effort advisory: read the recommended Conduit Core version from the
+    (signed) manifest asset. NOT authoritative here — compatibility authority is
+    established at install AFTER verification. Any failure returns None and must
+    NOT fail the check. Replaces the former unauthenticated raw update.sh read."""
     try:
-        text = _gh_get_text(_GH_RAW_UPDATE_SH % urllib.parse.quote(tag, safe=""))
-        m = _CORE_VER_RE.search(text)
-        return m.group(1) if m else None
+        raw = _gh_download(manifest_url)
+        obj = json.loads(raw.decode("utf-8"))
+        return (obj.get("compatibility") or {}).get("recommended_conduit_core")
     except Exception:  # noqa: BLE001 - best effort
         return None
 
@@ -168,20 +196,20 @@ def _fetch_latest() -> dict:
     tag = (data.get("tag_name") or "").strip()
     if not _TAG_RE.match(tag):
         raise RuntimeError(f"unexpected tag format: {tag!r}")
-    tarball_url = data.get("tarball_url") or ""
-    host = (urllib.parse.urlparse(tarball_url).hostname or "").lower()
-    if not tarball_url.startswith("https://") or host not in _ALLOWED_DL_HOSTS:
-        raise RuntimeError("release has no acceptable tarball_url")
+    version = re.sub(r"^v", "", tag)
+    assets = _release_assets(data, version)
     return {
         "checked_at_epoch": time.time(),
         "checked_at": _now(),
-        "latest": re.sub(r"^v", "", tag),
+        "latest": version,
         "tag": tag,
-        "tarball_url": tarball_url,
+        "manifest_url": assets["manifest_url"],
+        "signature_url": assets["signature_url"],
+        "artifact_url": assets["artifact_url"],
         "html_url": data.get("html_url"),
         "published_at": data.get("published_at"),
         "notes_preview": _sanitize_notes(data.get("body") or ""),
-        "recommended_core": _fetch_recommended_core(tag),
+        "recommended_core": _recommended_core_from_manifest(assets["manifest_url"]),
     }
 
 
@@ -276,8 +304,19 @@ def _read_status() -> dict:
 # --------------------------------------------------------------------------- #
 #  Helper invocation (mirror restore: Popen + writer thread + ack read)       #
 # --------------------------------------------------------------------------- #
-def _invoke_helper(tarball: bytes):
-    """Stream the tarball to ccc-update-apply on stdin; return on the ack.
+def _frame_payload(manifest: bytes, signature: bytes, artifact: bytes) -> bytes:
+    """Frame the signed asset set for the helper's stdin (MUST match
+    ccc-update-apply's decoder): magic header + three length-prefixed records in
+    the order manifest, signature, artifact."""
+    out = bytearray(_FRAME_MAGIC)
+    for part in (manifest, signature, artifact):
+        out += struct.pack(">Q", len(part))
+        out += part
+    return bytes(out)
+
+
+def _invoke_helper(payload: bytes):
+    """Stream the framed payload to ccc-update-apply on stdin; return on the ack.
     Returns ("ack", line) | ("exit", rc) | ("timeout", None) | ("mismatch", line)."""
     proc = subprocess.Popen(
         list(_HELPER_ARGV),
@@ -286,7 +325,7 @@ def _invoke_helper(tarball: bytes):
 
     def _write():
         try:
-            proc.stdin.write(tarball)
+            proc.stdin.write(payload)
             proc.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
             pass
@@ -389,16 +428,18 @@ async def install(
                             detail="An update is already in progress.")
 
     try:
-        tarball = _gh_download(cache.get("tarball_url") or "")
+        manifest = _gh_download(cache.get("manifest_url") or "")
+        signature = _gh_download(cache.get("signature_url") or "")
+        artifact = _gh_download(cache.get("artifact_url") or "")
     except Exception as exc:  # noqa: BLE001
         logger.warning("release download failed: %s", exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
                             detail="Could not download the release.")
-    if tarball[:2] != b"\x1f\x8b":  # gzip magic
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail="Downloaded release is not a valid archive.")
 
-    kind, info = _invoke_helper(tarball)
+    # ADR-0003: stream the SIGNED asset set; the privileged helper verifies the
+    # signature + content digest against the on-device trust store BEFORE it does
+    # anything else. No structural/gzip pre-check here (untrusted transport).
+    kind, info = _invoke_helper(_frame_payload(manifest, signature, artifact))
     if kind == "ack":
         update_id = info.split(" ", 1)[1] if " " in info else None
         return {"status": "accepted", "id": update_id,
