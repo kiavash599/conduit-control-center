@@ -55,6 +55,19 @@ REASON_SIGNATURE = "reject_signature"     # signature not from a trusted publish
 REASON_MANIFEST = "reject_manifest"       # manifest missing / malformed / unsupported
 REASON_DIGEST = "reject_digest"           # artifact content does not match manifest
 
+# --- E1.1 additive outcome codes (authorization / cross-check / deploy / operational) --- #
+# Registered for Phase B audit consumption; no producer emits these yet.
+OUTCOME_ACCEPTED = "accepted"
+OUTCOME_REJECT_PRODUCT_SCOPE = "reject_product_scope"
+OUTCOME_REJECT_NON_UPGRADE = "reject_non_upgrade"
+OUTCOME_REJECT_VERSION_MISMATCH = "reject_version_mismatch"
+OUTCOME_REJECT_FRAME = "reject_frame"
+OUTCOME_REJECT_PAYLOAD_SHAPE = "reject_payload_shape"
+OUTCOME_LAUNCH_FAILED = "launch_failed"
+OUTCOME_APPLIED = "applied"
+OUTCOME_REVERTED = "reverted"
+OUTCOME_APPLY_FAILED = "apply_failed"
+
 
 # --- Outcome Taxonomy Registry (Phase E1) ----------------------------------- #
 #
@@ -70,7 +83,7 @@ REASON_DIGEST = "reject_digest"           # artifact content does not match mani
 # NOTE: TAXONOMY_VERSION is unrelated to the manifest SUPPORTED_MANIFEST_FORMATS
 # (format_version); they version different things and must not be conflated.
 
-TAXONOMY_VERSION = 1
+TAXONOMY_VERSION = 2
 
 OUTCOME_STAGES = frozenset({"verify", "cross-check", "authorize", "deploy", "operational"})
 OUTCOME_CATEGORIES = frozenset({
@@ -103,6 +116,17 @@ _OUTCOME_REGISTRY = {
         OutcomeClass(REASON_SIGNATURE, "verify", "trust-integrity", "permanent-for-artifact", "update.verify.signature"),
         OutcomeClass(REASON_MANIFEST,  "verify", "trust-integrity", "permanent-for-artifact", "update.verify.manifest"),
         OutcomeClass(REASON_DIGEST,    "verify", "trust-integrity", "permanent-for-artifact", "update.verify.digest"),
+        # --- E1.1 additive codes (authorization / cross-check / deploy / operational) ---
+        OutcomeClass(OUTCOME_ACCEPTED,                "authorize",   "authorization-informational", "informational",          "update.authorize.accepted"),
+        OutcomeClass(OUTCOME_REJECT_PRODUCT_SCOPE,    "authorize",   "authorization-informational", "informational",          "update.authorize.product_scope"),
+        OutcomeClass(OUTCOME_REJECT_NON_UPGRADE,      "authorize",   "authorization-informational", "informational",          "update.authorize.non_upgrade"),
+        OutcomeClass(OUTCOME_REJECT_VERSION_MISMATCH, "cross-check", "trust-integrity",             "permanent-for-artifact", "update.crosscheck.version_mismatch"),
+        OutcomeClass(OUTCOME_REJECT_FRAME,            "operational", "operational",                 "recoverable",            "update.operational.frame"),
+        OutcomeClass(OUTCOME_REJECT_PAYLOAD_SHAPE,    "deploy",      "operational",                 "permanent-for-artifact", "update.deploy.payload_shape"),
+        OutcomeClass(OUTCOME_LAUNCH_FAILED,           "deploy",      "operational",                 "recoverable",            "update.deploy.launch_failed"),
+        OutcomeClass(OUTCOME_APPLIED,                 "deploy",      "success",                     "none",                   "update.deploy.applied"),
+        OutcomeClass(OUTCOME_REVERTED,                "deploy",      "operational",                 "recoverable",            "update.deploy.reverted"),
+        OutcomeClass(OUTCOME_APPLY_FAILED,            "deploy",      "operational",                 "recoverable",            "update.deploy.apply_failed"),
     )
 }
 

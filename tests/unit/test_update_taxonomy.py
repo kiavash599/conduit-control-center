@@ -29,17 +29,20 @@ def test_reason_string_values_unchanged():
 
 # --- registry is the closed verification set ------------------------------- #
 
-def test_registry_is_exactly_the_six_verification_codes():
-    expected = {
+def test_registry_is_the_full_v2_outcome_set():
+    verification = {
         V.REASON_VERIFIED, V.REASON_STORE, V.REASON_TOOLING,
         V.REASON_SIGNATURE, V.REASON_MANIFEST, V.REASON_DIGEST,
     }
-    assert set(V.outcome_codes()) == expected
-    # guard: no authorization / cross-check / deploy / operational codes yet
-    for premature in ("reject_product_scope", "reject_version_not_newer",
-                      "reject_version_mismatch", "reject_extract",
-                      "reject_transient_unit", "rolled_back", "reject_record_write"):
-        assert premature not in V.outcome_codes()
+    e11 = {
+        V.OUTCOME_ACCEPTED, V.OUTCOME_REJECT_PRODUCT_SCOPE, V.OUTCOME_REJECT_NON_UPGRADE,
+        V.OUTCOME_REJECT_VERSION_MISMATCH, V.OUTCOME_REJECT_FRAME, V.OUTCOME_REJECT_PAYLOAD_SHAPE,
+        V.OUTCOME_LAUNCH_FAILED, V.OUTCOME_APPLIED, V.OUTCOME_REVERTED, V.OUTCOME_APPLY_FAILED,
+    }
+    assert set(V.outcome_codes()) == verification | e11
+    assert len(V.outcome_codes()) == 16
+    # E1.1 outcome identifiers stay distinct from E2 runtime-state literals
+    assert V.OUTCOME_REVERTED == "reverted" and V.OUTCOME_APPLY_FAILED == "apply_failed"
 
 
 def test_every_entry_has_valid_metadata_and_unique_keys():
@@ -71,11 +74,29 @@ def test_category_and_recoverability_mapping_matches_freeze():
         assert (e.stage, e.category, e.recoverability) == ("verify", "trust-integrity", "permanent-for-artifact")
 
 
+def test_v11_outcome_codes_metadata():
+    expected = {
+        V.OUTCOME_ACCEPTED:                ("authorize",   "authorization-informational", "informational",          "update.authorize.accepted"),
+        V.OUTCOME_REJECT_PRODUCT_SCOPE:    ("authorize",   "authorization-informational", "informational",          "update.authorize.product_scope"),
+        V.OUTCOME_REJECT_NON_UPGRADE:      ("authorize",   "authorization-informational", "informational",          "update.authorize.non_upgrade"),
+        V.OUTCOME_REJECT_VERSION_MISMATCH: ("cross-check", "trust-integrity",             "permanent-for-artifact", "update.crosscheck.version_mismatch"),
+        V.OUTCOME_REJECT_FRAME:            ("operational", "operational",                 "recoverable",            "update.operational.frame"),
+        V.OUTCOME_REJECT_PAYLOAD_SHAPE:    ("deploy",      "operational",                 "permanent-for-artifact", "update.deploy.payload_shape"),
+        V.OUTCOME_LAUNCH_FAILED:           ("deploy",      "operational",                 "recoverable",            "update.deploy.launch_failed"),
+        V.OUTCOME_APPLIED:                 ("deploy",      "success",                     "none",                   "update.deploy.applied"),
+        V.OUTCOME_REVERTED:                ("deploy",      "operational",                 "recoverable",            "update.deploy.reverted"),
+        V.OUTCOME_APPLY_FAILED:            ("deploy",      "operational",                 "recoverable",            "update.deploy.apply_failed"),
+    }
+    for code, (stage, category, recover, key) in expected.items():
+        e = V.outcome_for(code)
+        assert (e.code, e.stage, e.category, e.recoverability, e.message_key) == (code, stage, category, recover, key)
+
+
 # --- taxonomy_version ------------------------------------------------------ #
 
 def test_taxonomy_version_present_and_independent_of_manifest_format():
     assert isinstance(V.TAXONOMY_VERSION, int)
-    assert V.TAXONOMY_VERSION == 1
+    assert V.TAXONOMY_VERSION == 2
     # distinct concept from the manifest schema version: different types,
     # different objects — taxonomy_version must never alias format handling.
     assert isinstance(V.SUPPORTED_MANIFEST_FORMATS, frozenset)
