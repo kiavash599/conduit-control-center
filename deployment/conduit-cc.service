@@ -129,6 +129,18 @@ ReadWritePaths=/var/lib/conduit/data
 # Unix permissions (the key is 0600 conduit:conduit).
 ReadOnlyPaths=/var/lib/conduit/data/conduit_key.json
 
+# E3 audit (ADR-0003 Phase B): the privileged update helper (ccc-update-apply,
+# run via sudo and therefore INSIDE this namespace during the apply phase)
+# appends the append-only forensic audit record here. NARROWEST exception —
+# only this one directory. It is root:conduit-cc 0750 (the unprivileged web
+# process can traverse + READ but cannot write/unlink the file), and its parent
+# /var/log is root-owned so the service cannot rename/remove the directory. It
+# is deliberately NOT /var/log/conduit-cc (service-owned for diagnostic logs)
+# and NOT the StateDirectory (overwrite-only runtime state). The directory MUST
+# already exist when this unit starts (provisioned by install.sh / update.sh),
+# exactly like /var/lib/conduit/data above.
+ReadWritePaths=/var/log/conduit-cc-audit
+
 # UMask=0077 ensures every file the service creates is owner-only (0600) and
 # every directory 0700.  This is the primary guarantee for the SQLite database
 # files — ccc.db and the WAL sidecars ccc.db-wal / ccc.db-shm — which hold

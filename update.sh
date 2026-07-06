@@ -164,6 +164,21 @@ print(APP_VERSION)
 " 2>/dev/null || printf "unknown"
 }
 
+# Purge stale Python bytecode under APP_DIR so the runtime never loads a cached
+# module after a same-size / mtime=0 source change (the deterministic-artifact +
+# timestamp-based .pyc collision that made a deployed 0.3.14 report 0.3.13).
+# STRICTLY scoped to APP_DIR; the venv subtree AND its children are pruned and
+# never traversed, so dependency bytecode is untouched. Removes ONLY __pycache__
+# directories and *.pyc files. Best-effort / non-fatal (uses -exec/-delete, no
+# pipe, so it is pipefail-safe); any residual staleness is caught downstream by
+# the Phase-4 version gate.
+_purge_bytecode() {
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+        -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+        -o -type f -name '*.pyc' -delete 2>/dev/null || true
+}
+
 # Minimal JSON field reader - mirrors install.sh pattern.
 # Usage: echo "$json_string" | json_get "d.get('key','')"
 json_get() {
@@ -696,6 +711,10 @@ phase3_deploy() {
     chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
     info "Code deployed to ${APP_DIR}"
 
+    step "3b1 - Purging stale Python bytecode"
+    _purge_bytecode
+    info "Stale __pycache__/*.pyc purged under ${APP_DIR} (venv preserved)"
+
     step "3b2 - Re-provisioning privileged helpers + sudoers"
     # install.sh provisions /opt/conduit-cc/bin helpers and the sudoers grant, but
     # earlier update.sh did NOT re-provision them -- so an upgraded host could run
@@ -746,6 +765,14 @@ EOF
     cp "${APP_DIR}/deployment/conduit-cc.service" "${SYSTEMD_UNIT}"
     systemctl daemon-reload
     info "${SYSTEMD_UNIT} updated"
+
+    # E3 audit directory (ADR-0003 Phase B): must exist BEFORE the service
+    # restart in the health-check phase, because the updated unit's
+    # ReadWritePaths=/var/log/conduit-cc-audit binds at start. Root-owned parent
+    # (/var/log); dir root:conduit-cc 0750 (service traverses + reads, cannot
+    # write/unlink/rename). Idempotent.
+    install -d -o root -g conduit-cc -m 0750 /var/log/conduit-cc-audit
+    info "/var/log/conduit-cc-audit ensured (0750, root:conduit-cc)"
 
     step "3d - Updating nginx site configuration"
     # Preserve the configured HTTPS port (single source of truth:
@@ -963,6 +990,9 @@ phase5_rollback() {
                 "${BACKUP_DIR}/app/" "${APP_DIR}/"; then
             chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}" 2>/dev/null || true
             info "${APP_DIR} code restored"
+            step "5c1 - Purging stale Python bytecode (post-restore)"
+            _purge_bytecode
+            info "Stale bytecode purged under ${APP_DIR} (venv preserved)"
         else
             error "rsync restore failed for ${APP_DIR}."
             _failed=true

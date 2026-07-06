@@ -160,7 +160,14 @@ def test_ids_are_unique():
 # --- runtime contract constants exist (defined, not provisioned) ----------- #
 
 def test_runtime_contract_constants_defined():
-    assert isinstance(A.AUDIT_FILE, str) and A.AUDIT_FILE.endswith(".jsonl")
-    assert A.AUDIT_OWNER == "root"
-    assert isinstance(A.AUDIT_FILE_MODE, int) and isinstance(A.AUDIT_DIR_MODE, int)
+    # Option 2-refined: audit lives under the ROOT-OWNED parent /var/log (so the
+    # service cannot rename the dir), NOT under service-owned /var/log/conduit-cc
+    # and NOT under the StateDirectory /var/lib/conduit-cc.
+    assert A.AUDIT_DIR == "/var/log/conduit-cc-audit"
+    assert A.AUDIT_FILE == "/var/log/conduit-cc-audit/update-audit.jsonl"
+    assert not A.AUDIT_DIR.startswith("/var/lib/")           # not runtime state
+    assert not A.AUDIT_DIR.startswith("/var/log/conduit-cc/")  # not the service-owned log dir
+    assert A.AUDIT_FILE.endswith(".jsonl")
+    assert A.AUDIT_OWNER == "root" and A.AUDIT_GROUP == "conduit-cc"
+    assert A.AUDIT_DIR_MODE == 0o750 and A.AUDIT_FILE_MODE == 0o640
     assert isinstance(A.AUDIT_MAX_BYTES, int) and A.AUDIT_MAX_BYTES > 0

@@ -296,6 +296,10 @@ def verify_release(
         "compatibility": manifest.get("compatibility", {}),
         "digest": manifest["artifact"]["digest"],
         "format_version": manifest["format_version"],
+        # E3/Phase B: the verified expected allowed-signers principal (verification
+        # ran `-Y verify -I PUBLISHER_IDENTITY`). Additive metadata; NOT dynamic
+        # signer discovery. Present only on the success path.
+        "signing_principal": PUBLISHER_IDENTITY,
     }
     return VerifyResult(True, REASON_VERIFIED, metadata)
 

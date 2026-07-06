@@ -477,6 +477,18 @@ phase2_install() {
     chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
     info "Application files copied"
 
+    # ---- 2b1  Purge stale Python bytecode (reinstall-over-existing) --------- #
+    # Fresh installs have an empty APP_DIR (no-op); on reinstall-over-existing
+    # this prevents the runtime loading stale bytecode after a same-size/mtime=0
+    # source change. STRICTLY scoped to APP_DIR; venv AND its children are pruned
+    # (dependency bytecode untouched); removes ONLY __pycache__ dirs and *.pyc.
+    step "2b1 — Purging stale Python bytecode (reinstall-over-existing)"
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+        -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+        -o -type f -name '*.pyc' -delete 2>/dev/null || true
+    info "Stale __pycache__/*.pyc purged under ${APP_DIR} (venv preserved)"
+
     # ---- 2c  Python virtual environment ------------------------------------ #
     step "2c — Setting up Python virtual environment"
     if [[ ! -f "${APP_DIR}/venv/bin/python3" ]]; then
@@ -797,6 +809,15 @@ EOF
     chown "${APP_USER}:${APP_USER}" "${LOG_DIR}"
     chmod 755 "${LOG_DIR}"
     info "${LOG_DIR} created (755, ${APP_USER})"
+
+    # ---- E3 audit directory (ADR-0003 Phase B) ----------------------------- #
+    # Root-owned PARENT (/var/log); the dir is root:conduit-cc 0750 so the
+    # unprivileged service can traverse + READ audit records but cannot
+    # write/unlink them, and cannot rename the directory. Must exist BEFORE
+    # conduit-cc.service first starts (below), because the unit's
+    # ReadWritePaths=/var/log/conduit-cc-audit binds at service start.
+    install -d -o root -g "${APP_USER}" -m 0750 /var/log/conduit-cc-audit
+    info "/var/log/conduit-cc-audit created (0750, root:${APP_USER})"
 
     # ---- 2m2  logrotate config for CCC logs (SD-card protection) ----------- #
     # Static config shipped in deployment/; rotates /var/log/conduit-cc/*.log.

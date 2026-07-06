@@ -53,12 +53,16 @@ AUDIT_RECORD_FIELDS = frozenset(
     {"audit_schema_version", "timestamp", "attempt_id", "correlation_id"} | set(_INPUT_FIELDS)
 )
 
-# --- Runtime contract constants (DEFINED for a future provisioning/wiring step;
-#     NOTHING here is created, chowned, or written by E3) --------------------- #
-# The audit file must live in a ROOT-OWNED directory that the service can READ
-# but not write/unlink (append-only integrity). Provisioning is deferred.
+# --- Runtime contract constants -------------------------------------------- #
+# The audit directory sits under the ROOT-OWNED parent /var/log so the service
+# CANNOT rename/remove it; the dir is root:conduit-cc 0750 (service traverses +
+# reads, cannot write/unlink) and the file root:conduit-cc 0640. It is NOT under
+# /var/log/conduit-cc (that dir is service-owned for diagnostic logs) and NOT
+# under the StateDirectory /var/lib/conduit-cc (overwrite-only runtime state).
+# conduit-cc.service grants a narrow ReadWritePaths= for this dir so the apply
+# phase (ProtectSystem=strict) can append; install.sh/update.sh provision it.
 
-AUDIT_DIR = "/var/log/conduit-cc/audit"          # intended root-owned audit dir
+AUDIT_DIR = "/var/log/conduit-cc-audit"          # root-owned parent (/var/log); no rename/unlink by service
 AUDIT_FILE = f"{AUDIT_DIR}/update-audit.jsonl"    # one JSON object per line
 AUDIT_DIR_MODE = 0o750                            # root:conduit-cc, service-read/exec
 AUDIT_FILE_MODE = 0o640                           # root writes, service reads

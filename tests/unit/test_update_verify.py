@@ -114,6 +114,22 @@ def test_genuine_release_verifies(tmp_path):
 
 
 @_ssh
+def test_success_metadata_carries_signing_principal(tmp_path):
+    # Phase B additive: the verified expected allowed-signers principal is exposed
+    # on the SUCCESS path only; reject paths carry no metadata (and no principal).
+    p = _make_release(tmp_path)
+    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
+                         artifact_path=p["artifact"], trust_store_path=p["store"])
+    assert r.metadata["signing_principal"] == V.PUBLISHER_IDENTITY
+    for k in ("product", "version", "compatibility", "digest", "format_version"):
+        assert k in r.metadata           # existing keys intact (additive-only)
+    bad = _make_release(tmp_path, trusted=False)
+    rj = V.verify_release(manifest_path=bad["manifest"], signature_path=bad["signature"],
+                          artifact_path=bad["artifact"], trust_store_path=bad["store"])
+    assert rj.ok is False and rj.metadata is None
+
+
+@_ssh
 def test_tampered_manifest_rejected(tmp_path):
     p = _make_release(tmp_path)
     # mutate the manifest bytes on disk after signing

@@ -75,10 +75,37 @@ try:
     sys.path.insert(0, "/opt/conduit-cc")
     from backend.update_verify import (  # noqa: E402
         verify_release, cross_check_version, product_scope_ok,
+        # E1/E1.1 frozen outcome codes consumed by the audit writer (no literals):
+        OUTCOME_ACCEPTED, OUTCOME_REJECT_PRODUCT_SCOPE, OUTCOME_REJECT_NON_UPGRADE,
+        OUTCOME_REJECT_VERSION_MISMATCH, OUTCOME_REJECT_FRAME, OUTCOME_REJECT_PAYLOAD_SHAPE,
+        OUTCOME_LAUNCH_FAILED, OUTCOME_APPLIED, OUTCOME_REVERTED, OUTCOME_APPLY_FAILED,
     )
     _VERIFY_AVAILABLE = True
 except Exception:  # noqa: BLE001 - fail-closed on any import problem
     _VERIFY_AVAILABLE = False
+
+# ADR-0003 Phase B: E3 audit writer (best-effort, NON-fatal). Imported SEPARATELY
+# from the fail-closed verifier import: if the audit library is unavailable, audit
+# recording is silently skipped and the update proceeds unchanged (observability is
+# non-authorising; audit failures never alter the trust/deploy/rollback outcome).
+try:
+    from backend.update_audit import (  # noqa: E402
+        build_audit_record, append_record, AUDIT_DIR, AUDIT_FILE,
+    )
+    _AUDIT_AVAILABLE = True
+except Exception:  # noqa: BLE001 - audit is best-effort, never fail-closed
+    _AUDIT_AVAILABLE = False
+
+_ATTEMPT_ID = None   # correlation/attempt id for the current run (audit only)
+_LAST_META = None    # last verified manifest metadata (audit only; apply-side)
+
+# Audit dir/file end root:conduit-cc (service reads, cannot write/unlink).
+# Resolve the group once, best-effort; None -> chown is skipped (still non-fatal).
+try:
+    import grp as _grp  # noqa: E402
+    _CCC_GID = _grp.getgrnam("conduit-cc").gr_gid
+except Exception:  # noqa: BLE001 - best-effort; audit never fails on this
+    _CCC_GID = None
 
 
 def log(msg: str) -> None:
@@ -92,6 +119,44 @@ def die(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
 
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _audit(outcome: str, stage: str, **fields) -> None:
+    """Best-effort, append-only, NON-FATAL audit record for one update outcome.
+
+    ADR-0003 Phase B / E3 runtime integration. This function NEVER raises, NEVER
+    changes control flow, exit code, status content, deployment result, or
+    rollback behaviour (observability is non-authorising). It is a no-op if the
+    audit library is unavailable. Redaction is enforced by build_audit_record's
+    allowlist; only whitelisted primitive fields are recorded. The AppendResult is
+    intentionally discarded — an append failure changes nothing.
+    """
+    if not _AUDIT_AVAILABLE:
+        return
+    try:
+        # Fallback provisioning (installer/updater normally create the dir first).
+        # Explicit chmod/chown are required: UMask=0077 in the apply namespace would
+        # otherwise make the dir 0700 (blocking service read) and the file 0600.
+        try:
+            os.makedirs(AUDIT_DIR, exist_ok=True)
+            os.chmod(AUDIT_DIR, 0o750)
+            if _CCC_GID is not None:
+                os.chown(AUDIT_DIR, 0, _CCC_GID)   # root:conduit-cc
+        except OSError:
+            pass
+        rec_fields = {"outcome": outcome, "stage": stage}
+        rec_fields.update({k: v for k, v in fields.items() if v is not None})
+        record = build_audit_record(rec_fields, attempt_id=_ATTEMPT_ID,
+                                    correlation_id=_ATTEMPT_ID, now=_now())
+        append_record(AUDIT_FILE, record)   # AppendResult discarded (non-fatal)
+        try:
+            os.chmod(AUDIT_FILE, 0o640)
+            if _CCC_GID is not None:
+                os.chown(AUDIT_FILE, 0, _CCC_GID)   # root:conduit-cc
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001 - audit must never affect the update
+        pass
 
 
 def _parse_version(text: str) -> tuple[int, int, int] | None:
@@ -163,6 +228,7 @@ def _read_exact(n: int) -> bytes:
     while len(buf) < n:
         chunk = sys.stdin.buffer.read(n - len(buf))
         if not chunk:
+            _audit(OUTCOME_REJECT_FRAME, "operational")
             die(2, "truncated payload frame")
         buf += chunk
     return bytes(buf)
@@ -173,6 +239,7 @@ def _read_framed_payload(work: str) -> tuple[str, str, str]:
     and write each to a file under work/. Returns their paths. Fail-closed on any
     malformed frame (magic + three length-prefixed records)."""
     if _read_exact(len(_FRAME_MAGIC)) != _FRAME_MAGIC:
+        _audit(OUTCOME_REJECT_FRAME, "operational")
         die(2, "bad payload frame header")
     names = ("manifest.json", "manifest.json.sig", "payload.tar.gz")
     paths = []
@@ -181,6 +248,7 @@ def _read_framed_payload(work: str) -> tuple[str, str, str]:
         (n,) = struct.unpack(">Q", _read_exact(8))
         total += n
         if n > MAX_PAYLOAD_BYTES or total > MAX_PAYLOAD_BYTES:
+            _audit(OUTCOME_REJECT_FRAME, "operational")
             die(2, "payload exceeds size limit")
         data = _read_exact(n) if n else b""
         path = os.path.join(work, name)
@@ -194,7 +262,9 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     """Read the framed signed payload from stdin, VERIFY it against the on-device
     trust store (fail-closed, BEFORE extraction and the version gate), then extract
     and locate the source tree. Returns (tree_path, payload_version)."""
+    global _LAST_META
     if not _VERIFY_AVAILABLE:
+        _audit("reject_tooling", "verify")   # verifier module absent -> constants unavailable; documented literal fallback
         die(2, "update rejected: verifier unavailable")
     manifest_p, sig_p, artifact_p = _read_framed_payload(work)
 
@@ -202,9 +272,14 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     result = verify_release(manifest_path=manifest_p, signature_path=sig_p,
                             artifact_path=artifact_p, trust_store_path=TRUST_STORE)
     if not result.ok:
+        _audit(result.reason, "verify")
         die(2, f"update rejected: {result.reason}")
     if not product_scope_ok(result.metadata):
+        _audit(OUTCOME_REJECT_PRODUCT_SCOPE, "authorize",
+               verified_version=result.metadata.get("version"),
+               signing_principal=result.metadata.get("signing_principal"))
         die(2, "update rejected: wrong product")
+    _LAST_META = result.metadata   # verified metadata (audit only; apply-side points)
 
     extract_dir = os.path.join(work, "src")
     os.makedirs(extract_dir, exist_ok=True)
@@ -212,20 +287,32 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
         with tarfile.open(artifact_p, "r:gz") as tar:
             _safe_extract(tar, extract_dir)
     except tarfile.TarError as exc:
+        _audit(OUTCOME_REJECT_PAYLOAD_SHAPE, "deploy",
+               verified_version=result.metadata.get("version"),
+               signing_principal=result.metadata.get("signing_principal"))
         die(2, f"cannot read payload tarball: {exc}")
 
     tree = _derive_tree(work)
     if not os.path.isfile(os.path.join(tree, PAYLOAD_UPDATE_REL)) or \
        not os.path.isfile(os.path.join(tree, PAYLOAD_VERSION_REL)):
+        _audit(OUTCOME_REJECT_PAYLOAD_SHAPE, "deploy",
+               verified_version=result.metadata.get("version"),
+               signing_principal=result.metadata.get("signing_principal"))
         die(2, "payload is not a CCC source tree (missing update.sh/_version.py)")
 
     with open(os.path.join(tree, PAYLOAD_VERSION_REL), encoding="utf-8") as fh:
         pv = _parse_version(fh.read())
     if pv is None:
+        _audit(OUTCOME_REJECT_PAYLOAD_SHAPE, "deploy",
+               verified_version=result.metadata.get("version"),
+               signing_principal=result.metadata.get("signing_principal"))
         die(2, "payload APP_VERSION not found")
 
     # cross-check the verified manifest version against the payload's own version
     if not cross_check_version(result.metadata, _version_str(pv)):
+        _audit(OUTCOME_REJECT_VERSION_MISMATCH, "cross-check",
+               verified_version=result.metadata.get("version"),
+               signing_principal=result.metadata.get("signing_principal"))
         die(2, "update rejected: manifest/payload version mismatch")
     return tree, pv
 
@@ -299,6 +386,8 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
             write_status("failed", id=update_id, from_version=_version_str(frm),
                          to_version=_version_str(to), finished_at=_now(),
                          message=f"could not launch updater: {exc}")
+            _audit(OUTCOME_LAUNCH_FAILED, "deploy",
+                   from_version=_version_str(frm), target_version=_version_str(to))
             shutil.rmtree(work, ignore_errors=True)
             return 3
     finally:
@@ -310,14 +399,20 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
         write_status("success", id=update_id, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(),
                      message="Update complete")
+        _audit(OUTCOME_APPLIED, "deploy",
+               from_version=_version_str(frm), target_version=_version_str(to))
     elif new_installed == frm:
         write_status("rolled_back", id=update_id, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(),
                      message=f"Update failed (rc={rc}); rolled back to {_version_str(frm)}")
+        _audit(OUTCOME_REVERTED, "deploy",
+               from_version=_version_str(frm), target_version=_version_str(to))
     else:
         write_status("failed", id=update_id, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(),
                      message=f"Update ended in an unexpected state (rc={rc}); see /var/backups/conduit-cc")
+        _audit(OUTCOME_APPLY_FAILED, "deploy",
+               from_version=_version_str(frm), target_version=_version_str(to))
     # Terminal status written above -> now remove the current extraction dir.
     shutil.rmtree(work, ignore_errors=True)
     return 0
@@ -339,7 +434,14 @@ def run_worker_cmd(argv) -> None:
     to = _parse_ver_arg(a.to)
     uid = a.uid
 
-    def _fail(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+    global _ATTEMPT_ID
+    _ATTEMPT_ID = uid   # worker audit records correlate with the apply-side run
+
+    def _fail(code: int, msg: str, outcome: "str | None" = None) -> "NoReturn":  # type: ignore[name-defined]
+        if outcome is None and _VERIFY_AVAILABLE:
+            outcome = OUTCOME_REJECT_PAYLOAD_SHAPE
+        if outcome:
+            _audit(outcome, "deploy", from_version=_version_str(frm), target_version=_version_str(to))
         write_status("failed", id=uid, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(), message=msg)
         shutil.rmtree(a.work, ignore_errors=True)
@@ -373,7 +475,8 @@ def run_worker_cmd(argv) -> None:
     installed = _read_installed_version()
     if not (to > installed and installed == frm):
         _fail(2, f"refusing non-upgrade: installed {_version_str(installed)}, "
-                 f"from {_version_str(frm)}, to {_version_str(to)}")
+                 f"from {_version_str(frm)}, to {_version_str(to)}",
+              outcome=(OUTCOME_REJECT_NON_UPGRADE if _VERIFY_AVAILABLE else None))
 
     sys.exit(_run_update(tree, installed, to, uid, work_abs))
 
@@ -426,7 +529,12 @@ def _launch_update_unit(work: str, frm: tuple[int, int, int],
 
 
 def apply_cmd() -> None:
+    global _ATTEMPT_ID
     os.makedirs(STATE_DIR, exist_ok=True)
+    # Correlation id generated EARLY so pre-ack rejects are auditable. It is the
+    # SAME value later surfaced by the ack and the status `id` (format/semantics
+    # unchanged); pre-ack rejects still emit no status/ack, only an audit record.
+    _ATTEMPT_ID = update_id = uuid.uuid4().hex[:12]
     lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -446,19 +554,28 @@ def apply_cmd() -> None:
     tree, payload_v = _ingest_payload(work)
 
     if payload_v <= installed:
+        _audit(OUTCOME_REJECT_NON_UPGRADE, "authorize",
+               from_version=_version_str(installed), target_version=_version_str(payload_v),
+               signing_principal=(_LAST_META or {}).get("signing_principal"))
         shutil.rmtree(work, ignore_errors=True)
         die(2, f"refusing non-upgrade: payload {_version_str(payload_v)} "
                f"<= installed {_version_str(installed)} (no downgrade/reinstall)")
 
-    update_id = uuid.uuid4().hex[:12]
     sys.stdout.write(f"accepted {update_id}\n")
     sys.stdout.flush()
+    _audit(OUTCOME_ACCEPTED, "authorize",
+           from_version=_version_str(installed), target_version=_version_str(payload_v),
+           verified_version=(_LAST_META or {}).get("version"),
+           signing_principal=(_LAST_META or {}).get("signing_principal"))
 
     # Launch the trusted worker in a fixed-name systemd transient unit, which runs
     # in the HOST mount namespace (outside conduit-cc.service's ProtectSystem=strict),
     # so update.sh can write /opt, /var/backups, etc.
     rc = _launch_update_unit(work, installed, payload_v, update_id)
     if rc != 0:
+        _audit(OUTCOME_LAUNCH_FAILED, "deploy",
+               from_version=_version_str(installed), target_version=_version_str(payload_v),
+               signing_principal=(_LAST_META or {}).get("signing_principal"))
         write_status("failed", id=update_id, from_version=_version_str(installed),
                      to_version=_version_str(payload_v), finished_at=_now(),
                      message="Could not launch the update unit; no changes were made.")
