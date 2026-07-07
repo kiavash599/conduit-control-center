@@ -11,6 +11,37 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.14] — 2026-07-07
+
+**Trusted Update Signing — Phase-B audit + deploy-integrity fix.** Completes the ADR-0003
+signed-release audit model and fixes a deterministic-artifact deploy defect found on hardware.
+
+### Added
+
+- Non-authorizing update **audit trail** (`/var/log/conduit-cc-audit/update-audit.jsonl`,
+  `root:conduit-cc 0640`): `accepted` / `applied` / `reverted` outcomes with an allowlist
+  redaction (no trust material), plus the reject/failure taxonomy.
+- `signing_principal` metadata recorded on successful verification.
+- Deployment purge of stale Python bytecode, and regression tests for content-based transfer.
+
+### Changed
+
+- Deploy and rollback-restore now transfer by **content** (`rsync --checksum`) so a same-length
+  change to a deterministic (`mtime=0`) artifact can no longer be skipped.
+
+### Fixed
+
+- **Deploy-integrity defect:** a same-length version change (e.g. `0.3.13` → `0.3.14`) was
+  silently skipped by rsync's size+mtime quick-check, leaving the runtime on the old version and
+  triggering an auto-rollback. Fixed by content-based transfer; Raspberry Pi validated.
+
+### Security
+
+- Update apply writes an append-only audit record without ever altering the fail-closed
+  verification decision, exit code, deployment, or rollback (ADR-0003, Invariant I5).
+
+---
+
 ## [0.3.13] — 2026-07-04
 
 **Security hardening candidate.** Adds ADR-0003 artifact-signing groundwork:

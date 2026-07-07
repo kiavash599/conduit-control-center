@@ -502,6 +502,10 @@ Now you know:
 
 ✓ What role Security Headers play.
 
+### Signed releases and on-device verification
+
+CCC installs only releases signed by the project publisher, verified **fail-closed** on the device before any privileged step, against a local trust anchor (`/opt/conduit-cc/trust/allowed_signers`) that is never shipped in an update. The decision of record is **ADR-0003 — Signed Release Artifacts and On-Device Verification**. User-facing summary: **[Software Updates & Signed Releases](software-updates-and-signed-releases.md)**.
+
 **Next chapter**
 
 In Chapter 15 we will examine:

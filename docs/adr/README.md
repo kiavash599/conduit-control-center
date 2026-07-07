@@ -16,7 +16,13 @@ long-term architecture decisions and the reasoning behind them.
 
 | ADR | Title | Status |
 |---|---|---|
-| [ADR-0001](0001-trusted-update-engine.md) | Trusted Update Engine | Proposed |
+| [ADR-0001](0001-trusted-update-engine.md) | Trusted Update Engine | Accepted |
+| [ADR-0003](0003-signed-release-artifacts.md) | Signed Release Artifacts and On-Device Verification | Accepted |
+
+> **Numbering note:** ADR-0003 was authored ahead of ADR-0002 because the signing/verification
+> decision it records has been referenced since v0.3.13. **ADR-0002 — Update Payload Specification**
+> remains *planned* (below) and is complementary: ADR-0003 fixes signing/verification/trust;
+> ADR-0002 will formalize the payload/manifest schema.
 
 ## Planned / future
 

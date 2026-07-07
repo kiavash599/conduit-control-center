@@ -455,6 +455,10 @@ Now you know:
 
 ✓ How to perform safe Recovery
 
+### One-Click Update and rollback
+
+Day-to-day upgrades use dashboard One-Click Update; manual `update.sh` over SSH is retained for initial install, recovery, and emergency maintenance. If an update auto-rolls-back, your node keeps the previous version — diagnose via the worker log (`/var/lib/conduit-cc/update-worker.log`) and the status file (`/var/lib/conduit-cc/update-status.json`), then retry. Full flow: **[Software Updates & Signed Releases](software-updates-and-signed-releases.md)**.
+
 **Next chapter**
 
 In Chapter 14 we will examine:

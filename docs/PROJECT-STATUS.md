@@ -1,21 +1,21 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.21,
-> Reconciled to v0.3.12) owns forward planning and feature catalogues; the
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.22,
+> Reconciled to v0.3.14) owns forward planning and feature catalogues; the
 > **CHANGELOG** owns shipped history; **closure records** (`docs/closure/`) are
 > optional per-epic decision deep-dives. This file is the canonical closed-epic
 > index and links the three — it does not duplicate them.
 >
-> Last reconciled: 2026-07-02 · branch `main` · latest release `v0.3.12`.
+> Last reconciled: 2026-07-07 · branch `main` · latest release `v0.3.14`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| **v0.3.12** (released 2026-07-02 — frontend polish; final One-Click Update validation) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (HTTPS port selection + one-click update, Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.21 | ✅ Released · One-Click Update **Completed / Production-Proven / Maintenance Only** (see §10 and `docs/closure/one-click-update-closure.md`) |
+| **v0.3.14** (released 2026-07-07 — ADR-0003 Trusted Update Signing Phase-B audit + deploy-integrity fix `rsync --checksum`; Pi validated) · v0.3.13 (ADR-0003 signing groundwork) · v0.3.12 (frontend polish) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.22 | ✅ Released · One-Click Update **Maintenance Only**; ADR-0003 signing (Phase-B) landed (see §10 and `docs/closure/one-click-update-closure.md`) |
 
-Branch `main` · **v0.3.12 released** — the v0.3.2 → v0.3.12 line delivered HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), Log Management / SD-Card Protection (v0.3.5, commit `a6b6bd4`), and the One-Click Update hardening/validation series culminating in **production-proven** on Raspberry Pi (v0.3.10 → v0.3.11) and the final frontend-polish validation (v0.3.11 → v0.3.12). One-Click Update / Trusted Update Engine is now **Completed / Production-Proven / Maintenance Only**: future work is limited to bug fixes, security hardening, and maintenance, and functional expansion requires a new ADR (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). See §10.
+Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), Log Management / SD-Card Protection (v0.3.5, commit `a6b6bd4`), and the One-Click Update hardening/validation series culminating in **production-proven** on Raspberry Pi (v0.3.10 → v0.3.11) and the final frontend-polish validation (v0.3.11 → v0.3.12). The v0.3.13 → v0.3.14 line then delivered **ADR-0003 Trusted Update Signing** (Phase-B audit trail) and a **deploy-integrity fix** (`rsync --checksum`), Raspberry Pi-validated. One-Click Update / Trusted Update Engine is now **Completed / Production-Proven / Maintenance Only**: future work is limited to bug fixes, security hardening, and maintenance, and functional expansion requires a new ADR (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). See §10.
 
 ## 2. Closed Epics
 
@@ -45,6 +45,7 @@ Branch `main` · **v0.3.12 released** — the v0.3.2 → v0.3.12 line delivered 
 | Personal Mode | ✅ Closed | shipped v0.3.0; Pi-validated | `docs/closure/PERSONAL_MODE_CLOSURE.md` |
 | Ryve Claim / Identity | ✅ Closed | shipped v0.3.0 | CHANGELOG `[0.3.0]` (no closure file — by policy) |
 | Backup & Restore | ✅ Closed | shipped v0.3.0 | CHANGELOG `[0.3.0]` (no closure file — by policy) |
+| Trusted Update Signing (ADR-0003, Phase-B) | ✅ Released v0.3.13 → v0.3.14 | Signed canonical artifacts + fail-closed on-device verification + non-authorizing audit trail; deploy-integrity fix (`rsync --checksum`) Pi-validated | ADR-0003; CHANGELOG `[0.3.13]`,`[0.3.14]` |
 
 ## 3. Active Epics
 
@@ -66,6 +67,7 @@ Branch `main` · **v0.3.12 released** — the v0.3.2 → v0.3.12 line delivered 
 | D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | ✅ Resolved — DGM-13–19 integrated into FA ch10/11/12/14 (Epic D Batch 3); DGM-01–12 into FA ch04/04a/05 (Batches 1–2); full DGM-01–19 EN↔FA parity (uncommitted) | Epic D |
 | D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | ✅ Platform support complete (MkDocs Phase 1 — per-page `dir=rtl`, code/command LTR protection, `.tech-list`); content normalization of existing chapters **Deferred** (see §6) | Docs Platform Phase 1 |
 | D6 | Governance / release-narrative drift (roadmap vs shipped tags) | — | ✅ Resolved by Epic A.1 + Epic A.2 | Epic A |
+| DI-1 | Deterministic-artifact deploy: a same-length file change was silently skipped by rsync's size+mtime quick-check → runtime kept the old version, auto-rolled-back | High (P0) | ✅ Resolved — content-based transfer (`rsync --checksum`, `8a10e4a`); regression tests + Pi validated | ADR-0003 / v0.3.14 |
 
 ## 6. Deferred Work
 
@@ -114,10 +116,12 @@ Branch `main` · **v0.3.12 released** — the v0.3.2 → v0.3.12 line delivered 
 | v0.3.10 | 2026-07-01 | Validation release — Update Engine Test & CI Hardening; deploy `rsync --exclude '/bin/'` fix (v0.3.9 → v0.3.10) |
 | v0.3.11 | 2026-07-02 | One-Click Update **production-proven** — first fully successful dashboard update on Raspberry Pi via the B1 transient-unit engine (v0.3.10 → v0.3.11) |
 | v0.3.12 | 2026-07-02 | Frontend polish + final One-Click Update validation (v0.3.11 → v0.3.12); One-Click Update now Completed / Production-Proven / Maintenance Only |
+| v0.3.13 | 2026-07-04 | ADR-0003 signed-release groundwork (publisher signing, on-device fail-closed verification) |
+| v0.3.14 | 2026-07-07 | ADR-0003 Phase-B audit trail + deploy-integrity fix (`rsync --checksum`); Pi validated |
 
 ## 9. Next Recommended Action
 
-**The project is currently between implementation phases.** One-Click Update / Trusted Update Engine is closed — **Completed / Production-Proven / Maintenance Only** (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). **Implementation is closed until a new engineering driver is selected** and passes the Value Gate; no next implementation phase is chosen here. Candidate drivers for a future phase — **Architecture Atlas, Conduit Core update design, Artifact signing, Documentation Normalization** — are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Being between implementation phases does not mean the project is inactive: architecture, documentation, ADR, research, discovery, and planning work may continue; only new-feature implementation requires an approved driver and a Value Gate.
+**Between implementation phases.** v0.3.14 (Trusted Update Signing, Phase-B) is released. One accepted backlog item awaits scheduling — **Owner Operations Toolkit — Capability 1: Signed-Release Toolkit** (`docs/BACKLOG-REGISTER.md`, BL-0001, P2; implementation postponed). No new implementation phase is open; roadmap priorities unchanged. Candidate drivers remain as defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Being between implementation phases does not mean the project is inactive: architecture, documentation, ADR, research, discovery, and planning work may continue; only new-feature implementation requires an approved driver and a Value Gate.
 
 ## 10. Deployment Strategy
 

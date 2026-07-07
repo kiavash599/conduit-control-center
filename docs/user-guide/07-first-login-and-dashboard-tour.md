@@ -570,6 +570,12 @@ Now:
 
 ✓ You know where Backup & Restore is.
 
+### Software Updates
+
+The **Software Updates** page updates CCC from the dashboard with one action and shows whether you are up to date. CCC verifies each update's signature before applying it and rolls back automatically if a new version does not become healthy. See **[Software Updates & Signed Releases](software-updates-and-signed-releases.md)**.
+
+<!-- SCREENSHOT NEEDED: SU-02 — Software Updates page, update available -->
+
 **Next chapter**
 
 In the next chapter we will examine the Contribution Advisor in more detail and see how to interpret its recommendations.

@@ -31,6 +31,23 @@ after v0.2 had already closed.
    `docs/roadmap/CCC_Product_Roadmap_v1.md` (header + a Revision History row), and
    add or update the milestone's closure record under `docs/closure/`.
 
+5. **Build the signed, canonical artifact from the tag.** After committing and tagging
+   (`vX.Y.Z`), build from the committed tag only (`--git-ref vX.Y.Z`) so the artifact is
+   reproducible and provenance-linked. Sign the manifest with the publisher key.
+
+6. **Qualify locally.** Verify: no NULL bytes in text/script members, `APP_VERSION` matches,
+   digest ↔ manifest agree, and the signature verifies against the publisher identity. Record
+   the artifact **SHA-256 digest**.
+
+7. **Publish (irreversible — manual).** Push `main` and the tag, then replace the GitHub Release
+   assets with the three `ccc-X.Y.Z.*` files. Verify the published digest equals the recorded
+   digest and that the downloaded manifest signature verifies.
+
+8. **Reconcile status.** Update `docs/PROJECT-STATUS.md` (release, resolved issues, timeline).
+
+**Never publish:** `trusted_publishers`/`allowed_signers`, the signing private key, or any asset
+other than the three `ccc-X.Y.Z.*` files. The device trust anchor is provisioned out-of-band.
+
 ## Why this is enforced, not just documented
 
 Step 3 is the automated backstop for steps 1–2: the CHANGELOG release heading and
