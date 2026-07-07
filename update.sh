@@ -223,7 +223,7 @@ _print_manual_recovery() {
     if [[ -n "${BACKUP_DIR}" ]]; then
         printf "  1. tar -xzf %s/conf.tar.gz -C /\n" \
             "${BACKUP_DIR}" >&2
-        printf "  2. rsync -a --delete --exclude 'venv/' %s/app/ %s/\n" \
+        printf "  2. rsync -a --checksum --delete --exclude 'venv/' %s/app/ %s/\n" \
             "${BACKUP_DIR}" "${APP_DIR}" >&2
         printf "  3. %s/venv/bin/pip install --force-reinstall -r %s/pip-freeze.txt\n" \
             "${APP_DIR}" "${BACKUP_DIR}" >&2
@@ -700,7 +700,11 @@ phase3_deploy() {
     # worker executes from it ("cannot delete non-empty directory: bin").
     # The slash anchors the rule so deployment/bin/ (the helper SOURCE) is still
     # deployed normally.
-    rsync -a --delete \
+    # --checksum (CP-001): deterministic artifacts set mtime=0 (pack_tree), so a
+    # same-length content change (e.g. "0.3.13" -> "0.3.14", identical byte size)
+    # ties rsync's size+mtime quick-check against a mtime=0 destination and is
+    # SILENTLY SKIPPED. Deciding by content hash guarantees the file is deployed.
+    rsync -a --checksum --delete \
         --exclude 'venv/' \
         --exclude 'ccc.db' \
         --exclude '__pycache__/' \
@@ -982,7 +986,11 @@ phase5_rollback() {
     # ---- 5c  Restore /opt/conduit-cc code ---------------------------------- #
     step "5c - Restoring ${APP_DIR} code from backup"
     if [[ -d "${BACKUP_DIR}/app" ]]; then
-        if rsync -a --delete \
+        # --checksum (CP-001): the rollback restore must be content-exact. Backups
+        # preserve mtime=0, so without --checksum a same-length changed file could
+        # tie the size+mtime quick-check and NOT be reverted -- a silent PARTIAL
+        # rollback that reports success. Content-hash comparison prevents that.
+        if rsync -a --checksum --delete \
                 --exclude 'venv/' \
                 --exclude '__pycache__/' \
                 --exclude '*.pyc' \
