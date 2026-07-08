@@ -139,4 +139,4 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 > PROJECT-STATUS.md" step into `docs/release-checklist.md` so it cannot drift. Record
 > state and pointers only — feature specs live in the roadmap, shipped detail in the
 > CHANGELOG, decision rationale in closure records. Owner: project owner; changes
-> proposed per
+> proposed per epic.

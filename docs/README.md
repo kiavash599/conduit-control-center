@@ -8,4 +8,6 @@
 - [User Guide — English (source of truth)](user-guide/README.md)
 - [راهنمای کاربری — فارسی](fa/user-guide/README.md)
 - [Appendices](appendices/README.md)
-- [
+- [Diagrams](diagrams/README.md)
+- [Screenshots](screenshots/README.md)
+- [Images](images/README.md)
