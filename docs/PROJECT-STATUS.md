@@ -1,7 +1,7 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.22,
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.23,
 > Reconciled to v0.3.14) owns forward planning and feature catalogues; the
 > **CHANGELOG** owns shipped history; **closure records** (`docs/closure/`) are
 > optional per-epic decision deep-dives. This file is the canonical closed-epic
@@ -13,7 +13,7 @@
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| **v0.3.14** (released 2026-07-07 — ADR-0003 Trusted Update Signing Phase-B audit + deploy-integrity fix `rsync --checksum`; Pi validated) · v0.3.13 (ADR-0003 signing groundwork) · v0.3.12 (frontend polish) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.22 | ✅ Released · One-Click Update **Maintenance Only**; ADR-0003 signing (Phase-B) landed (see §10 and `docs/closure/one-click-update-closure.md`) |
+| **v0.3.14** (released 2026-07-07 — ADR-0003 Trusted Update Signing Phase-B audit + deploy-integrity fix `rsync --checksum`; Pi validated) · v0.3.13 (ADR-0003 signing groundwork) · v0.3.12 (frontend polish) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.23 | ✅ Released · One-Click Update **Maintenance Only**; ADR-0003 signing (Phase-B) landed (see §10 and `docs/closure/one-click-update-closure.md`) |
 
 Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), Log Management / SD-Card Protection (v0.3.5, commit `a6b6bd4`), and the One-Click Update hardening/validation series culminating in **production-proven** on Raspberry Pi (v0.3.10 → v0.3.11) and the final frontend-polish validation (v0.3.11 → v0.3.12). The v0.3.13 → v0.3.14 line then delivered **ADR-0003 Trusted Update Signing** (Phase-B audit trail) and a **deploy-integrity fix** (`rsync --checksum`), Raspberry Pi-validated. One-Click Update / Trusted Update Engine is now **Completed / Production-Proven / Maintenance Only**: future work is limited to bug fixes, security hardening, and maintenance, and functional expansion requires a new ADR (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). See §10.
 
@@ -21,8 +21,8 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 
 | Epic / Workstream | Status | Evidence | Closure record |
 |---|---|---|---|
-| English User Guide | ✅ Closed | 18 chapters, `docs/user-guide/` | `775848b` |
-| Persian User Guide (text) | ✅ Closed | 18 chapters; heading parity 17/17 | `fe86f80`, `c45fc48` |
+| English User Guide | ✅ Closed | 17 chapters, `docs/user-guide/` | `775848b` |
+| Persian User Guide (text) | ✅ Closed | 17 chapters; heading parity 17/17 | `fe86f80`, `c45fc48` |
 | Diagram Program (EN) | ✅ Closed | DGM-01–19; 19 SVG/PNG integrated EN | `c898201`…`8a8379b` |
 | Screenshot Program (K.5) | ✅ Closed | 21 assets; parity 22=22; 0 placeholders; Guard PASS | `c354993`; `INTEGRATION-SYNC.md` (19/19) |
 | Documentation Governance | ✅ Closed | governance + `docs/release-checklist.md` | `971b1bf` |
@@ -31,11 +31,11 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 | Governance & Status (Epic A.2) | ✅ Closed | this file established as the operational source of truth | `docs/PROJECT-STATUS.md` |
 | v0.3.1 Hotfixes (Epic B) | ✅ Released v0.3.1 | D1 root-URL fix (`f5233ff`; CI + Pi PASS) + D2 screenshot correction (Parity Guard PASS) | tag `v0.3.1` |
 | HTTPS Port Selection (Feature 1) | ✅ Released v0.3.2 | Cloudflare-compatible HTTPS port chosen at install; preserved by `update.sh`; `ccc-apply-https-port`; dashboard read-only display; Pi 4 + Pi 3 B validated | `docs/closure/v0.3.2-closure.md`; tag `v0.3.2` |
-| One-Click CCC Update (Feature 2) | ✅ Production-proven · **Maintenance Only** (v0.3.12) | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable); async status + reconnect + auto-rollback; no auto-update; Conduit Core out of scope. The v0.3.3 validation release exposed a `/run/lock` EROFS, fixed in v0.3.4 (lock → `/var/lib/conduit-cc/.update.lock`). **Validated end-to-end on a live Raspberry Pi: v0.3.10 → v0.3.11 (B1 transient-unit engine) and the final frontend-polish v0.3.11 → v0.3.12 (2026-07-02): `state=success`, `/api/health` ok at 0.3.12, `/opt/conduit-cc/bin` preserved, no "cannot delete non-empty directory", `ProtectSystem=strict` unchanged.** Now **Maintenance Only** — future work limited to bug fixes, security hardening, and maintenance; artifact signing (ADR-0001 inv. 5) deferred. | `docs/closure/one-click-update-closure.md`; tags `v0.3.2`…`v0.3.12` |
+| One-Click CCC Update (Feature 2) | ✅ Production-proven · **Maintenance Only** (v0.3.12) | Dashboard Software Updates → `/api/update` → `ccc-update-apply` → `update.sh --ccc-only`; GitHub Releases (stable); async status + reconnect + auto-rollback; no auto-update; Conduit Core out of scope. The v0.3.3 validation release exposed a `/run/lock` EROFS, fixed in v0.3.4 (lock → `/var/lib/conduit-cc/.update.lock`). **Validated end-to-end on a live Raspberry Pi: v0.3.10 → v0.3.11 (B1 transient-unit engine) and the final frontend-polish v0.3.11 → v0.3.12 (2026-07-02): `state=success`, `/api/health` ok at 0.3.12, `/opt/conduit-cc/bin` preserved, no "cannot delete non-empty directory", `ProtectSystem=strict` unchanged.** Now **Maintenance Only** — future work limited to bug fixes, security hardening, and maintenance. | `docs/closure/one-click-update-closure.md`; tags `v0.3.2`…`v0.3.12` |
 | One-Click Update Lock-Path Fix (EROFS) | ✅ Released v0.3.4 | `ccc-update-apply` lock moved from `/run/lock` (read-only under `ProtectSystem=strict`) to `/var/lib/conduit-cc/.update.lock` (+ `O_NOFOLLOW`); exposed by the v0.3.3 validation release | CHANGELOG `[0.3.4]`; tag `v0.3.4` |
 | Log Management / SD-Card Protection | ✅ Released v0.3.5 (`a6b6bd4`) | logrotate for `/var/log/conduit-cc/*.log` (`deployment/conduit-cc.logrotate`; provisioned by install.sh, re-provisioned by update.sh, removed by uninstall.sh) + automatic cleanup of stale `ccc-update-*` work directories and the current work directory **after** the terminal `update-status.json` is written, inside `ccc-update-apply` under the existing update flock. Linux-native; **no** new helper, sudoers rule, systemd timer, dashboard cleanup feature, or journald change | commit `a6b6bd4`; tag `v0.3.5` |
 | Backup Contract Alignment (BCA-1 + BCA-2) | ✅ Complete | Backup Subsystem Contract v1 approved; BCA-1 (cross-platform fail-open exclusion guard) + BCA-2 (POSIX-only permission-test guard); CI green | commit `043cb6a` |
-| TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Complete (unreleased) | EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); **bilingual illustrated TLS guide** — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), 8 shared redacted screenshots; chapters language-routed (`957d497`) | commits `83d2ed0`, `652f028`, `05366fe`, `957d497` |
+| TLS / Origin Certificate Onboarding (Epic C / D3) | ✅ Released v0.3.2 | EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); **bilingual illustrated TLS guide** — `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), 8 shared redacted screenshots; chapters language-routed (`957d497`) | commits `83d2ed0`, `652f028`, `05366fe`, `957d497` |
 | Smart Conduit Control (v0.2.0) | ✅ Closed | roadmap §6 CLOSED | tag `v0.2.0` |
 | Regional Analytics | ✅ Closed | — | `docs/closure/regional-analytics-closure.md` |
 | Live Operations | ✅ Closed | — | `docs/closure/live-operations-closure.md` |
@@ -53,7 +53,7 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 
 ## 4. Approved Next Epics
 
-**None.** The two epics previously listed here — **HTTPS Port Selection (Feature 1)** and the **One-click update system (Feature 2)** — are delivered and now recorded under §2 Closed Epics (v0.3.2 → v0.3.12). No implementation epic is currently approved; the project is **between implementation phases** (see §9). Candidate drivers for a future phase — Architecture Atlas, Conduit Core update design, Artifact signing, Documentation Normalization — are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*).
+**None.** The two epics previously listed here — **HTTPS Port Selection (Feature 1)** and the **One-click update system (Feature 2)** — are delivered and now recorded under §2 Closed Epics (v0.3.2 → v0.3.12). No implementation epic is currently approved; the project is **between implementation phases** (see §9). Candidate drivers for a future phase — Conduit Core update design, Documentation Normalization — are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Artifact signing is delivered (ADR-0003, v0.3.13–v0.3.14) and is no longer a candidate; the Architecture Atlas has been retired from repository planning and relocated as a frozen, historical Owner reference outside the repository (not a source of truth).
 
 > Documentation work that was tracked here (D5 RTL/LTR formatting) is now split: **platform RTL/LTR support is complete** under Documentation Platform Phase 1; **content normalization of existing chapters is Deferred** — see §6 *Documentation Normalization*.
 
@@ -64,7 +64,7 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 | D1 | Root URL `/` returns 404; only `/login` works, though docs instruct opening the root URL | High (P0) | ✅ Resolved — `f5233ff` (`/`→`/dashboard` 307); CI PASS; Raspberry Pi runtime validation PASS | Epic B / v0.3.1 |
 | D2 | `cloudflare-domain-active.png` shows a subdomain (`conduit.example.com`) as an active Cloudflare zone | Medium-High (P1) | ✅ Resolved — in-place relabel to root domain `example.com`; same filename/path/dimensions; Parity Guard PASS | Epic B / v0.3.1 |
 | D3 | TLS/Origin-cert workflow not integrated into the guide flow | Medium (P1) | ✅ Resolved — EN ch05 §5.15 + ch06 §6.4 (`83d2ed0`); FA parity (`652f028`); bilingual TLS guides `docs/tls-setup.md` (EN) + `docs/fa/tls-setup.md` (FA, `05366fe`), language-routed chapter links (`957d497`), 8 shared redacted screenshots | Epic C / D |
-| D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | ✅ Resolved — DGM-13–19 integrated into FA ch10/11/12/14 (Epic D Batch 3); DGM-01–12 into FA ch04/04a/05 (Batches 1–2); full DGM-01–19 EN↔FA parity (uncommitted) | Epic D |
+| D4 | DGM-13–19 (7 feature diagrams) integrated in EN only; absent in FA | Medium (P2) | ✅ Resolved — DGM-13–19 integrated into FA ch10/11/12/14 (Epic D Batch 3); DGM-01–12 into FA ch04/04a/05 (Batches 1–2); full DGM-01–19 EN↔FA parity | Epic D |
 | D5 | Persian RTL/LTR formatting & mixed-language readability — URLs, commands, paths, API names, inline code rendering incorrectly in RTL layout | Low-Medium (P3) | ✅ Platform support complete (MkDocs Phase 1 — per-page `dir=rtl`, code/command LTR protection, `.tech-list`); content normalization of existing chapters **Deferred** (see §6) | Docs Platform Phase 1 |
 | D6 | Governance / release-narrative drift (roadmap vs shipped tags) | — | ✅ Resolved by Epic A.1 + Epic A.2 | Epic A |
 | DI-1 | Deterministic-artifact deploy: a same-length file change was silently skipped by rsync's size+mtime quick-check → runtime kept the old version, auto-rolled-back | High (P0) | ✅ Resolved — content-based transfer (`rsync --checksum`, `8a10e4a`); regression tests + Pi validated | ADR-0003 / v0.3.14 |
@@ -79,15 +79,14 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 | `errors="replace"` in canonical guard | Mount-robustness; only the run-copy is patched | `scripts/check-screenshot-parity.py` |
 | Roadmap §4 maintenance | `db-perms-600`, `root-crontab-cleanup` (ops/security); `pairing-neutralise` → v0.4 candidate | roadmap §4 |
 | D7 — health.py OpenAPI example `0.1.0` | Cosmetic; runtime returns correct APP_VERSION; excluded from v0.3.1 | `backend/api/health.py` |
-| CHANGELOG `[Unreleased]` section | Missing after 0.3.0 stamp; add when v0.3.1 work begins | `CHANGELOG.md` |
 | Advanced log management (postponed) | Explicitly postponed after the minimal log feature (`a6b6bd4`): journald drop-ins (system-wide; out of scope for CCC), dashboard cleanup action, scheduled cleanup timer, installer retention prompt, and broader advanced log management. **Revisit only** if SD-card pressure shows the minimal logrotate + temp-cleanup is insufficient. | roadmap § *v0.4 Candidates* |
 
 ## 7. Documentation Status
 
 | Area | State |
 |---|---|
-| English Guide | ✅ Complete (18 chapters) |
-| Persian Guide | ✅ Complete (text; 18 chapters; heading parity 17/17) |
+| English Guide | ✅ Complete (17 chapters) |
+| Persian Guide | ✅ Complete (text; 17 chapters; heading parity 17/17) |
 | Diagrams | 19 on disk; **integrated EN + FA (DGM-01–19)**; full EN↔FA diagram parity |
 | Screenshots | 21 integrated EN+FA; 0 placeholders |
 | Parity Guard | ✅ PASS (Existence · EN↔FA parity · Orphans · Hygiene) |
@@ -121,7 +120,7 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 
 ## 9. Next Recommended Action
 
-**Between implementation phases.** v0.3.14 (Trusted Update Signing, Phase-B) is released. One accepted backlog item awaits scheduling — **Owner Operations Toolkit — Capability 1: Signed-Release Toolkit** (`docs/BACKLOG-REGISTER.md`, BL-0001, P2; implementation postponed). No new implementation phase is open; roadmap priorities unchanged. Candidate drivers remain as defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Being between implementation phases does not mean the project is inactive: architecture, documentation, ADR, research, discovery, and planning work may continue; only new-feature implementation requires an approved driver and a Value Gate.
+**Between implementation phases.** v0.3.14 (Trusted Update Signing, Phase-B) is released. One accepted backlog item awaits scheduling — **Owner Operations Toolkit — Capability 1: Signed-Release Toolkit** (`docs/BACKLOG-REGISTER.md`, BL-0001, P2; implementation postponed). No new implementation phase is open. Candidate drivers are defined in the reconciled roadmap (`docs/roadmap/CCC_Product_Roadmap_v1.md`, *Next Phase / Candidate Drivers*). Being between implementation phases does not mean the project is inactive: architecture, documentation, ADR, research, discovery, and planning work may continue; only new-feature implementation requires an approved driver and a Value Gate.
 
 ## 10. Deployment Strategy
 
@@ -140,4 +139,4 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 > PROJECT-STATUS.md" step into `docs/release-checklist.md` so it cannot drift. Record
 > state and pointers only — feature specs live in the roadmap, shipped detail in the
 > CHANGELOG, decision rationale in closure records. Owner: project owner; changes
-> proposed per epic.
+> proposed per

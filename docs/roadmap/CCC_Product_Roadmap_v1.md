@@ -1,8 +1,8 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.22  
-**Date:** 2026-07-07  
+**Revision:** 1.23<br>
+**Date:** 2026-07-08<br>
 **Status:** Reconciled to v0.3.14  
 **Author:** CCC Development Team
 
@@ -794,8 +794,8 @@ v0.3.12. See the closure record: `docs/closure/one-click-update-closure.md`.
 - **Architectural stability.** The Trusted Update Engine architecture is stable;
   any functional expansion requires an **explicit new ADR** rather than an
   incremental extension of this completed subsystem.
-- **Deferred hardening.** Artifact integrity / signing (ADR-0001 invariant 5)
-  remains deferred and is intentionally not part of the closure.
+- **Delivered hardening.** Artifact integrity / signing is delivered — signed,
+  reproducible release artifacts verified fail-closed on-device (ADR-0003, shipped v0.3.13–v0.3.14); ADR-0001 invariant 5 is satisfied.
 
 ---
 
@@ -832,25 +832,18 @@ here**.
 **"Idle between phases" means only that no _Implementation Phase_ is currently
 open — not that the project is inactive.** Consistent with
 `docs/ENGINEERING-PROCESS-GUIDE.md` and `docs/PROJECT-LIFECYCLE.md`, architecture
-work, documentation, ADR work, research, discovery, planning, and the
-Architecture Atlas may all continue during this state. Only the **implementation
+work, documentation, ADR work, research, discovery, and planning may all
+continue during this state. Only the **implementation
 of a new feature** requires a new approved engineering driver and a Value Gate.
 
 The following are **candidate drivers only** (not selected, not scheduled). Each
 requires explicit Project-Owner approval and a Value-Gate pass before any work
 begins; those marked *(new ADR)* also require a new architectural decision record:
 
-- **Architecture Atlas** — the approved long-term architectural knowledge
-  infrastructure for CCC: an architectural-documentation and capability-discovery
-  initiative, **not** a product-feature implementation. It was intentionally
-  deferred until the architecture phase was complete and One-Click Update reached
-  Production-Proven status, both of which now hold.
 - **Conduit Core update design** *(new ADR)* — the successor to CCC-only updates;
   a design/architecture effort, distinct from and building on the completed
   Feature 2. It is a new architectural evolution, not an extension of the closed
   subsystem.
-- **Artifact signing** — cryptographic integrity for update artifacts
-  (ADR-0001 invariant 5); the principal deferred security-hardening item.
 - **Documentation Normalization** — RTL/LTR authoring-style normalization of the
   existing chapters (deferred; see *v0.4 Candidates* and PROJECT-STATUS §6).
 
@@ -886,6 +879,7 @@ phase is active.
 | 1.20 | 2026-06-28 | CCC Development Team | **Deployment Strategy corrected.** The rev-1.19 wording wrongly implied dashboard One-Click Update would become the project's permanent/standard deployment workflow. Restated as a **One-Click Update *validation* milestone**: v0.3.5 is installed **once** via manual SSH (`update.sh`); the **next** update is performed from the Dashboard **solely** to validate One-Click Update end-to-end; **after success, the normal development workflow returns to SSH-based `update.sh` deployment**; Dashboard update remains a supported **end-user** capability but does **not** replace the project's normal development workflow. Updated the *Deployment Strategy* subsection, the 0.3.5 Release-History row, and `docs/PROJECT-STATUS.md` (§1/§3/§8/§9/§10). Rev-1.19 row left intact (history preserved); no feature scope changed. |
 | 1.21 | 2026-07-02 | CCC Development Team | **Reconciled to v0.3.12.** One-Click Update / Trusted Update Engine marked **Completed / Production-Proven / Maintenance Only**. Added shipped releases **v0.3.5–v0.3.12** to Release History and removed the obsolete *v0.3.5 (planned)* validation-milestone row. Replaced the *Deployment Strategy — validation milestone* subsection with a *One-Click Update — Completed / Production-Proven / Maintenance Only* status subsection referencing `docs/closure/one-click-update-closure.md` (future work limited to bug fixes / security hardening / maintenance; functional expansion requires a new ADR; artifact signing deferred). Marked **Log Management / SD-Card Protection released in v0.3.5**; removed **Update Centre** from *v0.4 Candidates* (delivered as Feature 2). Added a **Next Phase / Candidate Drivers** section (Conduit Core update design, Artifact signing, Documentation Normalization) as candidates only — the project remains **Idle between phases** until the Project Owner selects a driver. Roadmap Markdown only; PDF not regenerated; `docs/PROJECT-STATUS.md` unchanged (separate pass); historical rev-≤1.20 rows intact; no feature scope changed. |
 | 1.22 | 2026-07-07 | CCC Development Team | **Reconciled to v0.3.14 (release references only).** Added shipped releases **v0.3.13** and **v0.3.14** to Release History; updated header revision/date/status. No feature scope changed; historical rev-≤1.21 rows intact; PDF not regenerated. |
+| 1.23 | 2026-07-08 | CCC Development Team | **Documentation reconciliation (roadmap Markdown).** Corrected stale forward-looking status without altering release history. Recorded **Artifact signing as delivered** (signed, reproducible release artifacts with fail-closed on-device verification, **ADR-0003**, shipped v0.3.13–v0.3.14) and removed it from *Next Phase / Candidate Drivers* and from the One-Click Update *deferred hardening* note. **Retired the Architecture Atlas** from repository planning — removed from the candidate drivers and the idle-state activity list; it has been relocated as a frozen, historical Owner reference outside the repository and is no longer a source of truth. Header revision/date bumped to 1.23 / 2026-07-08; status remains *Reconciled to v0.3.14*. No release history changed; historical rev-≤1.22 rows intact. By **Project-Owner decision** the exported roadmap PDF (`CCC_Product_Roadmap_v1.pdf`) is **retired and removed** from the repository; this Markdown document is the **sole authoritative roadmap** and no PDF will be regenerated or included in future State Synchronization. |
 
 ---
 
