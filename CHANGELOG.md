@@ -28,8 +28,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Notes
 
-- Not yet released: the official `wheelhouse-armhf` release asset has not been
-  produced, and clean-image install validation and CI remain pending. The
+- Not yet released: a `wheelhouse-armhf` candidate asset has been built and
+  locally verified on RPi2 (commit ef7cf78, 30 wheels; archive SHA256
+  34191a2379f3236aa87e74e7be27454e5a358df89bf4092dd35ab80c55597443) but is not yet
+  published as an official GitHub Release asset; clean-image install validation
+  and CI also remain pending. The
   install and update paths are field-validated on a real Raspberry Pi 2 (armv7l,
   Ubuntu Server 22.04.5, Python 3.10.12); the update test covered a same-version
   `update.sh --ccc-only` clean reinstall (cross-version upgrade not yet exercised).
