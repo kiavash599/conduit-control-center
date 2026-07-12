@@ -89,6 +89,34 @@ def _set_stdin(monkeypatch, data: bytes) -> None:
     monkeypatch.setattr(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(data)))
 
 
+def _stub_verify_boundary(mod, monkeypatch):
+    """ADR-0003 payload framing + signature verification is covered by
+    test_update_verify.py. Bypass ONLY that gate here (a plain tar arrives on
+    stdin) so these tests exercise the helper's post-verify extraction,
+    version-gate and launch logic. Production framing/verification is unchanged."""
+    monkeypatch.setattr(mod, "_VERIFY_AVAILABLE", True)
+
+    def _framed(work):
+        data = sys.stdin.buffer.read()
+        art = os.path.join(work, "payload.tar.gz")
+        with open(art, "wb") as fh:
+            fh.write(data)
+        for _n in ("manifest.json", "manifest.json.sig"):
+            open(os.path.join(work, _n), "wb").close()
+        return (os.path.join(work, "manifest.json"),
+                os.path.join(work, "manifest.json.sig"), art)
+
+    monkeypatch.setattr(mod, "_read_framed_payload", _framed)
+    monkeypatch.setattr(
+        mod, "verify_release",
+        lambda **k: types.SimpleNamespace(
+            ok=True, reason="accepted",
+            metadata={"version": "0.3.9", "signing_principal": "test-signer",
+                      "product": "ccc"}))
+    monkeypatch.setattr(mod, "product_scope_ok", lambda meta: True)
+    monkeypatch.setattr(mod, "cross_check_version", lambda meta, vs: True)
+
+
 def _make_work(mod, version: str = "0.3.9", top: str = "ccc-src-top",
                valid_tree: bool = True) -> tuple[str, str]:
     """Create a STATE_DIR/ccc-update-XXXX/src/<top>/ tree, mimicking a post-ingest
@@ -173,6 +201,7 @@ def test_ingest_valid_payload(mod, monkeypatch):
     import shutil
     shutil.rmtree(os.path.join(work, "src"))
     _set_stdin(monkeypatch, _valid_payload("0.3.9"))
+    _stub_verify_boundary(mod, monkeypatch)
     tree, ver = mod._ingest_payload(work)
     assert ver == (0, 3, 9)
     assert os.path.isfile(os.path.join(tree, "update.sh"))
@@ -216,6 +245,7 @@ def test_ingest_rejects_symlink_member(mod, monkeypatch):
         symlinks={"ccc-top/evil": "/etc/passwd"},
     )
     _set_stdin(monkeypatch, payload)
+    _stub_verify_boundary(mod, monkeypatch)
     with pytest.raises(SystemExit) as exc:
         mod._ingest_payload(work)
     assert exc.value.code == 3
@@ -472,6 +502,7 @@ def test_apply_refuses_non_upgrade(mod, monkeypatch):
     monkeypatch.setattr(mod, "_unit_busy", lambda: False)
     _set_installed(mod, "0.3.9")
     _set_stdin(monkeypatch, _valid_payload("0.3.7"))  # <= installed
+    _stub_verify_boundary(mod, monkeypatch)
     with pytest.raises(SystemExit) as exc:
         mod.apply_cmd()
     assert exc.value.code == 2
@@ -485,6 +516,7 @@ def test_apply_happy_path_launches_unit(mod, monkeypatch, capsys):
     _patch_exit(mod, monkeypatch)
     _set_installed(mod, "0.3.8")
     _set_stdin(monkeypatch, _valid_payload("0.3.9"))
+    _stub_verify_boundary(mod, monkeypatch)
 
     launched = {}
 
@@ -512,6 +544,7 @@ def test_apply_marks_failed_when_launch_fails(mod, monkeypatch, capsys):
     _patch_exit(mod, monkeypatch)
     _set_installed(mod, "0.3.8")
     _set_stdin(monkeypatch, _valid_payload("0.3.9"))
+    _stub_verify_boundary(mod, monkeypatch)
     monkeypatch.setattr(mod, "_launch_update_unit", lambda *a, **k: 3)
 
     with pytest.raises(SystemExit) as exc:

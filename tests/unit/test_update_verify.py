@@ -28,23 +28,34 @@ def _gen_key(path):
                    check=True, capture_output=True)
 
 
+_REL_SEQ = 0
+
+
 def _make_release(tmp_path, artifact_bytes=b"\x1f\x8bpayload", version="0.3.13", trusted=True):
     """Produce {manifest, sig, artifact, store} for a signer that is (or isn't)
-    in the trust store. Returns paths."""
-    key = tmp_path / "pub_key"
+    in the trust store. Returns paths.
+
+    Each call gets its OWN subdirectory so repeated calls in one test (e.g. a
+    trusted + an untrusted release under the same tmp_path) never make ssh-keygen
+    refuse to overwrite an existing key file (non-interactive -> non-zero)."""
+    global _REL_SEQ
+    _REL_SEQ += 1
+    base = tmp_path / f"rel{_REL_SEQ}"
+    base.mkdir()
+    key = base / "pub_key"
     _gen_key(key)
     store_key = key
     if not trusted:  # store lists a DIFFERENT key than the one that signs
-        store_key = tmp_path / "store_key"
+        store_key = base / "store_key"
         _gen_key(store_key)
-    store = tmp_path / "allowed_signers"
+    store = base / "allowed_signers"
     store.write_text(R.public_allowed_signers_line(str(store_key), V.PUBLISHER_IDENTITY) + "\n")
 
-    artifact = tmp_path / f"ccc-{version}.tar.gz"
+    artifact = base / f"ccc-{version}.tar.gz"
     artifact.write_bytes(artifact_bytes)
     manifest = R.build_manifest(version=version, artifact_name=artifact.name,
                                 artifact_bytes=artifact_bytes, recommended_conduit_core="1.2.3")
-    mpath = tmp_path / f"ccc-{version}.manifest.json"
+    mpath = base / f"ccc-{version}.manifest.json"
     mpath.write_bytes(R.canonical_manifest_bytes(manifest))
     sig = R.sign_manifest(str(mpath), str(key), namespace=V.SSHSIG_NAMESPACE)
     return {"manifest": str(mpath), "signature": sig, "artifact": str(artifact), "store": str(store)}

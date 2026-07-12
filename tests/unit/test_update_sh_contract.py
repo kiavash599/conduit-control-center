@@ -62,7 +62,7 @@ def _deploy_excludes() -> list[str]:
     text = _src()
     body = text.split("phase3_deploy()", 1)[1]
     # the deploy rsync runs from `rsync -a --delete` to the `${SOURCE_DIR}/` line
-    block = body.split("rsync -a --delete", 1)[1].split("${SOURCE_DIR}/", 1)[0]
+    block = body.split("rsync -a --checksum --delete", 1)[1].split("${SOURCE_DIR}/", 1)[0]
     return re.findall(r"--exclude '([^']*)'", block)
 
 

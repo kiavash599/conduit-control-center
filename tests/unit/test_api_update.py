@@ -276,12 +276,24 @@ def test_install_502_when_download_fails(env, monkeypatch):
     assert exc.value.status_code == 502
 
 
-def test_install_502_when_not_gzip(env, monkeypatch):
+def test_install_no_server_gzip_precheck_forwards_to_helper(env, monkeypatch):
+    # ADR-0003 trust boundary: the server performs NO structural/gzip pre-check on
+    # the untrusted downloaded artifact. A non-gzip artifact is framed and handed to
+    # the privileged helper, which verifies the signature and rejects it (-> 409).
+    # (Replaces the removed server-side gzip-502 pre-check; without mocking the
+    # helper the old test reached real sudo.)
     _write_cache(env, latest=_NEWER)
     monkeypatch.setattr(upd, "_gh_download", lambda url: b"PK\x03\x04not-gzip")
+    seen = {}
+
+    def _fake_helper(payload):
+        seen["payload"] = payload
+        return ("exit", upd._EXIT_VALIDATION)
+    monkeypatch.setattr(upd, "_invoke_helper", _fake_helper)
     with pytest.raises(HTTPException) as exc:
         _run(_install(_NEWER))
-    assert exc.value.status_code == 502
+    assert exc.value.status_code == 409          # helper rejected; NOT a server-side 502
+    assert seen["payload"].startswith(upd._FRAME_MAGIC)  # forwarded as a framed payload
 
 
 def test_install_happy_path_returns_accepted(env, monkeypatch):

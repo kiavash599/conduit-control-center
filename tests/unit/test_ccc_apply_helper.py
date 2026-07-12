@@ -401,8 +401,9 @@ def test_conduit_unit_has_personal_clients_knob():
 
 def test_unit_has_only_narrow_readwritepaths():
     # conduit-cc.service keeps ProtectSystem=strict and adds ONLY narrow paths to
-    # ReadWritePaths: the drop-in dir (M2) and the Conduit data dir (C6e Personal
-    # Mode helper) -- never broad /etc/systemd, never broad /var/lib/conduit.
+    # ReadWritePaths: the drop-in dir (M2), the Conduit data dir (C6e Personal
+    # Mode helper), and the append-only audit dir (E3/ADR-0003 Phase B,
+    # /var/log/conduit-cc-audit) -- never broad /etc/systemd, never broad /var/lib/conduit.
     repo = pathlib.Path(__file__).resolve().parents[2]
     unit = (repo / "deployment" / "conduit-cc.service").read_text()
     assert "ProtectSystem=strict" in unit
@@ -412,6 +413,7 @@ def test_unit_has_only_narrow_readwritepaths():
         "ReadWritePaths=/etc/conduit-cc",
         "ReadWritePaths=/etc/systemd/system/conduit.service.d",
         "ReadWritePaths=/var/lib/conduit/data",
+        "ReadWritePaths=/var/log/conduit-cc-audit",
     ], rwp
     # The data-dir grant is the precise dir, not the broad parent.
     assert "ReadWritePaths=/var/lib/conduit\n" not in unit
