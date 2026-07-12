@@ -13,16 +13,16 @@ CCC updates itself from the dashboard with a single action. On the **Software Up
 3. The update runs in the background; the page shows live progress and, on completion, a success state. If the update cannot reach a healthy state, CCC **automatically rolls back** to the previous version and reports it.
 
 <!-- SCREENSHOT NEEDED: SU-01 — Software Updates page, "up to date" state -->
-![PLACEHOLDER: Software Updates page — up to date](../screenshots/software-updates-uptodate.png)
+> **Screenshot placeholder - Software Updates page (up to date).** This image will be captured after the next release is produced and One-Click Update is validated.
 
 <!-- SCREENSHOT NEEDED: SU-02 — Software Updates page, update available with Install Update button -->
-![PLACEHOLDER: Software Updates page — update available](../screenshots/software-updates-available.png)
+> **Screenshot placeholder - Software Updates page (update available).** This image will be captured after the next release is produced and One-Click Update is validated.
 
 <!-- SCREENSHOT NEEDED: SU-03 — Update in progress -->
-![PLACEHOLDER: Update in progress](../screenshots/software-updates-inprogress.png)
+> **Screenshot placeholder - update in progress.** This image will be captured after the next release is produced and One-Click Update is validated.
 
 <!-- SCREENSHOT NEEDED: SU-04 — Update success state -->
-![PLACEHOLDER: Update complete](../screenshots/software-updates-success.png)
+> **Screenshot placeholder - update complete.** This image will be captured after the next release is produced and One-Click Update is validated.
 
 Manual `update.sh` over SSH is retained for initial install, disaster recovery, and emergency maintenance; One-Click Update is the standard mechanism for day-to-day upgrades.
 
@@ -51,4 +51,4 @@ sudo tail -n 20 /var/log/conduit-cc-audit/update-audit.jsonl
 An automatic rollback means CCC deployed the new version but it did not become healthy in time, so CCC restored the previous version. The dashboard shows a persistent, dismissible message; your node keeps running the previous version. See Chapter 13 (System Maintenance & Troubleshooting) for diagnosis (worker log and status file), and retry once the cause is resolved.
 
 <!-- SCREENSHOT NEEDED: SU-05 — Rolled-back state message on Software Updates page -->
-![PLACEHOLDER: Update rolled back](../screenshots/software-updates-rolledback.png)
+> **Screenshot placeholder - update rolled back.** This image will be captured after the next release is produced and One-Click Update is validated.

@@ -14,16 +14,16 @@ CCC خودش را با یک اقدام از داشبورد به‌روزرسان
 ۳. به‌روزرسانی در پس‌زمینه اجرا می‌شود؛ صفحه پیشرفت زنده و در پایان وضعیت موفقیت را نشان می‌دهد. اگر به‌روزرسانی به وضعیت سالم نرسد، CCC به‌طور **خودکار به نسخهٔ قبلی بازگردانی (rollback)** می‌کند و آن را گزارش می‌دهد.
 
 <!-- SCREENSHOT NEEDED: SU-01 — Software Updates page, "up to date" state -->
-![PLACEHOLDER: Software Updates page — up to date](../../screenshots/software-updates-uptodate.png)
+> **Software Updates page - up to date.** جای‌نگهدار تصویر: این تصویر پس از تولید ریلیز بعدی و اعتبارسنجی One-Click Update تهیه و اضافه خواهد شد.
 
 <!-- SCREENSHOT NEEDED: SU-02 — Software Updates page, update available with Install Update button -->
-![PLACEHOLDER: Software Updates page — update available](../../screenshots/software-updates-available.png)
+> **Software Updates page - update available.** جای‌نگهدار تصویر: این تصویر پس از تولید ریلیز بعدی و اعتبارسنجی One-Click Update تهیه و اضافه خواهد شد.
 
 <!-- SCREENSHOT NEEDED: SU-03 — Update in progress -->
-![PLACEHOLDER: Update in progress](../../screenshots/software-updates-inprogress.png)
+> **Update in progress.** جای‌نگهدار تصویر: این تصویر پس از تولید ریلیز بعدی و اعتبارسنجی One-Click Update تهیه و اضافه خواهد شد.
 
 <!-- SCREENSHOT NEEDED: SU-04 — Update success state -->
-![PLACEHOLDER: Update complete](../../screenshots/software-updates-success.png)
+> **Update complete.** جای‌نگهدار تصویر: این تصویر پس از تولید ریلیز بعدی و اعتبارسنجی One-Click Update تهیه و اضافه خواهد شد.
 
 اجرای دستی `update.sh` از طریق SSH برای نصب اولیه، بازیابی اضطراری و نگهداری فوری حفظ شده است؛ به‌روزرسانی تک‌کلیکی سازوکار استاندارد برای ارتقاهای روزمره است.
 
@@ -52,4 +52,4 @@ sudo tail -n 20 /var/log/conduit-cc-audit/update-audit.jsonl
 بازگردانی خودکار یعنی CCC نسخهٔ جدید را مستقر کرد اما به‌موقع سالم نشد، بنابراین CCC نسخهٔ قبلی را بازگرداند. داشبورد پیامی پایدار و قابل‌بستن نشان می‌دهد؛ گره (node) شما همچنان نسخهٔ قبلی را اجرا می‌کند. برای عیب‌یابی (گزارش worker و فایل وضعیت) به فصل ۱۳ (نگهداری و عیب‌یابی سیستم) مراجعه کنید و پس از رفع علت دوباره تلاش کنید.
 
 <!-- SCREENSHOT NEEDED: SU-05 — Rolled-back state message on Software Updates page -->
-![PLACEHOLDER: Update rolled back](../../screenshots/software-updates-rolledback.png)
+> **Update rolled back.** جای‌نگهدار تصویر: این تصویر پس از تولید ریلیز بعدی و اعتبارسنجی One-Click Update تهیه و اضافه خواهد شد.
