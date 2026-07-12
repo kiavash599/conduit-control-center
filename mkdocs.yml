@@ -80,6 +80,20 @@ exclude_docs: |
   diagrams/specifications/
   diagrams/STYLE.md
   screenshots/INTEGRATION-SYNC.md
+  # Internal project / engineering / architecture-decision records -- not end-user
+  # documentation. Excluded from the built site (consistent with architecture.md,
+  # release-checklist.md, etc.); otherwise --strict fails on built-but-unlisted pages.
+  BACKLOG-REGISTER.md
+  ENGINEERING-PROCESS-GUIDE.md
+  PROJECT-LIFECYCLE.md
+  adr/
+
+# Pages that ARE published (reachable via links from the user guide) but are not
+# top-level nav entries. Listing them here keeps those links valid while satisfying
+# mkdocs --strict, which would otherwise error that they are omitted from the nav.
+not_in_nav: |
+  user-guide/software-updates-and-signed-releases.md
+  fa/user-guide/software-updates-and-signed-releases.md
 
 nav:
   - English:
