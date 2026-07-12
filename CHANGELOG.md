@@ -9,6 +9,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+**Raspberry Pi 2 / 32-bit (armhf) support (BL-0002) - implemented, not yet released.**
+
+### Added
+
+- Architecture detection in `install.sh` and `update.sh` mapping the machine
+  architecture to the Conduit asset (`aarch64` -> `conduit-linux-arm64`,
+  `armv7l` -> `conduit-linux-armv7`), preserving the pinned `CONDUIT_VERSION`,
+  checksum, and `--version` verification, with install/update parity and
+  fail-closed behaviour on unsupported architectures. The arm64 / Raspberry Pi 4
+  path is unchanged.
+- On `armv7l`, native Python dependencies install offline from an official,
+  verifiable `wheelhouse-armhf` asset (full `requirements.txt` closure,
+  `--no-index --only-binary=:all:`), failing closed if the wheelhouse is missing,
+  unverified, or incomplete.
+- Systemd unit files are LF-normalised on install (CRLF-safe), so token/default
+  validation cannot fail on CR-terminated lines.
+
+### Notes
+
+- Not yet released: the official `wheelhouse-armhf` release asset has not been
+  produced, and clean-image install validation and CI remain pending. The
+  install and update paths are field-validated on a real Raspberry Pi 2 (armv7l,
+  Ubuntu Server 22.04.5, Python 3.10.12); the update test covered a same-version
+  `update.sh --ccc-only` clean reinstall (cross-version upgrade not yet exercised).
+
 ---
 
 ## [0.3.14] — 2026-07-07

@@ -80,6 +80,59 @@ readonly HEALTH_INTERVAL=5
 # Psiphon Conduit — must match install.sh constants (Issue #45)
 # Bump CONDUIT_VERSION only after the new release has been validated with CCC.
 readonly CONDUIT_VERSION="2.0.0"
+
+# --- BL-0002: architecture support (aarch64 + armv7l; fail closed otherwise) --- #
+# Map the host architecture to the pinned Psiphon Conduit release asset:
+#   aarch64 (arm64, Raspberry Pi 3/4) -> conduit-linux-arm64
+#   armv7l  (armhf, Raspberry Pi 2)   -> conduit-linux-armv7
+# Unknown/unsupported architectures return non-zero so callers fail closed.
+# armv6 (Pi Zero / Pi 1) is intentionally NOT mapped in v1.
+conduit_asset_for_arch() {
+    case "$1" in
+        aarch64) printf 'conduit-linux-arm64' ;;
+        armv7l)  printf 'conduit-linux-armv7' ;;
+        *)       return 1 ;;
+    esac
+}
+
+# Install Python dependencies with architecture-appropriate provisioning:
+#   aarch64: install from the configured package index (existing arm64/RPi4 path).
+#   armv7l : install ONLY from the official, verified wheelhouse-armhf asset and
+#            fail closed if it is absent or unverified. Native source builds are
+#            NOT used during a normal armhf install (BL-0002 / decision D-12).
+#            The wheelhouse MUST contain the FULL requirements.txt dependency
+#            closure (not only native-risk deps); a missing required wheel
+#            (e.g. fastapi) makes pip fail -> the install fails closed.
+# Args: <pip_bin> <requirements_file> <wheelhouse_dir>
+install_python_deps() {
+    local _pip="$1" _req="$2" _wh="$3" _arch
+    _arch="$(uname -m)"
+    case "${_arch}" in
+        aarch64)
+            "${_pip}" install --quiet -r "${_req}" || return 1
+            ;;
+        armv7l)
+            if [[ ! -d "${_wh}" ]]; then
+                warn "armhf wheelhouse not found at ${_wh}. The official 'wheelhouse-armhf' release asset is required on armv7l; native source builds are not used at install time."
+                return 1
+            fi
+            if [[ ! -f "${_wh}/SHA256SUMS" ]]; then
+                warn "armhf wheelhouse integrity file missing: ${_wh}/SHA256SUMS. A verifiable wheelhouse-armhf asset is required."
+                return 1
+            fi
+            if ! ( cd "${_wh}" && sha256sum -c --quiet SHA256SUMS >/dev/null ); then
+                warn "armhf wheelhouse checksum verification failed: ${_wh}."
+                return 1
+            fi
+            "${_pip}" install --quiet --no-index --only-binary=:all: --find-links "${_wh}" -r "${_req}" || return 1
+            ;;
+        *)
+            warn "Unsupported architecture '${_arch}' for dependency provisioning."
+            return 1
+            ;;
+    esac
+}
+
 # shellcheck disable=SC2034  # mirrors install.sh constants (Issue #45); unused in update.sh
 readonly CONDUIT_USER="conduit"
 readonly CONDUIT_BIN_DIR="/opt/conduit"
@@ -455,10 +508,7 @@ phase2_preinstall() {
     step "2b - Installing dependencies from new requirements.txt"
     # Install from SOURCE_DIR (new version), not APP_DIR (old version).
     # pip upgrades, adds, or retains packages as needed.
-    "${APP_DIR}/venv/bin/pip" install --quiet \
-        -r "${SOURCE_DIR}/requirements.txt" || die \
-        "pip install failed. Service is still running version ${CURRENT_VERSION}." \
-        "Resolve the dependency issue and re-run update.sh."
+    install_python_deps "${APP_DIR}/venv/bin/pip" "${SOURCE_DIR}/requirements.txt" "${CCC_WHEELHOUSE_DIR:-${SOURCE_DIR}/wheelhouse-armhf}" || die "pip install failed. Service is still running version ${CURRENT_VERSION}. Resolve the dependency issue and re-run update.sh."
     info "Dependencies installed"
 }
 
@@ -512,7 +562,8 @@ phase2b_conduit_update() {
 
         warn "Conduit binary not found in ${SOURCE_DIR}/ — downloading v${CONDUIT_VERSION}"
         local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-${CONDUIT_VERSION}"
-        local _asset="conduit-linux-arm64"
+        local _asset
+        _asset="$(conduit_asset_for_arch "$(uname -m)")" || { rm -f "${_conduit_tmp}"; die "Unsupported architecture '$(uname -m)': no Conduit asset mapping (BL-0002 supports aarch64, armv7l)."; }
 
         local _checksums
         _checksums="$(curl -fsSL "${_gh_base}/checksums.txt")" || {
@@ -582,7 +633,7 @@ phase2b_conduit_update() {
     # ---- Update conduit.service unit --------------------------------------- #
     step "2b-f — Updating conduit.service"
     if [[ -f "${SOURCE_DIR}/deployment/conduit.service" ]]; then
-        cp "${SOURCE_DIR}/deployment/conduit.service" /etc/systemd/system/conduit.service
+        sed 's/\r$//' "${SOURCE_DIR}/deployment/conduit.service" > /etc/systemd/system/conduit.service  # LF-normalize systemd unit (field CRLF fix)
         chown root:root /etc/systemd/system/conduit.service
         chmod 644 /etc/systemd/system/conduit.service
         systemctl daemon-reload
@@ -766,7 +817,7 @@ EOF
     step "3c - Updating systemd unit"
     # daemon-reload here precedes the service start in the health-check phase, so
     # the new StateDirectory=conduit-cc (S4B-2.4) is created on the next start.
-    cp "${APP_DIR}/deployment/conduit-cc.service" "${SYSTEMD_UNIT}"
+    sed 's/\r$//' "${APP_DIR}/deployment/conduit-cc.service" > "${SYSTEMD_UNIT}"  # LF-normalize systemd unit (field CRLF fix)
     systemctl daemon-reload
     info "${SYSTEMD_UNIT} updated"
 

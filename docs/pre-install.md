@@ -287,7 +287,7 @@ The CCC dashboard requires only three inbound **TCP** ports:
 |---|---|
 | 22/tcp | SSH administration |
 | 80/tcp | HTTP (redirected to HTTPS) |
-| 443/tcp | HTTPS dashboard |
+| 443/tcp | HTTPS dashboard (installer-selected port; 443 is the default, but may be 2053, 8443, etc.) |
 
 `install.sh` configures UFW to allow exactly these. After installation, verify:
 
@@ -295,8 +295,9 @@ The CCC dashboard requires only three inbound **TCP** ports:
 sudo ufw status numbered
 ```
 
-You should see only `22/tcp`, `80/tcp`, and `443/tcp` (plus their IPv6
-equivalents) — nothing else is required for the dashboard.
+You should see only `22/tcp`, `80/tcp`, and the HTTPS TCP port you selected at
+install time (`443/tcp` by default, but it may be `2053/tcp`, `8443/tcp`, etc.),
+plus their IPv6 equivalents. Nothing else is required for the dashboard.
 
 ### About Conduit's UDP ports
 
@@ -307,9 +308,11 @@ peer traffic. You can inspect them with:
 ss -ulnp | grep conduit
 ```
 
-These ports are chosen dynamically and change between runs and Conduit
-versions, so there is no fixed UDP port to open. In the validated Raspberry Pi
-reference deployment, Conduit operates correctly with only TCP 22/80/443 open
+These ports are chosen dynamically and change during runtime as well as
+between Conduit restarts and versions. This was confirmed on a Raspberry Pi 2
+field install, where the observed UDP set changed shortly after start, so
+there is no fixed UDP port to open. In the validated Raspberry Pi
+reference deployment, Conduit operates correctly with only TCP 22, 80, and the installer-selected HTTPS port open
 in UFW. Additional inbound UDP rules are not required for that deployment.
 
 > **Do not blindly add UDP rules.** Running `sudo ufw allow <port>/udp` for the
@@ -317,6 +320,22 @@ in UFW. Additional inbound UDP rules are not required for that deployment.
 > increase in attack surface. Add an inbound UDP rule only if your specific
 > deployment explicitly requires inbound UDP exposure, and only for the
 > port(s) it actually needs.
+
+### Project Owner checklist (Conduit UDP ports)
+
+1. Leave UFW at the installer default: `22/tcp`, `80/tcp`, and the HTTPS TCP port
+   you selected at install (`443/tcp` by default; may be `2053/tcp`, `8443/tcp`, etc.).
+2. Do **not** add `ufw allow <port>/udp` rules for the ports shown by `ss`. They
+   change at runtime, so any rule you add is stale almost immediately and only
+   widens attack surface.
+3. Confirm Conduit health the correct way, not via UDP rules:
+   - `curl -s http://127.0.0.1:8000/api/health` returns `"status":"ok"`.
+   - `curl -s http://127.0.0.1:9090/metrics | grep conduit_is_live` shows `1`.
+   - connected/connecting client counts rise over time.
+4. Only if your specific deployment provably needs inbound UDP (atypical) should
+   you add a rule for the exact port(s) it needs, accepting that it must be
+   re-checked after any runtime change, restart, or update (the ports can move
+   during runtime, not only at restart). The reference deployment does not need this.
 
 ---
 

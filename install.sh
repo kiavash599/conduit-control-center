@@ -152,6 +152,58 @@ json_get() {
 
 # Cloudflare-supported HTTPS ports, in selection-preference order (443 first,
 # then 8443 as the most recognizable alternate, then the 20xx set). Feature 1.
+# --- BL-0002: architecture support (aarch64 + armv7l; fail closed otherwise) --- #
+# Map the host architecture to the pinned Psiphon Conduit release asset:
+#   aarch64 (arm64, Raspberry Pi 3/4) -> conduit-linux-arm64
+#   armv7l  (armhf, Raspberry Pi 2)   -> conduit-linux-armv7
+# Unknown/unsupported architectures return non-zero so callers fail closed.
+# armv6 (Pi Zero / Pi 1) is intentionally NOT mapped in v1.
+conduit_asset_for_arch() {
+    case "$1" in
+        aarch64) printf 'conduit-linux-arm64' ;;
+        armv7l)  printf 'conduit-linux-armv7' ;;
+        *)       return 1 ;;
+    esac
+}
+
+# Install Python dependencies with architecture-appropriate provisioning:
+#   aarch64: install from the configured package index (existing arm64/RPi4 path).
+#   armv7l : install ONLY from the official, verified wheelhouse-armhf asset and
+#            fail closed if it is absent or unverified. Native source builds are
+#            NOT used during a normal armhf install (BL-0002 / decision D-12).
+#            The wheelhouse MUST contain the FULL requirements.txt dependency
+#            closure (not only native-risk deps); a missing required wheel
+#            (e.g. fastapi) makes pip fail -> the install fails closed.
+# Args: <pip_bin> <requirements_file> <wheelhouse_dir>
+install_python_deps() {
+    local _pip="$1" _req="$2" _wh="$3" _arch
+    _arch="$(uname -m)"
+    case "${_arch}" in
+        aarch64)
+            "${_pip}" install --quiet -r "${_req}" || return 1
+            ;;
+        armv7l)
+            if [[ ! -d "${_wh}" ]]; then
+                warn "armhf wheelhouse not found at ${_wh}. The official 'wheelhouse-armhf' release asset is required on armv7l; native source builds are not used at install time."
+                return 1
+            fi
+            if [[ ! -f "${_wh}/SHA256SUMS" ]]; then
+                warn "armhf wheelhouse integrity file missing: ${_wh}/SHA256SUMS. A verifiable wheelhouse-armhf asset is required."
+                return 1
+            fi
+            if ! ( cd "${_wh}" && sha256sum -c --quiet SHA256SUMS >/dev/null ); then
+                warn "armhf wheelhouse checksum verification failed: ${_wh}."
+                return 1
+            fi
+            "${_pip}" install --quiet --no-index --only-binary=:all: --find-links "${_wh}" -r "${_req}" || return 1
+            ;;
+        *)
+            warn "Unsupported architecture '${_arch}' for dependency provisioning."
+            return 1
+            ;;
+    esac
+}
+
 readonly CF_HTTPS_PORTS=(443 8443 2053 2083 2087 2096)
 
 # Echo the set of occupied local TCP listening ports (space-separated, padded).
@@ -217,9 +269,10 @@ phase1_validate() {
     [[ "${os_version}" == "22.04" ]] || die \
         "Unsupported Ubuntu version: ${os_version}." \
         "Ubuntu 22.04 LTS (Jammy) is required."
-    [[ "${os_arch}" == "aarch64" ]] || die \
-        "Unsupported architecture: ${os_arch}." \
-        "ARM64 (aarch64) is required — this installer targets Raspberry Pi 4."
+    case "${os_arch}" in
+        aarch64|armv7l) : ;;
+        *) die "Unsupported architecture: ${os_arch}. Supported: aarch64 (arm64, Raspberry Pi 3/4) and armv7l (armhf, Raspberry Pi 2)." ;;
+    esac
 
     info "OS: Ubuntu ${os_version} ${os_arch}"
 
@@ -498,7 +551,7 @@ phase2_install() {
         info "venv already exists — skipping creation"
     fi
     "${APP_DIR}/venv/bin/pip" install --quiet --upgrade pip
-    "${APP_DIR}/venv/bin/pip" install --quiet -r "${APP_DIR}/requirements.txt"
+    install_python_deps "${APP_DIR}/venv/bin/pip" "${APP_DIR}/requirements.txt" "${CCC_WHEELHOUSE_DIR:-${SCRIPT_DIR}/wheelhouse-armhf}" || die "Python dependency installation failed."
     info "Python dependencies installed"
 
     # ---- 2d  Configuration directory --------------------------------------- #
@@ -693,7 +746,7 @@ PYEOF
 
     # ---- 2k  Systemd service ----------------------------------------------- #
     step "2k — Installing systemd service"
-    cp "${APP_DIR}/deployment/conduit-cc.service" "${SYSTEMD_UNIT}"
+    sed 's/\r$//' "${APP_DIR}/deployment/conduit-cc.service" > "${SYSTEMD_UNIT}"  # LF-normalize systemd unit (field CRLF fix)
     systemctl daemon-reload
     info "${SYSTEMD_UNIT} installed"
 
@@ -905,7 +958,8 @@ EOF
 
     if [[ "${CONDUIT_BIN_SRC}" == "download" ]]; then
         local _gh_base="https://github.com/Psiphon-Inc/conduit/releases/download/release-cli-${CONDUIT_VERSION}"
-        local _asset="conduit-linux-arm64"
+        local _asset
+        _asset="$(conduit_asset_for_arch "$(uname -m)")" || { rm -f "${_conduit_tmp}"; die "Unsupported architecture '$(uname -m)': no Conduit asset mapping (BL-0002 supports aarch64, armv7l)."; }
 
         step "  2x-c.1 — Downloading checksums.txt"
         local _checksums
@@ -974,7 +1028,7 @@ EOF
     # ---- 2x-e  Conduit systemd service ------------------------------------- #
     step "2x-e — Installing conduit.service"
     local _conduit_unit="/etc/systemd/system/conduit.service"
-    cp "${APP_DIR}/deployment/conduit.service" "${_conduit_unit}"
+    sed 's/\r$//' "${APP_DIR}/deployment/conduit.service" > "${_conduit_unit}"  # LF-normalize systemd unit (field CRLF fix)
     chown root:root "${_conduit_unit}"
     chmod 644 "${_conduit_unit}"
     systemctl daemon-reload
@@ -1052,14 +1106,21 @@ EOF
     fi
 
     # ---- 2x-h  UFW firewall reminder --------------------------------------- #
-    # Conduit binds UDP ports for inproxy traffic.  The exact ports are not
-    # documented in Psiphon source and may vary by version or configuration.
-    # We cannot add UFW rules without knowing the ports.
+    # Conduit binds dynamic, high-numbered UDP ports for its in-proxy peer
+    # traffic. These change at runtime (field-confirmed on the armv7l RPi2
+    # install, where the observed UDP set changed shortly after start), so
+    # per-port UFW rules are ineffective. The validated reference deployment
+    # (arm64 Pi 4 and the armv7l RPi2 field install) operates correctly with
+    # only TCP 22, 80, and the installer-selected HTTPS port open, so CCC adds NO
+    # inbound UDP rules. Stateful UFW
+    # already permits return traffic for Conduit's outbound in-proxy flows.
+    # See docs/pre-install.md.
     step "2x-h — Conduit firewall reminder"
-    warn "ACTION REQUIRED: Conduit needs UFW rules for inproxy UDP traffic."
-    warn "After install, run:  ss -ulnp | grep conduit"
-    warn "Then for each UDP port listed, run:  ufw allow <port>/udp comment 'Conduit'"
-    warn "(See docs/pre-install.md for details.)"
+    warn "Conduit uses dynamic UDP ports for in-proxy traffic; they change at runtime."
+    warn "The validated deployment runs with only TCP 22, 80, and the selected HTTPS port open,"
+    warn "so inbound UDP rules are NOT required and CCC does NOT add them."
+    warn "Do NOT add per-port UDP rules: the ports move and it only widens attack surface."
+    warn "Inspect (optional):  ss -ulnp | grep conduit    (details: docs/pre-install.md)"
 
     # ---- 2o  Enable and start service -------------------------------------- #
     step "2o — Enabling and starting ${SERVICE_NAME}"
@@ -1121,10 +1182,10 @@ phase3_summary() {
     printf "  Conduit metrics endpoint:\n"
     printf "    curl http://127.0.0.1:9090/metrics | grep conduit_max_common_clients\n"
     printf "\n"
-    printf '  %bACTION REQUIRED — Conduit firewall:%b\n' "${YELLOW}" "${RESET}"
-    printf "    Conduit binds UDP port(s) for inproxy traffic.\n"
-    printf "    Discover them:  ss -ulnp | grep conduit\n"
-    printf "    Then add rules: ufw allow <port>/udp comment 'Conduit'\n"
+    printf '  %bConduit firewall (informational):%b\n' "${CYAN}" "${RESET}"
+    printf "    Conduit uses dynamic UDP ports that change at runtime.\n"
+    printf "    It runs with only 22, 80, and the selected HTTPS port open; no UDP rules needed.\n"
+    printf "    Inspect (optional):  ss -ulnp | grep conduit   (see docs/pre-install.md)\n"
     printf "\n"
     printf "  DDNS log:\n"
     printf '    tail -f %s/ddns.log\n' "${LOG_DIR}"
@@ -1134,9 +1195,8 @@ phase3_summary() {
     printf "\n"
     printf '  %bNext steps:%b\n' "${BOLD}" "${RESET}"
     printf '    1. Open https://%s%s/ and log in.\n' "${CF_RECORD_NAME}" "${_url_suffix}"
-    printf "    2. Add UFW rules for Conduit UDP port(s):\n"
+    printf "    2. (Optional) Inspect Conduit UDP ports; no UFW rules are required:\n"
     printf "         ss -ulnp | grep conduit\n"
-    printf "         ufw allow <port>/udp comment 'Conduit'\n"
     printf "    3. Verify Conduit node status on the dashboard.\n"
     printf "    4. Verify Cloudflare SSL/TLS is set to Full (strict):\n"
     printf "       https://dash.cloudflare.com -> SSL/TLS -> Overview\n"
