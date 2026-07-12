@@ -76,8 +76,8 @@ def _make_wheelhouse(valid=True, with_sums=True):
 
 def _extract_func(src: str, name: str) -> str:
     lines = src.splitlines()
-    start = next((i for i, l in enumerate(lines)
-                  if l.rstrip().startswith(f"{name}() {{")), None)
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.rstrip().startswith(f"{name}() {{")), None)
     assert start is not None, f"function {name} not found"
     end = next((j for j in range(start + 1, len(lines)) if lines[j] == "}"), None)
     assert end is not None, f"closing brace for {name} not found"
