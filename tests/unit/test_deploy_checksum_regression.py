@@ -26,8 +26,10 @@ _NEW = 'APP_VERSION = "0.3.14"\n'   # identical byte length to _OLD
 
 
 def _tree(tmp_path):
-    src = tmp_path / "src"; dst = tmp_path / "dst"
-    src.mkdir(); dst.mkdir()
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
     (dst / "_version.py").write_text(_OLD)      # already-installed (stale) file
     (src / "_version.py").write_text(_NEW)      # new artifact content, same length
     for p in (src / "_version.py", dst / "_version.py"):

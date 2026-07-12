@@ -55,7 +55,7 @@ def _run_provision(arch, wh_dir, pip_rc=0):
         + 'install_python_deps "%s/bin/pip" "%s" "%s"; echo "RC=$?"\n' % (d, req, wh_dir)
     )
     p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
-    rc = next((int(l[3:]) for l in p.stdout.splitlines() if l.startswith("RC=")), None)
+    rc = next((int(ln[3:]) for ln in p.stdout.splitlines() if ln.startswith("RC=")), None)
     args = open(pip_args).read() if os.path.exists(pip_args) else ""
     return rc, args, p.stderr
 

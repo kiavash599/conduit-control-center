@@ -50,12 +50,15 @@ def _import_ver(app, cwd) -> str:
 
 
 def test_stale_pyc_collision_and_purge_resolves_it(tmp_path):
-    app = tmp_path / "app"; app.mkdir()
-    cwd = tmp_path / "cwd"; cwd.mkdir()          # neutral cwd (no mymod.py here)
+    app = tmp_path / "app"
+    app.mkdir()
+    cwd = tmp_path / "cwd"  # neutral cwd (no mymod.py here)
+    cwd.mkdir()
     mod = app / "mymod.py"
 
     # venv bytecode that MUST survive the purge (venv + children pruned)
-    vpc = app / "venv" / "lib" / "pkg" / "__pycache__"; vpc.mkdir(parents=True)
+    vpc = app / "venv" / "lib" / "pkg" / "__pycache__"
+    vpc.mkdir(parents=True)
     (vpc / "keep.cpython-x.pyc").write_bytes(b"\x00keep")
     (app / "venv" / "loose.pyc").write_bytes(b"\x00loose")
 

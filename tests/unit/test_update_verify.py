@@ -55,9 +55,11 @@ def _make_release(tmp_path, artifact_bytes=b"\x1f\x8bpayload", version="0.3.13",
 def test_read_trust_store_fail_closed(tmp_path):
     missing = tmp_path / "nope"
     assert V.read_trust_store(str(missing)) is None
-    empty = tmp_path / "empty"; empty.write_text("# only a comment\n\n   \n")
+    empty = tmp_path / "empty"
+    empty.write_text("# only a comment\n\n   \n")
     assert V.read_trust_store(str(empty)) is None
-    good = tmp_path / "good"; good.write_text("principal ssh-ed25519 AAAA\n")
+    good = tmp_path / "good"
+    good.write_text("principal ssh-ed25519 AAAA\n")
     assert V.read_trust_store(str(good)) == ["principal ssh-ed25519 AAAA"]
 
 
