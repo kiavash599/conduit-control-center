@@ -732,5 +732,67 @@ class Ipv6AndRecoveryTests(_Base):
         self.assertIn("sudo ufw allow 1222/tcp comment 'CCC SSH'", r.stderr)
 
 
+class LWarningsTests(_Base):
+    """_fw_l_warnings: C (comma-sep) vs L (whitespace-sep) corroboration warnings.
+    L is corroboration only and never authorizes a port; warnings never change the
+    resolved plan. Regression for the ShellCheck SC2086 array rewrite."""
+
+    _CFG = "SSH port {p}/tcp is configured but not currently listening"
+    _RUN = "A runtime SSH listener on {p}/tcp is not in the effective configuration"
+
+    def _lw(self, C, L):
+        return self.run_body(f"_fw_l_warnings {C!r} {L!r}")
+
+    def test_configured_not_listening_warns_only_missing(self):
+        r = self._lw("22,1222", "1222")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn(self._CFG.format(p=22), r.stderr)
+        self.assertNotIn(self._CFG.format(p=1222), r.stderr)   # shared 1222: no warning
+        self.assertNotIn(self._RUN.format(p=1222), r.stderr)
+
+    def test_runtime_not_configured_warns_only_extra(self):
+        r = self._lw("1222", "22 1222")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn(self._RUN.format(p=22), r.stderr)
+        self.assertNotIn(self._RUN.format(p=1222), r.stderr)   # shared 1222: no warning
+        self.assertNotIn(self._CFG.format(p=1222), r.stderr)
+
+    def test_agreement_no_warning(self):
+        r = self._lw("1222", "1222")
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("configured but not currently listening", r.stderr)
+        self.assertNotIn("runtime SSH listener", r.stderr)
+
+    def test_empty_L_configured_warning_no_read_failure(self):
+        r = self._lw("1222", "")
+        self.assertEqual(r.returncode, 0)  # no set-e/read failure on empty L
+        self.assertIn(self._CFG.format(p=1222), r.stderr)
+        self.assertNotIn("runtime SSH listener", r.stderr)
+
+    def test_warnings_do_not_change_resolved_plan(self):
+        # A=1222 (session), C=1222 (sshd -T), L={22,1222} (listeners): the runtime-22
+        # mismatch warns, but the resolved plan stays exactly {1222}.
+        proc = self._proc([(100, "bash", 90), (90, "sudo", 80),
+                           (80, "bash", 70), (70, "sshd", 1)])
+        d = self._stubdir()
+        self._write(os.path.join(d, "ss"),
+                    '#!/usr/bin/env bash\ncase "$*" in\n'
+                    '  *established*) echo \'ESTAB 0 0 10.0.0.5:1222 1.2.3.4:5 '
+                    'users:(("sshd",pid=70,fd=9))\';;\n'
+                    '  *) echo \'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=70,fd=3))\'; '
+                    'echo \'LISTEN 0 128 0.0.0.0:1222 0.0.0.0:* users:(("sshd",pid=70,fd=4))\';;\n'
+                    'esac\n')
+        self._write(os.path.join(d, "systemctl"),
+                    '#!/usr/bin/env bash\ncase "$*" in '
+                    '*"is-active ssh.socket"*) echo inactive;; '
+                    '*"is-enabled ssh.socket"*) echo disabled;; *) echo "";; esac\n')
+        self._write(os.path.join(d, "sshd"),
+                    '#!/usr/bin/env bash\n[[ "$1" == "-T" ]] && echo "port 1222"\nexit 0\n')
+        r = self.run_body('_firewall_preflight 1>/dev/null; echo "PLAN=${FW_SSH_PORTS}"',
+                          env={"CCC_FW_START_PID": "100"}, proc=proc, path_prepend=d)
+        self.assertEqual(r.stdout.strip(), "PLAN=1222")             # plan unchanged
+        self.assertIn(self._RUN.format(p=22), r.stderr)            # mismatch did warn
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

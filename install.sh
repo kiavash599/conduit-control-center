@@ -228,13 +228,11 @@ detect_occupied_tcp_ports() {
 # =========================================================================== #
 
 FW_SSH_PORTS=""     # resolved SSH admin ports (space-separated)
-FW_OVER_SSH="0"     # 1 when running inside an SSH session
 FW_EVID_SIG=""      # evidence signature captured at preflight
 _FW_SIG=""          # scratch: signature from _firewall_collect_plan
 _FW_PLAN=""         # scratch: resolved SSH plan from _firewall_collect_plan
 _FW_L=""            # scratch: runtime listener set from _firewall_collect_plan
 _FW_C=""            # scratch: configured set (csv/UNREADABLE/EMPTY)
-_FW_OVER_SSH="0"    # scratch flag set by _ssh_session_port
 
 _fw_valid_port() {
     local p="$1"
@@ -330,11 +328,11 @@ _ssh_runtime_ports() {
 }
 
 # Active SSH session anchor A. stdout: local server port (if found).
-# Sets _FW_OVER_SSH=1 when inside an SSH session. return 0 found; 1 not-ssh; 2 ambiguous.
+# return 0 = found (port on stdout); 1 = not an SSH session; 2 = ambiguous.
+# The caller derives "over SSH" from the return code (1 => not over SSH).
 _ssh_session_port() {
     local proc="${CCC_PROC_ROOT:-/proc}"
     local start="${1:-$$}"
-    _FW_OVER_SSH="0"
 
     local envA=""
     if [[ -n "${SSH_CONNECTION:-}" ]]; then
@@ -376,10 +374,8 @@ _ssh_session_port() {
     fi
 
     if [[ "${#chain[@]}" -eq 0 ]]; then
-        _FW_OVER_SSH="0"
         return 1                          # local console (no sshd ancestor)
     fi
-    _FW_OVER_SSH="1"
 
     # Correlate established sockets owned by ANY chain sshd PID (privsep-aware).
     local ssout p line laddr lport ports=""
@@ -502,14 +498,21 @@ _firewall_collect_plan() {   # echoes "SIG|||PLAN"; dies via _fw_fatal on fatal
 }
 
 _fw_l_warnings() {
-    # Deterministic corroboration warnings; L never authorizes a port.
+    # Deterministic corroboration warnings; L never authorizes a port. C is
+    # comma-separated; L is whitespace-separated. Both are turned into real arrays
+    # so no word-splitting/globbing occurs (ShellCheck-clean, no disable directives).
     local C="$1" L="$2" cp lp
     [[ "${C}" == "UNREADABLE" || "${C}" == "EMPTY" ]] && return 0
-    for cp in ${C//,/ }; do
-        _in_set "${cp}" ${L} || warn "SSH port ${cp}/tcp is configured but not currently listening; it will be opened for post-reboot access."
+    local -a Cset=() Lset=()
+    IFS=',' read -r -a Cset <<< "${C}"
+    if [[ -n "${L}" ]]; then
+        read -r -a Lset <<< "${L}"
+    fi
+    for cp in "${Cset[@]}"; do
+        _in_set "${cp}" "${Lset[@]}" || warn "SSH port ${cp}/tcp is configured but not currently listening; it will be opened for post-reboot access."
     done
-    for lp in ${L}; do
-        _in_set "${lp}" ${C//,/ } || warn "A runtime SSH listener on ${lp}/tcp is not in the effective configuration and will NOT be opened (a listening socket is evidence, not authorization)."
+    for lp in "${Lset[@]}"; do
+        _in_set "${lp}" "${Cset[@]}" || warn "A runtime SSH listener on ${lp}/tcp is not in the effective configuration and will NOT be opened (a listening socket is evidence, not authorization)."
     done
     return 0
 }
