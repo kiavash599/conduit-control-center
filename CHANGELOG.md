@@ -9,7 +9,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-**Raspberry Pi 2 / 32-bit (armhf) support (BL-0002) - implemented, not yet released.**
+---
+
+## [0.3.15] — 2026-07-13
+
+**Raspberry Pi 2 / 32-bit (armhf) support (BL-0002).**
 
 ### Added
 
@@ -25,6 +29,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unverified, or incomplete.
 - Systemd unit files are LF-normalised on install (CRLF-safe), so token/default
   validation cannot fail on CR-terminated lines.
+
+### Changed
+
+- Dev tooling: bumped `pytest` (development dependency) to clear a Dependabot
+  alert. No runtime dependency changed; `requirements.txt` is unchanged.
 
 ### Notes
 
