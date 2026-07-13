@@ -281,23 +281,53 @@ sudo bash install.sh
 
 ## Post-install — firewall (UFW) rules
 
-The CCC dashboard requires only three inbound **TCP** ports:
+The CCC dashboard requires only these inbound **TCP** ports:
 
 | Port | Purpose |
 |---|---|
-| 22/tcp | SSH administration |
+| your SSH port | SSH administration — the **actual local sshd port**, discovered by the installer (not assumed to be 22) |
 | 80/tcp | HTTP (redirected to HTTPS) |
-| 443/tcp | HTTPS dashboard (installer-selected port; 443 is the default, but may be 2053, 8443, etc.) |
+| HTTPS port | HTTPS dashboard — installer-selected (443 by default; may be 2053, 8443, etc.) |
 
-`install.sh` configures UFW to allow exactly these. After installation, verify:
+`install.sh` opens **only** these and adds **no** inbound Conduit UDP rule.
+
+### SSH administration port discovery (ADR-0004)
+
+The installer does **not** assume SSH uses port 22. Before it writes any UFW
+rule or enables the firewall, it resolves the **actual local SSH port(s)** from
+authoritative on-device evidence: the active SSH session's own local server
+port and the effective `sshd` configuration (`sshd -T`, or an active/enabled
+`ssh.socket`). It then opens **only** the evidenced local port(s) — for example
+`1222/tcp` if your sshd listens on 1222 — with **no conventional 22 fallback**.
+
+This is a **local** port only. If your router forwards an external/WAN port to
+the Pi (e.g. WAN 1222 → Pi 1222), CCC manages just the Pi's local port; it does
+**not** discover or manage router/NAT forwarding.
+
+If the evidence is ambiguous or conflicting (for example the active session is
+on a port that the effective config does not list), the installer **fails closed
+and makes no firewall changes**, and prints the evidence it found. Re-run with an
+explicit, sudo-safe override naming your intended local SSH port(s):
+
+```bash
+sudo env CCC_SSH_PORTS=1222 bash install.sh
+```
+
+The override must include the port your current SSH session is using; an
+override that omits it, or any invalid value, is treated as fatal (fail-closed).
+
+After installation, verify the firewall:
 
 ```bash
 sudo ufw status numbered
 ```
 
-You should see only `22/tcp`, `80/tcp`, and the HTTPS TCP port you selected at
-install time (`443/tcp` by default, but it may be `2053/tcp`, `8443/tcp`, etc.),
-plus their IPv6 equivalents. Nothing else is required for the dashboard.
+The installer will have added **your SSH port** (e.g. `22/tcp` on a Pi 4 default,
+or `1222/tcp` on the Pi 2 example), `80/tcp`, and the HTTPS port you selected at
+install time (plus their IPv6 equivalents) **alongside any pre-existing UFW
+rules** — and it adds **no** `/udp` rule. CCC does not delete rules it did not
+add. If you see a `22/tcp` rule a board does not actually use, first confirm it
+is unused and that removing it will not cost you access, then remove it manually.
 
 ### About Conduit's UDP ports
 
@@ -312,8 +342,9 @@ These ports are chosen dynamically and change during runtime as well as
 between Conduit restarts and versions. This was confirmed on a Raspberry Pi 2
 field install, where the observed UDP set changed shortly after start, so
 there is no fixed UDP port to open. In the validated Raspberry Pi
-reference deployment, Conduit operates correctly with only TCP 22, 80, and the installer-selected HTTPS port open
-in UFW. Additional inbound UDP rules are not required for that deployment.
+reference deployment, Conduit operates correctly with the evidenced SSH
+administration port(s), TCP 80, and the installer-selected HTTPS port open in
+UFW. Additional inbound UDP rules are not required for that deployment.
 
 > **Do not blindly add UDP rules.** Running `sudo ufw allow <port>/udp` for the
 > ports shown by `ss` is both ineffective (the ports change) and an unnecessary
@@ -323,8 +354,9 @@ in UFW. Additional inbound UDP rules are not required for that deployment.
 
 ### Project Owner checklist (Conduit UDP ports)
 
-1. Leave UFW at the installer default: `22/tcp`, `80/tcp`, and the HTTPS TCP port
-   you selected at install (`443/tcp` by default; may be `2053/tcp`, `8443/tcp`, etc.).
+1. Leave UFW as the installer configured it: your discovered SSH port, `80/tcp`,
+   and the HTTPS TCP port you selected at install (`443/tcp` by default; may be
+   `2053/tcp`, `8443/tcp`, etc.), plus any pre-existing rules it preserved.
 2. Do **not** add `ufw allow <port>/udp` rules for the ports shown by `ss`. They
    change at runtime, so any rule you add is stale almost immediately and only
    widens attack surface.

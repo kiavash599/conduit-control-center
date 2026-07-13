@@ -212,6 +212,418 @@ detect_occupied_tcp_ports() {
         | grep -E '^[0-9]+$' | sort -un | tr '\n' ' '
 }
 
+# >>> CCC-FIREWALL-PLAN >>>
+# ADR-0004 purpose-aware firewall. This block is extracted verbatim between the
+# >>>/<<< markers by tests/unit/test_firewall_ssh_plan.py; keep markers on their
+# own lines with no trailing code.
+# =========================================================================== #
+#  Purpose-aware firewall plan (BL-0002 / ADR-0004)                            #
+# --------------------------------------------------------------------------- #
+#  A listening socket is EVIDENCE, not authorization to expose a service. The  #
+#  installer opens ONLY: the evidenced local SSH admin port(s); fixed HTTP 80; #
+#  the installer-selected HTTPS port. No inbound Conduit UDP. No conventional  #
+#  fallback. Any genuine disagreement fails closed BEFORE any UFW write.       #
+#  The installer manages LOCAL board ports only; it never inspects router/NAT. #
+#  Test seam: CCC_PROC_ROOT (proc tree); ss/sshd/systemctl/ufw stubbed on PATH.#
+# =========================================================================== #
+
+FW_SSH_PORTS=""     # resolved SSH admin ports (space-separated)
+FW_OVER_SSH="0"     # 1 when running inside an SSH session
+FW_EVID_SIG=""      # evidence signature captured at preflight
+_FW_SIG=""          # scratch: signature from _firewall_collect_plan
+_FW_PLAN=""         # scratch: resolved SSH plan from _firewall_collect_plan
+_FW_L=""            # scratch: runtime listener set from _firewall_collect_plan
+_FW_C=""            # scratch: configured set (csv/UNREADABLE/EMPTY)
+_FW_OVER_SSH="0"    # scratch flag set by _ssh_session_port
+
+_fw_valid_port() {
+    local p="$1"
+    [[ "${p}" =~ ^[0-9]+$ ]] || return 1
+    (( p >= 1 && p <= 65535 )) || return 1
+    return 0
+}
+
+_in_set() {
+    local needle="$1"; shift
+    local x
+    for x in "$@"; do [[ "${x}" == "${needle}" ]] && return 0; done
+    return 1
+}
+
+# stdin: `systemctl show ... -p Listen --value` lines "<addr> (Stream)".
+# stdout: TCP Stream ports, one per line (AF_UNIX and non-Stream skipped).
+_fw_parse_listen_stream() {
+    local line addr port
+    while IFS= read -r line; do
+        [[ "${line}" == *"(Stream)"* ]] || continue
+        addr="${line%% (*}"
+        case "${addr}" in
+            /*) continue ;;             # AF_UNIX path -> not a TCP port
+        esac
+        port="${addr##*:}"              # trailing :PORT (v4, [::]:PORT, IP:PORT)
+        _fw_valid_port "${port}" && printf '%s\n' "${port}"
+    done
+}
+
+# Validate the RAW CCC_SSH_PORTS value. stdout: deduped ports (one per line).
+# Returns 0 on success, or 2 on ANY invalid input (empty/whitespace-only,
+# embedded whitespace, leading/trailing/double comma, non-numeric, out-of-range).
+# Unset-vs-set is decided by the caller; this function never returns 1.
+_ssh_parse_override() {
+    # $1 is the RAW value of CCC_SSH_PORTS (may be empty); the caller decides
+    # unset-vs-set. Empty/whitespace-only -> fatal(2). Split on commas FIRST, trim
+    # each element, reject empty elements (leading/trailing/double comma) and any
+    # embedded whitespace ("12 22" must NOT become 1222). Dedup; range 1..65535.
+    local raw="$1"
+    local nospace="${raw//[[:space:]]/}"
+    [[ -n "${nospace}" ]] || return 2
+    [[ "${nospace}" == ,* || "${nospace}" == *, || "${nospace}" == *,,* ]] && return 2
+    local -a parts=()
+    IFS=',' read -r -a parts <<< "${raw}"   # split on commas WITHOUT pathname expansion
+    local p out=()
+    for p in "${parts[@]}"; do
+        p="${p#"${p%%[![:space:]]*}"}"
+        p="${p%"${p##*[![:space:]]}"}"
+        [[ -n "${p}" ]] || return 2
+        [[ "${p}" == *[[:space:]]* ]] && return 2
+        _fw_valid_port "${p}" || return 2
+        out+=("${p}")
+    done
+    [[ "${#out[@]}" -ge 1 ]] || return 2
+    printf '%s\n' "${out[@]}" | sort -un
+    return 0
+}
+
+# Persistent configured local SSH TCP ports (C).
+# stdout: ports (newline) | "UNREADABLE" | "EMPTY".
+_ssh_persistent_ports() {
+    local sock_active sock_enabled
+    sock_active="$(systemctl is-active ssh.socket 2>/dev/null || true)"
+    sock_enabled="$(systemctl is-enabled ssh.socket 2>/dev/null || true)"
+    if [[ "${sock_active}" == "active" || "${sock_enabled}" == "enabled" ]]; then
+        # ssh.socket governs; read effective Listen property.
+        local listen ports
+        listen="$(systemctl show ssh.socket --property=Listen --value 2>/dev/null || true)"
+        ports="$(printf '%s\n' "${listen}" | _fw_parse_listen_stream | sort -un)"
+        [[ -n "${ports}" ]] && { printf '%s\n' "${ports}"; return 0; }
+        printf 'UNREADABLE\n'; return 0
+    fi
+    # Disabled/inactive ssh.socket is IGNORED. Use sshd -T (resolves Include/drop-ins).
+    if ! command -v sshd >/dev/null 2>&1 && [[ ! -x /usr/sbin/sshd ]]; then
+        printf 'EMPTY\n'; return 0            # no sshd installed
+    fi
+    local sshdbin sshdt rc ports
+    sshdbin="$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)"
+    if sshdt="$("${sshdbin}" -T 2>/dev/null)"; then rc=0; else rc=$?; fi
+    if (( rc != 0 )); then printf 'UNREADABLE\n'; return 0; fi
+    ports="$(printf '%s\n' "${sshdt}" | awk 'tolower($1)=="port"{print $2}' \
+             | while read -r p; do _fw_valid_port "${p}" && printf '%s\n' "${p}"; done | sort -un)"
+    [[ -n "${ports}" ]] && { printf '%s\n' "${ports}"; return 0; }
+    printf 'UNREADABLE\n'
+}
+
+# Runtime SSH listener ports (L) -- corroboration only (best-effort).
+_ssh_runtime_ports() {
+    ss -Hltnp 2>/dev/null | grep -iE 'users:\(\("(sshd|ssh)"' \
+        | awk '{print $4}' | sed -E 's/.*:([0-9]+)$/\1/' \
+        | grep -E '^[0-9]+$' | sort -un
+}
+
+# Active SSH session anchor A. stdout: local server port (if found).
+# Sets _FW_OVER_SSH=1 when inside an SSH session. return 0 found; 1 not-ssh; 2 ambiguous.
+_ssh_session_port() {
+    local proc="${CCC_PROC_ROOT:-/proc}"
+    local start="${1:-$$}"
+    _FW_OVER_SSH="0"
+
+    local envA=""
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        local -a f
+        read -r -a f <<< "${SSH_CONNECTION}"
+        if [[ "${#f[@]}" -eq 4 ]] && _fw_valid_port "${f[3]}"; then envA="${f[3]}"; fi
+    fi
+
+    local pid="${start}" hops=0 prev="" anc_shell=""
+    local -a chain=()
+    while (( hops < 64 )); do
+        local comm stat ppid
+        comm="$(cat "${proc}/${pid}/comm" 2>/dev/null || true)"
+        [[ -n "${comm}" ]] || break
+        if [[ "${comm}" == "sshd" ]]; then
+            chain+=("${pid}")
+            [[ -z "${anc_shell}" && -n "${prev}" ]] && anc_shell="${prev}"
+        fi
+        stat="$(cat "${proc}/${pid}/stat" 2>/dev/null || true)"
+        [[ -n "${stat}" ]] || break
+        ppid="$(printf '%s' "${stat}" | sed -E 's/^[0-9]+ \(.*\) [^ ]+ ([0-9]+).*/\1/')"
+        [[ "${ppid}" =~ ^[0-9]+$ ]] || break
+        (( ppid <= 1 )) && break
+        prev="${pid}"; pid="${ppid}"; hops=$((hops + 1))
+    done
+
+    # Recover SSH_CONNECTION from the validated ancestor login shell environ
+    # (NUL-delimited) when sudo stripped it from our own environment.
+    local ancA=""
+    if [[ -n "${anc_shell}" && -r "${proc}/${anc_shell}/environ" ]]; then
+        local envline val
+        envline="$(tr '\0' '\n' < "${proc}/${anc_shell}/environ" 2>/dev/null | grep -m1 '^SSH_CONNECTION=' || true)"
+        if [[ -n "${envline}" ]]; then
+            val="${envline#SSH_CONNECTION=}"
+            local -a af
+            read -r -a af <<< "${val}"
+            if [[ "${#af[@]}" -eq 4 ]] && _fw_valid_port "${af[3]}"; then ancA="${af[3]}"; fi
+        fi
+    fi
+
+    if [[ "${#chain[@]}" -eq 0 ]]; then
+        _FW_OVER_SSH="0"
+        return 1                          # local console (no sshd ancestor)
+    fi
+    _FW_OVER_SSH="1"
+
+    # Correlate established sockets owned by ANY chain sshd PID (privsep-aware).
+    local ssout p line laddr lport ports=""
+    ssout="$(ss -Htnp state established 2>/dev/null || true)"
+    for p in "${chain[@]}"; do
+        while IFS= read -r line; do
+            [[ -n "${line}" ]] || continue
+            case "${line}" in
+                *"pid=${p},"*|*"pid=${p})"*) : ;;
+                *) continue ;;
+            esac
+            laddr="$(printf '%s' "${line}" | awk '{print $4}')"
+            lport="${laddr##*:}"
+            _fw_valid_port "${lport}" && ports+="${lport}"$'\n'
+        done <<< "${ssout}"
+    done
+    ports="$(printf '%s' "${ports}" | grep -E '^[0-9]+$' | sort -un || true)"
+    local n
+    n="$(printf '%s\n' "${ports}" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+    if [[ "${n}" == "1" ]]; then
+        local A; A="$(printf '%s\n' "${ports}" | sed '/^$/d' | head -n1)"
+        # socket-derived A is authoritative; every available env candidate must agree.
+        [[ -n "${envA}" && "${envA}" != "${A}" ]] && return 2
+        [[ -n "${ancA}" && "${ancA}" != "${A}" ]] && return 2
+        printf '%s\n' "${A}"; return 0
+    elif [[ "${n}" == "0" ]]; then
+        # no correlated socket: fall back to validated ancestor env, then own env.
+        [[ -n "${ancA}" && -n "${envA}" && "${ancA}" != "${envA}" ]] && return 2
+        local cand="${ancA:-${envA}}"
+        if [[ -n "${cand}" ]]; then printf '%s\n' "${cand}"; return 0; fi
+        return 2
+    else
+        return 2
+    fi
+}
+
+# _resolve_ssh_plan <over_ssh> <A|""> <C_csv|UNREADABLE|EMPTY> <O_csv|NONE>
+# stdout: "PLAN: p1 p2 ..." (possibly empty) OR "FATAL: <reason>". return 0 ok; 1 fatal.
+_resolve_ssh_plan() {
+    local over="$1" A="$2" C="$3" O="$4"
+    local -a Cset=() Oset=()
+    [[ "${C}" != "UNREADABLE" && "${C}" != "EMPTY" ]] && IFS=',' read -r -a Cset <<< "${C}"
+    [[ "${O}" != "NONE" ]] && IFS=',' read -r -a Oset <<< "${O}"
+
+    if [[ "${O}" != "NONE" ]]; then
+        if [[ "${over}" == "1" ]]; then
+            [[ -n "${A}" ]] || { echo "FATAL: over SSH but the active session port is undeterminable; cannot validate override"; return 1; }
+            _in_set "${A}" "${Oset[@]}" || { echo "FATAL: CCC_SSH_PORTS omits the active SSH session port ${A}"; return 1; }
+        fi
+        echo "PLAN: $(printf '%s\n' "${Oset[@]}" | sort -un | tr '\n' ' ' | sed 's/ $//')"
+        return 0
+    fi
+
+    if [[ "${over}" == "1" ]]; then
+        [[ -n "${A}" ]] || { echo "FATAL: over SSH but the active session port is ambiguous/undeterminable"; return 1; }
+        [[ "${C}" == "UNREADABLE" ]] && { echo "FATAL: over SSH; effective sshd configuration unreadable; cannot confirm the persistent SSH port(s)"; return 1; }
+        _in_set "${A}" "${Cset[@]}" || { echo "FATAL: active SSH session port ${A} is not in the configured set (${C}); no union and no conventional fallback"; return 1; }
+        echo "PLAN: $(printf '%s\n' "${Cset[@]}" | sort -un | tr '\n' ' ' | sed 's/ $//')"
+        return 0
+    fi
+
+    # local console
+    [[ "${C}" == "UNREADABLE" ]] && { echo "FATAL: local console; sshd present but effective configuration unreadable/ambiguous"; return 1; }
+    [[ "${C}" == "EMPTY" ]] && { echo "PLAN: "; return 0; }
+    echo "PLAN: $(printf '%s\n' "${Cset[@]}" | sort -un | tr '\n' ' ' | sed 's/ $//')"
+    return 0
+}
+
+_fw_fatal() {
+    local reason="$1" A="$2" C="$3" L="$4" O="$5"
+    warn "FIREWALL PREFLIGHT FAILED — no firewall changes were made: ${reason}"
+    warn "  Evidence: active-session-port=[${A:-none}] configured=[${C}] runtime-listeners=[${L:-none}] override=[${O}]"
+    warn "  This installer manages LOCAL board ports only (never router/NAT forwarding)."
+    warn "  Safe remediation — specify the intended LOCAL SSH admin port(s):"
+    warn "    sudo env CCC_SSH_PORTS=<port[,port]> bash install.sh"
+    die "SSH firewall plan could not be resolved safely; UFW was not modified."
+}
+
+_fw_print_plan() {
+    info "Firewall plan (purpose | protocol | port | evidence) — no UFW changes yet:"
+    if [[ -n "${FW_SSH_PORTS}" ]]; then
+        info "  SSH administration | TCP | ${FW_SSH_PORTS} | session anchor + effective sshd config (fail-closed; no conventional fallback)"
+    else
+        info "  SSH administration | TCP | (none) | no sshd detected on local console"
+    fi
+    info "  HTTP redirect      | TCP | 80 | fixed CCC requirement"
+    info "  CCC HTTPS          | TCP | ${HTTPS_PORT} | installer-selected"
+    info "  Conduit inbound    | UDP | (none) | dynamic ports; no inbound rule"
+}
+
+_firewall_collect_plan() {   # echoes "SIG|||PLAN"; dies via _fw_fatal on fatal
+    local A C L O Ccsv rc over res plan
+    if A="$(_ssh_session_port "${CCC_FW_START_PID:-$$}")"; then rc=0; else rc=$?; fi
+    over=1; [[ "${rc}" -eq 1 ]] && over=0
+    C="$(_ssh_persistent_ports)"
+    L="$(_ssh_runtime_ports | tr '\n' ' ' | sed 's/ *$//')"
+    if [[ "${C}" == "UNREADABLE" ]]; then Ccsv="UNREADABLE"
+    elif [[ -z "${C}" || "${C}" == "EMPTY" ]]; then Ccsv="EMPTY"
+    else Ccsv="$(printf '%s\n' "${C}" | paste -sd, -)"; fi
+    O="NONE"
+    if [[ -n "${CCC_SSH_PORTS+x}" ]]; then
+        # SET (even if empty) -> must be valid; empty/whitespace-only is fatal.
+        local optmp
+        if optmp="$(_ssh_parse_override "${CCC_SSH_PORTS}")"; then
+            O="$(printf '%s\n' "${optmp}" | paste -sd, -)"
+        else
+            _fw_fatal "CCC_SSH_PORTS is set but invalid: comma-separated integer ports 1..65535 (empty, whitespace-only, embedded whitespace, trailing/double comma, non-numeric, out-of-range are rejected)" "${A}" "${Ccsv}" "${L}" "${CCC_SSH_PORTS}"
+        fi
+    fi
+    [[ "${rc}" -eq 2 ]] && _fw_fatal "an SSH session is active but its administration port is ambiguous/undeterminable" "${A}" "${Ccsv}" "${L}" "${O}"
+    if res="$(_resolve_ssh_plan "${over}" "${A}" "${Ccsv}" "${O}")"; then :; else
+        _fw_fatal "$(printf '%s' "${res}" | sed 's/^FATAL: //')" "${A}" "${Ccsv}" "${L}" "${O}"
+    fi
+    plan="$(printf '%s' "${res}" | sed 's/^PLAN: //' | xargs 2>/dev/null || true)"
+    _FW_SIG="over=${over};A=${A};C=${Ccsv};O=${O};L=${L};plan=${plan}"
+    _FW_PLAN="${plan}"
+    _FW_L="${L}"
+    _FW_C="${Ccsv}"
+}
+
+_fw_l_warnings() {
+    # Deterministic corroboration warnings; L never authorizes a port.
+    local C="$1" L="$2" cp lp
+    [[ "${C}" == "UNREADABLE" || "${C}" == "EMPTY" ]] && return 0
+    for cp in ${C//,/ }; do
+        _in_set "${cp}" ${L} || warn "SSH port ${cp}/tcp is configured but not currently listening; it will be opened for post-reboot access."
+    done
+    for lp in ${L}; do
+        _in_set "${lp}" ${C//,/ } || warn "A runtime SSH listener on ${lp}/tcp is not in the effective configuration and will NOT be opened (a listening socket is evidence, not authorization)."
+    done
+    return 0
+}
+
+_firewall_preflight() {
+    _firewall_collect_plan
+    FW_EVID_SIG="${_FW_SIG}"
+    FW_SSH_PORTS="${_FW_PLAN}"
+    _fw_l_warnings "${_FW_C}" "${_FW_L}"
+    _fw_print_plan
+}
+
+_firewall_apply() {
+    local plan
+    _firewall_collect_plan
+    [[ "${_FW_SIG}" == "${FW_EVID_SIG}" ]] || die "SSH firewall evidence changed between preflight and apply; UFW not modified."
+    plan="${_FW_PLAN}"
+
+    # Capture the initial UFW active state (locale-stable) BEFORE any live write.
+    local was_active=0
+    LC_ALL=C ufw status 2>/dev/null | grep -qE '^Status: active' && was_active=1
+
+    local -a rules=()
+    local p
+    for p in ${plan}; do rules+=("${p}|CCC SSH"); done
+    rules+=("80|HTTP")
+    rules+=("${HTTPS_PORT}|CCC HTTPS")
+
+    # Non-mutating dry-run of every planned rule first.
+    local r port comment
+    for r in "${rules[@]}"; do
+        port="${r%|*}"; comment="${r#*|}"
+        ufw --dry-run allow "${port}/tcp" comment "${comment}" >/dev/null 2>&1 \
+            || die "ufw --dry-run rejected ${port}/tcp (${comment}); no firewall changes made."
+    done
+
+    # Add-only, deterministic order; truthful partial-failure reporting (no rollback).
+    local -a applied=()
+    for r in "${rules[@]}"; do
+        port="${r%|*}"; comment="${r#*|}"
+        if ufw allow "${port}/tcp" comment "${comment}" >/dev/null 2>&1; then
+            applied+=("${port}/tcp")
+        else
+            local statenote
+            if [[ "${was_active}" == "1" ]]; then
+                statenote="UFW remains ACTIVE: prior rules plus the successfully-added rules stay in effect (it was not reset or re-enabled)."
+            else
+                statenote="UFW remains INACTIVE (it was not enabled)."
+            fi
+            warn "Firewall rule ${port}/tcp (${comment}) could not be added."
+            warn "  APPLIED before failure: ${applied[*]:-none}"
+            warn "  FAILED: ${port}/tcp (${comment})"
+            warn "  ${statenote} No rules were deleted (no rollback/atomicity claim)."
+            die "Firewall rule application failed; aborted before enabling UFW."
+        fi
+    done
+
+    # Pre-enable verification: live 'ufw status' when initially ACTIVE, staged
+    # 'ufw show added' when initially INACTIVE. Locale-stable.
+    local vsrc
+    if [[ "${was_active}" == "1" ]]; then
+        vsrc="$(LC_ALL=C ufw status 2>/dev/null || true)"
+        for r in "${rules[@]}"; do
+            port="${r%|*}"
+            printf '%s\n' "${vsrc}" | grep -qE "^${port}/tcp[[:space:]]+ALLOW" \
+                || die "Pre-enable verification failed (UFW already active): ${port}/tcp not present; no reset performed, prior rules preserved."
+        done
+    else
+        vsrc="$(LC_ALL=C ufw show added 2>/dev/null || true)"
+        for r in "${rules[@]}"; do
+            port="${r%|*}"
+            printf '%s\n' "${vsrc}" | grep -qE "allow ${port}/tcp" \
+                || die "Pre-enable verification failed (UFW inactive): ${port}/tcp not staged; UFW not enabled."
+        done
+    fi
+
+    ufw --force enable >/dev/null 2>&1 || die "ufw --force enable failed."
+
+    # Post-enable verification: a missing planned rule is a LOUD ERROR with recovery
+    # guidance and a nonzero exit -- and NO success summary is printed.
+    # Read the effective UFW IPv6 setting; require the IPv4 ALLOW line for every
+    # planned port, and the matching "(v6)" ALLOW line too when IPV6=yes.
+    local ufwdefaults="${CCC_UFW_DEFAULTS:-/etc/default/ufw}"
+    local ipv6="no"
+    if [[ -r "${ufwdefaults}" ]]; then
+        local _v6
+        _v6="$(grep -E '^[[:space:]]*IPV6=' "${ufwdefaults}" 2>/dev/null | tail -n1 | sed -E 's/^[[:space:]]*IPV6=//; s/["\x27]//g' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        [[ "${_v6}" == "yes" ]] && ipv6="yes"
+    fi
+    local status
+    status="$(LC_ALL=C ufw status 2>/dev/null || true)"
+    local -a miss_desc=() miss_recover=()
+    for r in "${rules[@]}"; do
+        port="${r%|*}"; comment="${r#*|}"
+        local pmiss=0
+        printf '%s\n' "${status}" | grep -qE "^${port}/tcp[[:space:]]+ALLOW" || { miss_desc+=("${port}/tcp (v4)"); pmiss=1; }
+        if [[ "${ipv6}" == "yes" ]]; then
+            printf '%s\n' "${status}" | grep -qE "^${port}/tcp \(v6\)[[:space:]]+ALLOW" || { miss_desc+=("${port}/tcp (v6)"); pmiss=1; }
+        fi
+        [[ "${pmiss}" == "1" ]] && miss_recover+=("    sudo ufw allow ${port}/tcp comment '${comment}'")
+    done
+    if [[ "${#miss_desc[@]}" -gt 0 ]]; then
+        warn "ERROR: UFW is enabled but planned rule(s) are MISSING: ${miss_desc[*]}"
+        warn "  Your SSH session may be relying on connection tracking and could be lost"
+        warn "  on reconnect/reboot. Recover NOW, before you disconnect:"
+        warn "    sudo ufw status verbose"
+        local m
+        for m in "${miss_recover[@]}"; do warn "${m}"; done
+        die "Firewall verification failed after enabling UFW; see the recovery guidance above."
+    fi
+    info "UFW enabled — added the evidenced SSH administration port(s) ${FW_SSH_PORTS:-<none>}, HTTP 80, and HTTPS ${HTTPS_PORT} alongside any pre-existing UFW rules; no inbound Conduit UDP."
+}
+# <<< CCC-FIREWALL-PLAN <<<
+
 # Choose the public HTTPS port from CF_HTTPS_PORTS minus occupied ports.
 # Default = 443 if free, else the first free port in preference order. On a
 # re-run, the currently-configured port is treated as available (own listener).
@@ -716,7 +1128,16 @@ RATELIMIT_EOF
     # The helper renders <CF_RECORD_NAME>/<CF_HTTPS_PORT>/redirect-suffix, creates
     # the sites-enabled symlink, backs up any prior site, runs `nginx -t`, and
     # reloads only on success (restoring the backup on failure).
-    /opt/conduit-cc/bin/ccc-apply-https-port apply \
+    # ---- 2i-pre  Firewall preflight (READ-ONLY; precedes ALL UFW writes) --- #
+    # ADR-0004: resolve the purpose-aware firewall plan (SSH port discovery)
+    # BEFORE the HTTPS helper reconciles UFW and before any ufw write. Any
+    # ambiguity/conflict/invalid override fails closed here (UFW untouched, the
+    # helper NOT invoked). install.sh passes --skip-ufw so ALL UFW writes are
+    # consolidated in _firewall_apply (2j).
+    step "2i-pre — Firewall preflight (SSH administration port discovery)"
+    _firewall_preflight
+
+    /opt/conduit-cc/bin/ccc-apply-https-port apply --skip-ufw \
         --port "${HTTPS_PORT}" --hostname "${CF_RECORD_NAME}" \
         || die "Failed to apply HTTPS port ${HTTPS_PORT}." \
                "The previous nginx site (if any) was restored; see output above."
@@ -736,13 +1157,12 @@ with open(path, "w") as fh:
 PYEOF
     info "config.json web.https_port set to ${HTTPS_PORT}"
 
-    # ---- 2j  UFW firewall -------------------------------------------------- #
-    step "2j — Configuring UFW firewall"
-    ufw allow 22/tcp  comment 'SSH'     &>/dev/null
-    ufw allow 80/tcp  comment 'HTTP'    &>/dev/null
-    # The selected HTTPS port is opened by ccc-apply-https-port (comment 'CCC HTTPS').
-    ufw --force enable &>/dev/null
-    info "UFW: 22/80 + HTTPS port ${HTTPS_PORT} open, firewall enabled"
+    # ---- 2j  UFW firewall (single consolidated transaction, ADR-0004) ------ #
+    # Revalidate evidence, dry-run, add SSH/HTTP/HTTPS rules (add-only), verify,
+    # then enable. SSH admin port(s) are the evidenced LOCAL sshd port(s) — never a
+    # conventional 22 fallback. No inbound Conduit UDP. Add-before-enable.
+    step "2j — Applying firewall plan and enabling UFW"
+    _firewall_apply
 
     # ---- 2k  Systemd service ----------------------------------------------- #
     step "2k — Installing systemd service"
@@ -1110,14 +1530,15 @@ EOF
     # traffic. These change at runtime (field-confirmed on the armv7l RPi2
     # install, where the observed UDP set changed shortly after start), so
     # per-port UFW rules are ineffective. The validated reference deployment
-    # (arm64 Pi 4 and the armv7l RPi2 field install) operates correctly with
-    # only TCP 22, 80, and the installer-selected HTTPS port open, so CCC adds NO
-    # inbound UDP rules. Stateful UFW
+    # (arm64 Pi 4 and the armv7l RPi2 field install) operates correctly with the
+    # evidenced SSH administration port(s), TCP 80, and the selected HTTPS port
+    # open, so CCC adds NO inbound UDP rules. Stateful UFW
     # already permits return traffic for Conduit's outbound in-proxy flows.
     # See docs/pre-install.md.
     step "2x-h — Conduit firewall reminder"
     warn "Conduit uses dynamic UDP ports for in-proxy traffic; they change at runtime."
-    warn "The validated deployment runs with only TCP 22, 80, and the selected HTTPS port open,"
+    warn "The validated deployment runs with the evidenced SSH administration port(s), TCP 80,"
+    warn "and the selected HTTPS port open (added alongside any pre-existing UFW rules),"
     warn "so inbound UDP rules are NOT required and CCC does NOT add them."
     warn "Do NOT add per-port UDP rules: the ports move and it only widens attack surface."
     warn "Inspect (optional):  ss -ulnp | grep conduit    (details: docs/pre-install.md)"
@@ -1184,7 +1605,7 @@ phase3_summary() {
     printf "\n"
     printf '  %bConduit firewall (informational):%b\n' "${CYAN}" "${RESET}"
     printf "    Conduit uses dynamic UDP ports that change at runtime.\n"
-    printf "    It runs with only 22, 80, and the selected HTTPS port open; no UDP rules needed.\n"
+    printf "    It runs with the evidenced SSH administration port(s), 80, and the selected HTTPS port open; no UDP rules needed.\n"
     printf "    Inspect (optional):  ss -ulnp | grep conduit   (see docs/pre-install.md)\n"
     printf "\n"
     printf "  DDNS log:\n"

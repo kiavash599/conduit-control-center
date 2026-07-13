@@ -12,6 +12,8 @@ Security contract (do not weaken):
   * `apply` accepts ONLY:
         --port N        one of the Cloudflare-supported HTTPS ports
         --hostname H    a validated DNS hostname (the dashboard record)
+        --skip-ufw      render/validate/reload nginx only; skip UFW reconcile
+                        (the caller owns the firewall transaction)
     No path/unit/file arguments are ever accepted.
   * STATELESS: config.json is NOT read here. The CALLER owns the single source
     of truth (config.json web.https_port) and passes the validated port; the
@@ -205,7 +207,10 @@ def cmd_apply(args: argparse.Namespace) -> None:
         die(4, "nginx configuration invalid; no changes applied")
 
     nginx_reload()
-    ufw_reconcile(port)
+    if getattr(args, "skip_ufw", False):
+        log("--skip-ufw: UFW reconcile deferred to caller (install.sh firewall transaction)")
+    else:
+        ufw_reconcile(port)
     log(f"applied HTTPS port {port} for {hostname}")
 
 
@@ -231,6 +236,10 @@ def main() -> None:
     p_apply = sub.add_parser("apply")
     p_apply.add_argument("--port", required=True)
     p_apply.add_argument("--hostname", required=True)
+    # --skip-ufw: render/validate/reload nginx only; the caller (install.sh)
+    # performs the consolidated UFW transaction. Default keeps prior behavior
+    # (helper reconciles the CCC HTTPS rule); update.sh uses the default.
+    p_apply.add_argument("--skip-ufw", action="store_true")
     p_apply.set_defaults(func=cmd_apply)
     p_rb = sub.add_parser("rollback")
     p_rb.set_defaults(func=cmd_rollback)

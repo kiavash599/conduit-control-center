@@ -30,6 +30,26 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Systemd unit files are LF-normalised on install (CRLF-safe), so token/default
   validation cannot fail on CR-terminated lines.
 
+### Fixed
+
+- **Installer firewall now discovers the real local SSH port (ADR-0004).** A
+  pre-release clean-image review found `install.sh` hardcoded `ufw allow 22/tcp`
+  and then enabled UFW — on a host whose sshd listens on a non-22 port (e.g.
+  1222) this could lock out administrative SSH after reconnect/reboot. The
+  installer now resolves a purpose-aware firewall plan BEFORE any UFW write:
+  it derives the SSH admin port(s) from the active session (procfs ancestry ->
+  the responsible sshd's established socket, local endpoint only) and the
+  effective sshd configuration (`sshd -T`, or an active/enabled `ssh.socket`),
+  opens ONLY the evidenced local port(s) with no conventional 22 fallback and
+  no union of conflicting evidence, and fails closed (leaving UFW untouched) on
+  ambiguity/conflict. A bounded override `CCC_SSH_PORTS` is supported
+  (`sudo env CCC_SSH_PORTS=1222 bash install.sh`); an override that omits the
+  active session port, or any invalid value, is fatal. HTTP stays fixed at 80,
+  HTTPS is the installer-selected port, and no inbound Conduit UDP rule is added.
+  `ccc-apply-https-port` gains a backward-compatible `--skip-ufw` mode so all
+  installer UFW writes are consolidated in one add-before-enable transaction;
+  `update.sh` is unchanged.
+
 ### Changed
 
 - Dev tooling: bumped `pytest` (development dependency) to clear a Dependabot
