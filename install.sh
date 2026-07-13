@@ -387,7 +387,12 @@ _ssh_session_port() {
                 *"pid=${p},"*|*"pid=${p})"*) : ;;
                 *) continue ;;
             esac
-            laddr="$(printf '%s' "${line}" | awk '{print $4}')"
+            # ss omits the State column when a state filter is used, so the
+            # LOCAL endpoint is NOT a fixed field index: with "state established"
+            # it is field 3, without a filter it is field 4. Extract the FIRST
+            # address:port token (the local endpoint always precedes the peer),
+            # which is layout-independent and never reads the peer port.
+            laddr="$(printf '%s' "${line}" | awk '{for (i = 1; i <= NF; i++) if ($i ~ /:[0-9]+$/) { print $i; exit }}')"
             lport="${laddr##*:}"
             _fw_valid_port "${lport}" && ports+="${lport}"$'\n'
         done <<< "${ssout}"

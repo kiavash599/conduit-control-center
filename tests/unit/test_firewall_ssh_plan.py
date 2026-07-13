@@ -794,5 +794,115 @@ class LWarningsTests(_Base):
         self.assertIn(self._RUN.format(p=22), r.stderr)            # mismatch did warn
 
 
+class RealSsStateEstablishedTests(_Base):
+    """Field-incident regression (ADR-0004): `ss -Htnp state established` OMITS the
+    State column, so the LOCAL endpoint is field 3 and field 4 is the PEER. The
+    parser must read the local port (1222), never the peer (50099)."""
+
+    # Sanitized reproduction of the real field-observed `sudo ss -Htnp state
+    # established` LAYOUT on the RPi2 (State column omitted; local=field 3,
+    # peer=field 4). Three concurrent sshd sessions, all on local port 1222.
+    # Addresses are RFC 5737 documentation-only ranges (TEST-NET-1/2/3); the
+    # operator's real addresses are NOT stored. The regression's meaning
+    # (peer 50099 vs local 1222, PID ancestry) is preserved.
+    _FIELD = (
+        '0 0 192.0.2.140:1222 198.51.100.10:60144 '
+        'users:(("sshd",pid=3115,fd=4),("sshd",pid=3029,fd=4))',
+        '0 0 192.0.2.140:1222 203.0.113.45:50099 '
+        'users:(("sshd",pid=3290,fd=4),("sshd",pid=3233,fd=4))',
+        '0 0 192.0.2.140:1222 198.51.100.10:60691 '
+        'users:(("sshd",pid=3181,fd=4),("sshd",pid=3125,fd=4))',
+    )
+
+    def _ss(self, established_lines, listen_lines=()):
+        d = self._stubdir()
+        est = "".join(f"echo {ln!r}; " for ln in established_lines)
+        lst = "".join(f"echo {ln!r}; " for ln in listen_lines)
+        self._write(os.path.join(d, "ss"),
+                    '#!/usr/bin/env bash\ncase "$*" in\n'
+                    f'  *established*) {est}:;;\n'
+                    f'  *) {lst}:;;\nesac\n')
+        return d
+
+    def _proc_env(self, sshd_pids, ssh_conn=None):
+        # chain: 100 bash -> 90 sudo -> 80 bash(login) -> <sshd_pids...> -> 1
+        chain = [(100, "bash", 90), (90, "sudo", 80),
+                 (80, "bash", sshd_pids[0])]
+        for i, pid in enumerate(sshd_pids):
+            ppid = sshd_pids[i + 1] if i + 1 < len(sshd_pids) else 1
+            chain.append((pid, "sshd", ppid))
+        d = self._proc(chain)
+        if ssh_conn is not None:  # ancestor login shell (80) carries SSH_CONNECTION
+            with open(os.path.join(d, "80", "environ"), "wb") as fh:
+                fh.write(("PATH=/usr/bin\x00SSH_CONNECTION=" + ssh_conn + "\x00").encode())
+        return d
+
+    def _run(self, ssdir, proc, env=None):
+        e = {}
+        if env:
+            e.update(env)
+        body = ('if A="$(_ssh_session_port 100)"; then rc=0; else rc=$?; fi; '
+                'echo "${A}/${rc}"')
+        return self.run_body(body, env=e or None, proc=proc, path_prepend=ssdir)
+
+    def test_field_incident_reads_local_not_peer(self):
+        # The active session's sshd ancestry is pids 3290/3233 (line 2, peer 50099).
+        # sudo stripped SSH_CONNECTION from our env; the ancestor login shell has it.
+        proc = self._proc_env([3290, 3233], ssh_conn="203.0.113.45 50099 192.0.2.140 1222")
+        ssdir = self._ss(self._FIELD)
+        r = self._run(ssdir, proc)  # no SSH_CONNECTION in our env (sudo)
+        self.assertEqual(r.stdout.strip(), "1222/0")          # LOCAL 1222, resolved
+        self.assertNotIn("50099", r.stdout)                   # never the peer port
+
+    def test_field_incident_without_env_still_local(self):
+        # Even with no SSH_CONNECTION anywhere, the socket-derived local is 1222.
+        proc = self._proc_env([3290, 3233])
+        ssdir = self._ss(self._FIELD)
+        r = self._run(ssdir, proc)
+        self.assertEqual(r.stdout.strip(), "1222/0")
+
+    def test_ancestry_correlation_picks_current_session_local(self):
+        # Prove correlation, not luck: the current session (3290/3233) is on local
+        # 1222 while a sibling (3115/3029) is on local 22. Must return 1222, not 22.
+        field = (
+            '0 0 192.0.2.140:22 198.51.100.10:60144 '
+            'users:(("sshd",pid=3115,fd=4),("sshd",pid=3029,fd=4))',
+            '0 0 192.0.2.140:1222 203.0.113.45:50099 '
+            'users:(("sshd",pid=3290,fd=4),("sshd",pid=3233,fd=4))',
+        )
+        proc = self._proc_env([3290, 3233])
+        ssdir = self._ss(field)
+        r = self._run(ssdir, proc)
+        self.assertEqual(r.stdout.strip(), "1222/0")          # current session, not sibling 22
+
+    def test_layout_independent_state_present_or_omitted(self):
+        # Same local port whether ss emits the State column (field 4) or omits it
+        # under a state filter (field 3).
+        omitted = ('0 0 10.0.0.5:1222 1.2.3.4:5 users:(("sshd",pid=70,fd=9))',)
+        present = ('ESTAB 0 0 10.0.0.5:1222 1.2.3.4:5 users:(("sshd",pid=70,fd=9))',)
+        proc = self._proc_env([70])
+        for layout in (omitted, present):
+            with self.subTest(layout=layout[0][:12]):
+                r = self._run(self._ss(layout), proc)
+                self.assertEqual(r.stdout.strip(), "1222/0")
+
+    def test_field_incident_full_preflight_resolves_1222(self):
+        # End-to-end: with the real ss output and sshd -T=1222, the preflight now
+        # resolves the plan to exactly {1222} instead of failing ambiguous.
+        proc = self._proc_env([3290, 3233], ssh_conn="203.0.113.45 50099 192.0.2.140 1222")
+        d = self._ss(self._FIELD,
+                     listen_lines=('LISTEN 0 128 0.0.0.0:1222 0.0.0.0:* '
+                                   'users:(("sshd",pid=900,fd=3))',))
+        self._write(os.path.join(d, "systemctl"),
+                    '#!/usr/bin/env bash\ncase "$*" in '
+                    '*"is-active ssh.socket"*) echo inactive;; '
+                    '*"is-enabled ssh.socket"*) echo disabled;; *) echo "";; esac\n')
+        self._write(os.path.join(d, "sshd"),
+                    '#!/usr/bin/env bash\n[[ "$1" == "-T" ]] && echo "port 1222"\nexit 0\n')
+        r = self.run_body('_firewall_preflight 1>/dev/null 2>/dev/null; echo "PLAN=${FW_SSH_PORTS}"',
+                          env={"CCC_FW_START_PID": "100"}, proc=proc, path_prepend=d)
+        self.assertEqual(r.stdout.strip(), "PLAN=1222")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
