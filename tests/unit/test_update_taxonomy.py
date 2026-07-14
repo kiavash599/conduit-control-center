@@ -33,6 +33,7 @@ def test_registry_is_the_full_v2_outcome_set():
     verification = {
         V.REASON_VERIFIED, V.REASON_STORE, V.REASON_TOOLING,
         V.REASON_SIGNATURE, V.REASON_MANIFEST, V.REASON_DIGEST,
+        V.REASON_PLATFORM,
     }
     e11 = {
         V.OUTCOME_ACCEPTED, V.OUTCOME_REJECT_PRODUCT_SCOPE, V.OUTCOME_REJECT_NON_UPGRADE,
@@ -40,7 +41,7 @@ def test_registry_is_the_full_v2_outcome_set():
         V.OUTCOME_LAUNCH_FAILED, V.OUTCOME_APPLIED, V.OUTCOME_REVERTED, V.OUTCOME_APPLY_FAILED,
     }
     assert set(V.outcome_codes()) == verification | e11
-    assert len(V.outcome_codes()) == 16
+    assert len(V.outcome_codes()) == 17
     # E1.1 outcome identifiers stay distinct from E2 runtime-state literals
     assert V.OUTCOME_REVERTED == "reverted" and V.OUTCOME_APPLY_FAILED == "apply_failed"
 
@@ -69,7 +70,7 @@ def test_category_and_recoverability_mapping_matches_freeze():
         e = V.outcome_for(code)
         assert (e.stage, e.category, e.recoverability) == ("verify", "readiness", "recoverable")
     # trust-integrity (permanent for the artifact)
-    for code in (V.REASON_SIGNATURE, V.REASON_MANIFEST, V.REASON_DIGEST):
+    for code in (V.REASON_SIGNATURE, V.REASON_MANIFEST, V.REASON_DIGEST, V.REASON_PLATFORM):
         e = V.outcome_for(code)
         assert (e.stage, e.category, e.recoverability) == ("verify", "trust-integrity", "permanent-for-artifact")
 
@@ -96,7 +97,7 @@ def test_v11_outcome_codes_metadata():
 
 def test_taxonomy_version_present_and_independent_of_manifest_format():
     assert isinstance(V.TAXONOMY_VERSION, int)
-    assert V.TAXONOMY_VERSION == 2
+    assert V.TAXONOMY_VERSION == 3
     # distinct concept from the manifest schema version: different types,
     # different objects — taxonomy_version must never alias format handling.
     assert isinstance(V.SUPPORTED_MANIFEST_FORMATS, frozenset)

@@ -48,3 +48,97 @@ Positive: releases are authenticated end-to-end; a compromised channel cannot ob
 
 - **ADR-0001 (Trusted Update Engine):** owns the engine invariants (policy authorizes, engine executes). ADR-0003 **realizes** ADR-0001's artifact-integrity expectation, which ADR-0001 deferred.
 - **ADR-0002 (Update Payload Specification, planned):** will formalize the full payload/manifest schema, capability and migration declarations, and compatibility fields. ADR-0003 fixes the **signing, verification, and trust** decision and the current manifest fields; the two are complementary.
+
+
+---
+
+## Amendment A1 — V2 Platform-Artifact Release Model (accepted)
+
+**Status:** Accepted · **Supersedes:** the V1 single-artifact manifest for all NEW releases.
+
+**Context.** armv7l (RPi2) requires an offline wheelhouse (no PyPI armv7 wheels for the Rust/C
+closure); aarch64 does not. There are no external v0.3.14 clients, so no V1 One-Click compatibility
+is required and the trusted surface can be narrowed.
+
+**Decision.**
+1. **One version, two deterministic platform artifacts, BOTH mandatory:** `ccc-X.Y.Z-aarch64.tar.gz`
+   (source/runtime, no wheelhouse) and `ccc-X.Y.Z-armv7l.tar.gz` (same source + embedded
+   `wheelhouse-armhf/` + `provenance/wheelhouse-armv7.json`).
+2. **One canonical V2 manifest, one signature** (`format_version = 2`, existing SSHSIG namespace/
+   identity) binding: product, version, `source{vcs,commit,tag}`, the per-platform artifact set
+   (each `name` + sha256 `digest`; armv7l a strict wheelhouse block), and `dependency_locks`
+   (requirements.txt + both platform-lock sha256). Canonical bytes = signed bytes; `artifacts[]`
+   sorted by platform.
+3. **Verifier is V2-only** (`SUPPORTED_MANIFEST_FORMATS = {2}`) — V1 is rejected (removes a
+   platform-unbound / format-downgrade bypass).
+4. **Helper is the platform authority.** It detects the real host `uname -m` independently and binds
+   the received bytes to the SIGNED entry for THAT platform. **Digest-to-platform-entry binding is
+   the ROOT authorization invariant; there is NO fallback and unknown platforms fail closed.** The
+   3-record frame carries no independent filename, so there is **no received-name check**; the
+   manifest's per-entry `name` is a signed self-consistency field (`ccc-<version>-<platform>.tar.gz`),
+   and filename use by the backend is a non-authorizing discovery convenience.
+5. **Canonical artifact = deterministic composition** of `{tagged source tree}` + a fixed,
+   content-addressed wheelhouse (armv7l only). This refines Decision §1/I3/I4: reproducibility is
+   defined GIVEN both inputs. **Lifecycle (no tag/provenance circularity):** the build-INDEPENDENT locks are
+   COMMITTED PRE-TAG (PyPI sdist hashes for armv7 sources; PyPI wheel
+   hashes for aarch64); the wheelhouse and `provenance/wheelhouse-armv7.json` (per-wheel
+   sdist->builder->wheel chain) are POST-TAG content-addressed inputs, never committed, injected into
+   the armv7 artifact and explicitly digest-bound (`bundle_sha256`, `provenance_sha256`).
+6. **Two-lock dependency install (parity in install.sh + update.sh):** armv7l installs offline,
+   `--no-index --only-binary=:all: --require-hashes -r requirements-armv7.lock --find-links <wheelhouse>`;
+   aarch64 installs from the index but hash-locked, `--require-hashes --only-binary=:all: -r
+   requirements-aarch64.lock`. `requirements.txt` stays bounds-based; CI asserts both locks remain
+   valid solutions of it.
+7. **Verify-before-extract bootstrap for clean installs:** `deployment/bin/ccc-verify-release`
+   (reusing this verifier) authenticates the manifest + platform digest BEFORE extraction, using a
+   publisher anchor obtained OUT-OF-BAND. install.sh and the embedded wheelhouse are consumed only
+   from the verified tree. install.sh gains NO circular self-verification.
+8. **Privileged wheelhouse isolation:** the update worker pins `CCC_WHEELHOUSE_DIR` to the verified
+   tree on armv7l and strips any inherited value, so an injected env var cannot redirect privileged
+   pip. The manual/test override remains available outside the One-Click worker.
+
+**New invariants.** I7 both platform artifacts mandatory for a full release; I8 digest-to-platform is
+the root platform authorization (no fallback, unknown fails closed); I9 dependency binding
+(requirements.txt + both platform locks) is mandatory in every signed manifest; I10 no source build,
+index, cache, or network fallback on armv7l; I11 secret exclusion + no-NUL-in-text enforced pre-sign.
+
+
+### A1 refinements (post-review hardening)
+
+- **Digests computed from canonical bytes.** The producer computes `requirements.txt` and every
+  platform-lock sha256 from the CANONICAL (LF-normalized) committed bytes in the artifact tree, not
+  from caller input, so binding is independent of checkout line endings. Caller values are optional
+  expected-value cross-checks only.
+- **Coherent, non-circular lock lifecycle.** Two locks are build-INDEPENDENT and **committed PRE-TAG**:
+  `requirements-aarch64.lock` (PyPI aarch64 **wheel** hashes) and `requirements-armv7-build.lock`
+  (PyPI **sdist** hashes = the pre-build authorization for `pip download --require-hashes` before
+  building armv7 wheels). The build-DEPENDENT `requirements-armv7.lock` (resulting armv7 **wheel**
+  hashes) **cannot** be committed pre-tag; it is a **POST-TAG content-addressed release input**,
+  injected into the armv7 artifact (at the root, so update/install read it) alongside the wheelhouse and
+  provenance, and digest-bound (`dependency_locks.armv7_lock_sha256`, computed by the producer from the
+  injected bytes). All four digests (requirements + 3 locks) are mandatory in `dependency_locks`; the
+  armv7 wheelhouse block additionally binds `build_lock_sha256`. Distinct build-input vs runtime-wheel
+  locks remove hash-any-match ambiguity.
+- **Build-input authorization is bound to provenance.** Every provenance source record (`sdist_name`,
+  `sdist_sha256`) is cross-checked at produce time against the canonical `requirements-armv7-build.lock`:
+  an sdist absent from the build lock, or with a name/version/hash mismatch, or a missing/extra/duplicate
+  source record, fails closed. An unapproved sdist cannot be built and then legitimized in provenance.
+- **Signed top-level allowlist.** Each artifact entry binds `top_level` (the exact set of top-level
+  members); the helper rejects any member whose top-level is not in the signed set (so a non-armv7l
+  payload cannot carry a wheelhouse and no arbitrary root is ever accepted).
+- **Disk gate fails closed.** The pre-extraction free-space check fails closed on BOTH insufficient
+  space AND an inability to query it; the extractall OSError handler is additional defense-in-depth.
+- **Strict provenance.** `provenance/wheelhouse-armv7.json` must declare `builder{identity,image_digest}`,
+  `bundle{sha256=embedded bundle digest}`, and a `wheels[]` list whose records (`sdist_name`,
+  `sdist_sha256`, `wheel_filename`, `wheel_sha256`) match the embedded wheelhouse EXACTLY and its
+  SHA256SUMS (no missing/extra/duplicate); it is cross-checked at produce time.
+- **No platform override.** `ccc-verify-release` has no `--platform` flag; the real host platform is
+  the only source (a test seam `_host_platform()` is monkeypatchable).
+- **Extraction top-level isolation + honest disk handling.** A non-armv7l payload carrying any
+  `wheelhouse-armhf/` member is rejected; disk exhaustion fails closed on the extraction call itself
+  (the free-space pre-check is best-effort, not the guarantee).
+- **Secret scan.** Only true binary payloads (by extension) are exempt from the marker + no-NUL-in-text
+  scan; extensionless executables and textual wheelhouse metadata (e.g. SHA256SUMS) ARE scanned.
+- **Release-input gate.** The active root `requirements-*.lock` are produced by the controlled build and
+  committed pre-tag; until then they are absent and the hash-locked install fails closed. Do NOT merge
+  with placeholder locks (schema fixtures live under `release/lock-schema/`).

@@ -47,6 +47,10 @@ def _run_provision(arch, wh_dir, pip_rc=0):
     os.chmod(os.path.join(bind, "pip"), 0o755)
     req = os.path.join(d, "requirements.txt")
     open(req, "w").close()
+    # V2 two-lock model: platform locks live beside requirements.txt.
+    _h = "a" * 64
+    open(os.path.join(d, "requirements-armv7.lock"), "w").write(f"fastapi==0.1 --hash=sha256:{_h}\n")
+    open(os.path.join(d, "requirements-aarch64.lock"), "w").write(f"fastapi==0.1 --hash=sha256:{_h}\n")
     func = _extract_func(_INSTALL, "install_python_deps")
     script = (
         'export PATH="%s:$PATH"\n' % bind
@@ -172,13 +176,17 @@ class WheelhouseTests(unittest.TestCase):
         for src in (_INSTALL, _UPDATE):
             self.assertNotIn("--no-binary", src)
 
-    def test_aarch64_provisioning_preserved(self):
-        # aarch64 branch installs from the index exactly as before (no --no-index).
+    def test_aarch64_provisioning_hash_locked_via_index(self):
+        # aarch64 installs from the index but ONLY through the signed, hash-locked
+        # aarch64 lock (--require-hashes); no --no-index, no --find-links, no drift.
         for src in (_INSTALL, _UPDATE):
             func = _extract_func(src, "install_python_deps")
             aarch = func.split("aarch64)")[1].split(";;")[0]
-            self.assertIn('install --quiet -r "${_req}"', aarch)
+            self.assertIn("--require-hashes", aarch)
+            self.assertIn("requirements-aarch64.lock", aarch)
+            self.assertIn("--only-binary=:all:", aarch)   # no source build even via index
             self.assertNotIn("--no-index", aarch)
+            self.assertNotIn("--find-links", aarch)
 
 
 class SyntaxTests(unittest.TestCase):
@@ -243,6 +251,32 @@ class WheelhouseBehaviorTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("--no-index", args)  # pip ran, then failed -> fail closed
 
+    def test_missing_platform_lock_fails_closed(self):
+        # Verified wheelhouse present but the signed armv7 lock is ABSENT -> fail
+        # closed (pip never runs).
+        wh = _make_wheelhouse(valid=True)
+        d = tempfile.mkdtemp()
+        bind = os.path.join(d, "bin")
+        os.makedirs(bind)
+        with open(os.path.join(bind, "uname"), "w") as f:
+            f.write('#!/bin/sh\necho "armv7l"\n')
+        os.chmod(os.path.join(bind, "uname"), 0o755)
+        pip_args = os.path.join(d, "pip-args.txt")
+        with open(os.path.join(bind, "pip"), "w") as f:
+            f.write('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' % pip_args)
+        os.chmod(os.path.join(bind, "pip"), 0o755)
+        req = os.path.join(d, "requirements.txt")
+        open(req, "w").close()
+        # NOTE: no requirements-armv7.lock created.
+        func = _extract_func(_INSTALL, "install_python_deps")
+        script = ('export PATH="%s:$PATH"\n' % bind
+                  + 'warn() { printf "WARN: %%s\\n" "$*" >&2; }\n' + func + "\n"
+                  + 'install_python_deps "%s/bin/pip" "%s" "%s"; echo "RC=$?"\n' % (d, req, wh))
+        p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        rc = next((int(ln[3:]) for ln in p.stdout.splitlines() if ln.startswith("RC=")), None)
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(pip_args))  # pip never invoked
+
     def test_aarch64_uses_index_not_wheelhouse(self):
         rc, args, err = _run_provision("aarch64", "/ignored", pip_rc=0)
         self.assertEqual(rc, 0, err)
@@ -257,13 +291,19 @@ class WheelhouseBehaviorTests(unittest.TestCase):
 
 
 class WheelhouseContractStaticTests(unittest.TestCase):
-    def test_armhf_only_binary_present_arm64_absent(self):
+    def test_both_platforms_only_binary_and_hash_locked(self):
+        # V2: both platforms forbid source builds (--only-binary) and are
+        # hash-locked (--require-hashes). armv7 is additionally offline (--no-index).
         for src in (_INSTALL, _UPDATE):
             func = _extract_func(src, "install_python_deps")
             armv7 = func.split("armv7l)")[1].split(";;")[0]
             aarch = func.split("aarch64)")[1].split(";;")[0]
             self.assertIn("--only-binary=:all:", armv7)
-            self.assertNotIn("--only-binary", aarch)
+            self.assertIn("--require-hashes", armv7)
+            self.assertIn("--no-index", armv7)
+            self.assertIn("--only-binary=:all:", aarch)
+            self.assertIn("--require-hashes", aarch)
+            self.assertNotIn("--no-index", aarch)
 
     def test_callsites_use_ccc_wheelhouse_override(self):
         self.assertIn("${CCC_WHEELHOUSE_DIR:-${SCRIPT_DIR}/wheelhouse-armhf}", _INSTALL)
@@ -319,7 +359,8 @@ class WheelhouseClosureTests(unittest.TestCase):
         for src in (_INSTALL, _UPDATE):
             func = _extract_func(src, "install_python_deps")
             armv7 = func.split("armv7l)")[1].split(";;")[0]
-            self.assertIn('-r "${_req}"', armv7)          # full requirements closure
+            self.assertIn('-r "${_lock}"', armv7)          # full closure via hash lock
+            self.assertIn("requirements-armv7.lock", armv7)
             self.assertIn("--no-index", armv7)
             self.assertIn("--only-binary=:all:", armv7)
 

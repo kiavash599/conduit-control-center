@@ -112,7 +112,9 @@ def _stub_verify_boundary(mod, monkeypatch):
         lambda **k: types.SimpleNamespace(
             ok=True, reason="accepted",
             metadata={"version": "0.3.9", "signing_principal": "test-signer",
-                      "product": "ccc"}))
+                      "product": "ccc",
+                      # the signed top-level allowlist the payloads use in these tests
+                      "top_level": ["ccc-src-top", "ccc-top"]}))
     monkeypatch.setattr(mod, "product_scope_ok", lambda meta: True)
     monkeypatch.setattr(mod, "cross_check_version", lambda meta, vs: True)
 
@@ -476,6 +478,149 @@ def test_run_update_oserror_launching_updater(mod, monkeypatch):
     assert rc == 3
     assert json.loads(pathlib.Path(mod.STATUS_PATH).read_text())["state"] == "failed"
     assert not os.path.exists(work)
+
+
+# --------------------------------------------------------------------------- #
+#  _safe_extract negative-security matrix (Linux-only; finding #8)             #
+# --------------------------------------------------------------------------- #
+def _open_tar(path, entries):
+    """entries: list of (name, kind, data). kind in file/fifo/chr/dir."""
+    with tarfile.open(path, "w:gz") as tar:
+        for name, kind, data in entries:
+            info = tarfile.TarInfo(name)
+            if kind == "file":
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+            elif kind == "dir":
+                info.type = tarfile.DIRTYPE
+                tar.addfile(info)
+            elif kind == "fifo":
+                info.type = tarfile.FIFOTYPE
+                tar.addfile(info)
+            elif kind == "chr":
+                info.type = tarfile.CHRTYPE
+                info.devmajor = 1
+                info.devminor = 3
+                tar.addfile(info)
+    return tarfile.open(path, "r:gz")
+
+
+def _extract(mod, tmp, entries, allowed=None):
+    tarp = os.path.join(tmp, "a.tar.gz")
+    dest = os.path.join(tmp, "dst")
+    os.makedirs(dest, exist_ok=True)
+    t = _open_tar(tarp, entries)
+    if allowed is None:
+        allowed = sorted({name.split("/", 1)[0] for name, _, _ in entries})
+    mod._safe_extract(t, dest, allowed)   # allowed = the SIGNED top-level allowlist
+    return dest
+
+
+def test_extract_rejects_path_traversal(mod, tmp_path):
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("../evil", "file", b"x")])
+    assert e.value.code == 3
+
+
+def test_extract_rejects_duplicate_members(mod, tmp_path):
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("a/x", "file", b"1"), ("a/x", "file", b"2")])
+    assert e.value.code == 3
+
+
+def test_extract_rejects_fifo_and_device_members(mod, tmp_path):
+    for kind in ("fifo", "chr"):
+        with pytest.raises(SystemExit) as e:
+            _extract(mod, str(tmp_path), [("special", kind, b"")])
+        assert e.value.code == 3
+
+
+def test_extract_rejects_unexpected_top_level(mod, tmp_path):
+    # A member whose top-level is NOT in the signed allowlist is rejected -- an
+    # arbitrary unexpected root cannot be smuggled in on EITHER platform.
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("backend/x", "file", b"1"), ("surprise/y", "file", b"2")],
+                 allowed=["backend"])
+    assert e.value.code == 3
+
+
+def test_extract_wheelhouse_only_when_in_allowlist(mod, tmp_path):
+    # aarch64 isolation: the signed allowlist omits wheelhouse-armhf -> rejected.
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("wheelhouse-armhf/x.whl", "file", b"PK")], allowed=["backend"])
+    assert e.value.code == 3
+    # armv7l: the signed allowlist includes it -> accepted.
+    _extract(mod, str(tmp_path), [("wheelhouse-armhf/x.whl", "file", b"PK")],
+             allowed=["wheelhouse-armhf"])
+
+
+def test_extract_rejects_uncompressed_overflow(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "MAX_UNCOMPRESSED_BYTES", 5)
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("big", "file", b"0123456789")])
+    assert e.value.code == 3
+
+
+def test_extract_insufficient_disk_fails_closed(mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod.shutil, "disk_usage",
+                        lambda d: types.SimpleNamespace(total=1, used=1, free=0))
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("f", "file", b"data")])
+    assert e.value.code == 3
+
+
+def test_extract_disk_query_failure_fails_closed(mod, tmp_path, monkeypatch):
+    # A disk_usage QUERY failure must FAIL CLOSED at the pre-extraction gate (exit 3),
+    # not proceed.
+    def _boom(d):
+        raise OSError("statvfs unavailable")
+    monkeypatch.setattr(mod.shutil, "disk_usage", _boom)
+    with pytest.raises(SystemExit) as e:
+        _extract(mod, str(tmp_path), [("ok/file", "file", b"data")])
+    assert e.value.code == 3
+
+
+# --------------------------------------------------------------------------- #
+#  Privileged wheelhouse-path isolation (Question A)                           #
+# --------------------------------------------------------------------------- #
+def test_run_update_pins_wheelhouse_env_on_armv7(mod, monkeypatch):
+    # An injected/inherited CCC_WHEELHOUSE_DIR must NOT redirect privileged pip;
+    # the worker pins it to the VERIFIED tree on armv7l.
+    work, tree = _make_work(mod, version="0.3.9")
+    _set_installed(mod, "0.3.8")
+    monkeypatch.setattr(mod.os, "uname", lambda: types.SimpleNamespace(machine="armv7l"))
+    monkeypatch.setenv("CCC_WHEELHOUSE_DIR", "/attacker/unverified")
+    seen = {}
+
+    def _fake_run(cmd, **k):
+        seen["env"] = k.get("env")
+        _set_installed(mod, "0.3.9")
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wpin", work)
+    env = seen["env"]
+    assert env is not None
+    assert env["CCC_WHEELHOUSE_DIR"] == os.path.join(tree, "wheelhouse-armhf")
+    assert env["CCC_WHEELHOUSE_DIR"] != "/attacker/unverified"
+
+
+def test_run_update_strips_wheelhouse_env_on_aarch64(mod, monkeypatch):
+    # aarch64 uses the index path; any inherited CCC_WHEELHOUSE_DIR is stripped.
+    work, tree = _make_work(mod, version="0.3.9")
+    _set_installed(mod, "0.3.8")
+    monkeypatch.setattr(mod.os, "uname", lambda: types.SimpleNamespace(machine="aarch64"))
+    monkeypatch.setenv("CCC_WHEELHOUSE_DIR", "/attacker/unverified")
+    seen = {}
+
+    def _fake_run(cmd, **k):
+        seen["env"] = k.get("env")
+        _set_installed(mod, "0.3.9")
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wstrip", work)
+    assert "CCC_WHEELHOUSE_DIR" not in seen["env"]
 
 
 # --------------------------------------------------------------------------- #

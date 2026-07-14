@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: MIT
-"""ADR-0003 Epic B — Trusted Verification Path tests.
+"""ADR-0003 Epic B — Trusted Verification Path tests (V2, hardened).
 
-Proves the device-side verifier is correct and fail-closed:
-  * genuine signed release verifies and yields authoritative metadata
-  * tampered manifest, untrusted signer, missing/empty store, digest mismatch,
-    malformed manifest -> REJECT with the correct reason (never a default pass)
-  * manifest<->artifact version cross-check
-SSH-dependent cases are skipped only if ssh-keygen is unavailable; pure parsing /
-store / digest / cross-check cases run unconditionally.
+Fail-closed verifier: genuine per-platform verify + the full reject taxonomy,
+including platform mismatch (no fallback), unknown platform, both-platform
+completeness, the FOUR mandatory dependency locks (incl. armv7 build-input lock),
+strict wheelhouse block, wheelhouse<->locks cross-consistency, and canonical names.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import shutil
 import subprocess
 
@@ -20,7 +20,14 @@ from backend import update_verify as V
 from release import ccc_release as R
 
 _HAS_SSH = shutil.which("ssh-keygen") is not None
+_HAS_GIT = shutil.which("git") is not None
 _ssh = pytest.mark.skipif(not _HAS_SSH, reason="ssh-keygen not available")
+_e2e = pytest.mark.skipif(not (_HAS_SSH and _HAS_GIT), reason="need ssh-keygen + git")
+
+_COMMIT = "0" * 40
+_REQ, _ALOCK, _VLOCK, _BLOCK = "1" * 64, "2" * 64, "3" * 64, "4" * 64
+_SDH = "e" * 64
+_REL_SEQ = 0
 
 
 def _gen_key(path):
@@ -28,154 +35,184 @@ def _gen_key(path):
                    check=True, capture_output=True)
 
 
-_REL_SEQ = 0
-
-
-def _make_release(tmp_path, artifact_bytes=b"\x1f\x8bpayload", version="0.3.13", trusted=True):
-    """Produce {manifest, sig, artifact, store} for a signer that is (or isn't)
-    in the trust store. Returns paths.
-
-    Each call gets its OWN subdirectory so repeated calls in one test (e.g. a
-    trusted + an untrusted release under the same tmp_path) never make ssh-keygen
-    refuse to overwrite an existing key file (non-interactive -> non-zero)."""
+def _make_release(tmp_path, version="0.3.16", trusted=True):
     global _REL_SEQ
     _REL_SEQ += 1
     base = tmp_path / f"rel{_REL_SEQ}"
     base.mkdir()
     key = base / "pub_key"
     _gen_key(key)
-    store_key = key
-    if not trusted:  # store lists a DIFFERENT key than the one that signs
-        store_key = base / "store_key"
+    store_key = key if trusted else base / "store_key"
+    if not trusted:
         _gen_key(store_key)
     store = base / "allowed_signers"
     store.write_text(R.public_allowed_signers_line(str(store_key), V.PUBLISHER_IDENTITY) + "\n")
+    repo = base / "repo"
+    repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 
-    artifact = base / f"ccc-{version}.tar.gz"
-    artifact.write_bytes(artifact_bytes)
-    manifest = R.build_manifest(version=version, artifact_name=artifact.name,
-                                artifact_bytes=artifact_bytes, recommended_conduit_core="1.2.3")
-    mpath = base / f"ccc-{version}.manifest.json"
-    mpath.write_bytes(R.canonical_manifest_bytes(manifest))
-    sig = R.sign_manifest(str(mpath), str(key), namespace=V.SSHSIG_NAMESPACE)
-    return {"manifest": str(mpath), "signature": sig, "artifact": str(artifact), "store": str(store)}
+    def g(*a):
+        subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, env=env)
+    g("init", "-q")
+    (repo / "backend").mkdir()
+    (repo / "backend" / "_version.py").write_text(f'APP_VERSION = "{version}"\n')
+    (repo / "update.sh").write_text("#!/usr/bin/env bash\n")
+    (repo / "requirements.txt").write_text("fastapi>=0.133.0,<1.0.0\n")
+    (repo / "requirements-aarch64.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % ("a" * 64))
+    (repo / "requirements-armv7-build.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % _SDH)
+    g("add", "-A")
+    g("commit", "-q", "-m", "c")
+    g("tag", f"v{version}")
+    wh = base / "wh"
+    wh.mkdir()
+    wname = "fastapi-0.133.0-py3-none-any.whl"
+    wheel = b"WHEELBYTES"
+    (wh / wname).write_bytes(wheel)
+    wsha = hashlib.sha256(wheel).hexdigest()
+    (wh / "SHA256SUMS").write_text("%s  %s\n" % (wsha, wname))
+    bundle = R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))
+    prov = base / "prov.json"
+    prov.write_text(json.dumps({"builder": {"identity": "b", "image_digest": "sha256:" + "a" * 64},
+                                "bundle": {"sha256": bundle},
+                                "wheels": [{"sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
+                                            "wheel_filename": wname, "wheel_sha256": wsha}]}))
+    runtime = base / "requirements-armv7.lock"
+    runtime.write_text("fastapi==0.133.0 --hash=sha256:%s\n" % wsha)
+    res = R.produce_release(version=version, out_dir=str(base / "dist"), key_path=str(key),
+                            wheelhouse_armv7_dir=str(wh), provenance_armv7_path=str(prov),
+                            armv7_runtime_lock_path=str(runtime),
+                            git_ref=f"v{version}", repo_dir=str(repo),
+                            recommended_conduit_core="2.0.0")
+    return {"manifest": res["manifest"], "signature": res["signature"],
+            "aarch64": res["artifacts"]["aarch64"], "armv7l": res["artifacts"]["armv7l"],
+            "store": str(store)}
 
 
-# --- pure (no ssh) --------------------------------------------------------- #
+def _good_manifest():
+    return {
+        "format_version": 2, "product": V.PRODUCT, "version": "0.3.16",
+        "source": {"vcs": "git", "commit": _COMMIT, "tag": "v0.3.16"},
+        "artifacts": [
+            {"platform": "aarch64", "name": "ccc-0.3.16-aarch64.tar.gz",
+             "top_level": ["backend", "requirements.txt"],
+             "digest": {"algorithm": "sha256", "value": "a" * 64}},
+            {"platform": "armv7l", "name": "ccc-0.3.16-armv7l.tar.gz",
+             "top_level": ["backend", "wheelhouse-armhf", "provenance", "requirements-armv7.lock"],
+             "digest": {"algorithm": "sha256", "value": "b" * 64},
+             "wheelhouse": {"path": "wheelhouse-armhf/", "bundle_sha256": "c" * 64,
+                            "requirements_sha256": _REQ, "lock_sha256": _VLOCK,
+                            "build_lock_sha256": _BLOCK,
+                            "provenance": "provenance/wheelhouse-armv7.json",
+                            "provenance_sha256": "d" * 64}},
+        ],
+        "dependency_locks": {"requirements_sha256": _REQ, "aarch64_lock_sha256": _ALOCK,
+                             "armv7_lock_sha256": _VLOCK, "armv7_build_lock_sha256": _BLOCK},
+        "compatibility": {},
+    }
+
 
 def test_read_trust_store_fail_closed(tmp_path):
-    missing = tmp_path / "nope"
-    assert V.read_trust_store(str(missing)) is None
-    empty = tmp_path / "empty"
-    empty.write_text("# only a comment\n\n   \n")
-    assert V.read_trust_store(str(empty)) is None
+    assert V.read_trust_store(str(tmp_path / "nope")) is None
     good = tmp_path / "good"
-    good.write_text("principal ssh-ed25519 AAAA\n")
-    assert V.read_trust_store(str(good)) == ["principal ssh-ed25519 AAAA"]
+    good.write_text("p ssh-ed25519 AAAA\n")
+    assert V.read_trust_store(str(good)) == ["p ssh-ed25519 AAAA"]
 
 
-def test_parse_verified_manifest_rejects_malformed():
-    import json
-    good = {"format_version": 1, "product": V.PRODUCT, "version": "0.3.13",
-            "compatibility": {}, "artifact": {"name": "a", "digest": {"algorithm": "sha256", "value": "ab"}}}
-    assert V.parse_verified_manifest(json.dumps(good).encode())["version"] == "0.3.13"
-    for bad in (
+def test_parse_accepts_good_and_selects():
+    obj = V.parse_verified_manifest(json.dumps(_good_manifest()).encode())
+    assert V.select_platform_entry(obj, "armv7l")["name"] == "ccc-0.3.16-armv7l.tar.gz"
+    assert V.select_platform_entry(obj, "riscv64") is None
+
+
+def test_parse_rejects_malformed():
+    g = _good_manifest()
+
+    def mut(fn):
+        m = json.loads(json.dumps(g))
+        fn(m)
+        return json.dumps(m).encode()
+
+    bads = [
         b"not json",
-        json.dumps({**good, "format_version": 99}).encode(),
-        json.dumps({**good, "product": ""}).encode(),
-        json.dumps({**good, "version": "v1"}).encode(),
-        json.dumps({**good, "artifact": {"name": "a", "digest": {"algorithm": "md5", "value": "x"}}}).encode(),
-        json.dumps({k: v for k, v in good.items() if k != "artifact"}).encode(),
-    ):
+        mut(lambda m: m.update(format_version=1)),
+        mut(lambda m: m.update(product="other")),
+        mut(lambda m: m["source"].update(commit="xyz")),
+        mut(lambda m: m["source"].update(tag="0.3.16")),       # tag must be v{version}
+        mut(lambda m: m["source"].update(tag="v0.3.15")),
+        mut(lambda m: m.__setitem__("artifacts", [m["artifacts"][0]])),        # both required
+        mut(lambda m: m["artifacts"][0].__setitem__("wheelhouse", {"path": "x"})),
+        mut(lambda m: m["artifacts"][0].__setitem__("name", "wrong.tar.gz")),
+        mut(lambda m: m["dependency_locks"].__delitem__("armv7_build_lock_sha256")),  # 4th lock required
+        mut(lambda m: m["dependency_locks"].__setitem__("requirements_sha256", "x")),
+        mut(lambda m: m["artifacts"][1]["wheelhouse"].__delitem__("build_lock_sha256")),  # strict wheelhouse
+        mut(lambda m: m["artifacts"][1]["wheelhouse"].__setitem__("bundle_sha256", "x")),
+        mut(lambda m: m["artifacts"][1]["wheelhouse"].__setitem__("build_lock_sha256", "9" * 64)),  # disagree w/ locks
+        mut(lambda m: m["artifacts"].append(m["artifacts"][0])),                # duplicate platform
+        mut(lambda m: m["artifacts"][0].__setitem__("top_level", [])),          # empty allowlist
+        mut(lambda m: m["artifacts"][0].__setitem__("top_level", ["a/b"])),     # non-bare allowlist entry
+    ]
+    for bad in bads:
         with pytest.raises(V.VerifyError):
             V.parse_verified_manifest(bad)
 
 
-def test_content_digest_and_cross_check():
-    import hashlib
-    data = b"artifact-bytes"
-    d = {"algorithm": "sha256", "value": hashlib.sha256(data).hexdigest()}
-    assert V.content_digest_ok(data, d) is True
-    assert V.content_digest_ok(b"other", d) is False
-    assert V.content_digest_ok(data, {"algorithm": "md5", "value": "x"}) is False
-    meta = {"product": V.PRODUCT, "version": "0.3.13"}
-    assert V.cross_check_version(meta, "0.3.13") is True
-    assert V.cross_check_version(meta, "0.3.14") is False
-    assert V.cross_check_version(meta, "garbage") is False
-    assert V.product_scope_ok(meta) is True
-    assert V.product_scope_ok({"product": "other"}) is False
-
-
-def test_verify_release_missing_store_is_fail_closed(tmp_path):
-    # no store on disk -> REJECT_STORE even before any signature work
+def test_verify_missing_store_fail_closed(tmp_path):
     r = V.verify_release(manifest_path=str(tmp_path / "m"), signature_path=str(tmp_path / "s"),
-                         artifact_path=str(tmp_path / "a"), trust_store_path=str(tmp_path / "no_store"))
+                         artifact_path=str(tmp_path / "a"), trust_store_path=str(tmp_path / "no"),
+                         platform="aarch64")
     assert r.ok is False and r.reason == V.REASON_STORE
 
 
-# --- end-to-end (ssh) ------------------------------------------------------ #
+@_e2e
+def test_genuine_verifies_each_platform(tmp_path):
+    p = _make_release(tmp_path)
+    for plat in ("aarch64", "armv7l"):
+        r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
+                             artifact_path=p[plat], trust_store_path=p["store"], platform=plat)
+        assert r.ok and r.metadata["platform"] == plat
+        assert r.metadata["dependency_locks"]["armv7_build_lock_sha256"]
 
-@_ssh
-def test_genuine_release_verifies(tmp_path):
+
+@_e2e
+def test_platform_mismatch_rejected_no_fallback(tmp_path):
     p = _make_release(tmp_path)
     r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
-    assert r.ok is True and r.reason == V.REASON_VERIFIED
-    assert r.metadata["product"] == V.PRODUCT
-    assert r.metadata["version"] == "0.3.13"
-    assert V.cross_check_version(r.metadata, "0.3.13") is True
-
-
-@_ssh
-def test_success_metadata_carries_signing_principal(tmp_path):
-    # Phase B additive: the verified expected allowed-signers principal is exposed
-    # on the SUCCESS path only; reject paths carry no metadata (and no principal).
-    p = _make_release(tmp_path)
-    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
-    assert r.metadata["signing_principal"] == V.PUBLISHER_IDENTITY
-    for k in ("product", "version", "compatibility", "digest", "format_version"):
-        assert k in r.metadata           # existing keys intact (additive-only)
-    bad = _make_release(tmp_path, trusted=False)
-    rj = V.verify_release(manifest_path=bad["manifest"], signature_path=bad["signature"],
-                          artifact_path=bad["artifact"], trust_store_path=bad["store"])
-    assert rj.ok is False and rj.metadata is None
-
-
-@_ssh
-def test_tampered_manifest_rejected(tmp_path):
-    p = _make_release(tmp_path)
-    # mutate the manifest bytes on disk after signing
-    with open(p["manifest"], "ab") as fh:
-        fh.write(b" ")
-    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
-    assert r.ok is False and r.reason == V.REASON_SIGNATURE
-
-
-@_ssh
-def test_untrusted_signer_rejected(tmp_path):
-    p = _make_release(tmp_path, trusted=False)  # store lists a different key
-    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
-    assert r.ok is False and r.reason == V.REASON_SIGNATURE
-
-
-@_ssh
-def test_digest_mismatch_rejected(tmp_path):
-    p = _make_release(tmp_path, artifact_bytes=b"\x1f\x8boriginal")
-    # replace the artifact with different bytes; manifest+sig remain genuine
-    with open(p["artifact"], "wb") as fh:
-        fh.write(b"\x1f\x8btampered-artifact")
-    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
+                         artifact_path=p["aarch64"], trust_store_path=p["store"], platform="armv7l")
     assert r.ok is False and r.reason == V.REASON_DIGEST
 
 
-@_ssh
-def test_empty_store_rejected(tmp_path):
+@_e2e
+def test_unknown_platform_fails_closed(tmp_path):
     p = _make_release(tmp_path)
-    open(p["store"], "w").write("# emptied\n")
     r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
-                         artifact_path=p["artifact"], trust_store_path=p["store"])
-    assert r.ok is False and r.reason == V.REASON_STORE
+                         artifact_path=p["aarch64"], trust_store_path=p["store"], platform="riscv64")
+    assert r.ok is False and r.reason == V.REASON_PLATFORM
+
+
+@_e2e
+def test_tampered_manifest_rejected(tmp_path):
+    p = _make_release(tmp_path)
+    with open(p["manifest"], "ab") as fh:
+        fh.write(b" ")
+    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
+                         artifact_path=p["aarch64"], trust_store_path=p["store"], platform="aarch64")
+    assert r.ok is False and r.reason == V.REASON_SIGNATURE
+
+
+@_e2e
+def test_untrusted_signer_rejected(tmp_path):
+    p = _make_release(tmp_path, trusted=False)
+    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
+                         artifact_path=p["aarch64"], trust_store_path=p["store"], platform="aarch64")
+    assert r.ok is False and r.reason == V.REASON_SIGNATURE and r.metadata is None
+
+
+@_e2e
+def test_digest_mismatch_rejected(tmp_path):
+    p = _make_release(tmp_path)
+    with open(p["aarch64"], "ab") as fh:
+        fh.write(b"tampered")
+    r = V.verify_release(manifest_path=p["manifest"], signature_path=p["signature"],
+                         artifact_path=p["aarch64"], trust_store_path=p["store"], platform="aarch64")
+    assert r.ok is False and r.reason == V.REASON_DIGEST

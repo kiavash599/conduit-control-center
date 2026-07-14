@@ -105,13 +105,25 @@ conduit_asset_for_arch() {
 #            (e.g. fastapi) makes pip fail -> the install fails closed.
 # Args: <pip_bin> <requirements_file> <wheelhouse_dir>
 install_python_deps() {
-    local _pip="$1" _req="$2" _wh="$3" _arch
+    local _pip="$1" _req="$2" _wh="$3" _arch _reqdir _lock
     _arch="$(uname -m)"
+    _reqdir="$(dirname "${_req}")"
     case "${_arch}" in
         aarch64)
-            "${_pip}" install --quiet -r "${_req}" || return 1
+            # aarch64: install from the package index but ONLY through the signed,
+            # hash-locked aarch64 lock (--require-hashes pins every wheel; no source
+            # build, no drift). requirements.txt stays bounds-based (policy unchanged).
+            _lock="${_reqdir}/requirements-aarch64.lock"
+            if [[ ! -f "${_lock}" ]]; then
+                warn "aarch64 dependency lock missing: ${_lock}. The signed requirements-aarch64.lock is required."
+                return 1
+            fi
+            "${_pip}" install --quiet --require-hashes --only-binary=:all: -r "${_lock}" || return 1
             ;;
         armv7l)
+            # armv7l: install ONLY from the official verified wheelhouse, OFFLINE and
+            # hash-locked to requirements-armv7.lock. No index, no source build, no
+            # network fallback; a missing/altered wheel fails closed.
             if [[ ! -d "${_wh}" ]]; then
                 warn "armhf wheelhouse not found at ${_wh}. The official 'wheelhouse-armhf' release asset is required on armv7l; native source builds are not used at install time."
                 return 1
@@ -124,7 +136,12 @@ install_python_deps() {
                 warn "armhf wheelhouse checksum verification failed: ${_wh}."
                 return 1
             fi
-            "${_pip}" install --quiet --no-index --only-binary=:all: --find-links "${_wh}" -r "${_req}" || return 1
+            _lock="${_reqdir}/requirements-armv7.lock"
+            if [[ ! -f "${_lock}" ]]; then
+                warn "armv7 dependency lock missing: ${_lock}. The signed requirements-armv7.lock is required."
+                return 1
+            fi
+            "${_pip}" install --quiet --no-index --only-binary=:all: --require-hashes --find-links "${_wh}" -r "${_lock}" || return 1
             ;;
         *)
             warn "Unsupported architecture '${_arch}' for dependency provisioning."

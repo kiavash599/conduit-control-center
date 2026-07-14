@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-verify-release -- verify-BEFORE-extract bootstrap for clean installs.
+
+Trust bootstrap (ADR-0003 amendment): the installer (install.sh) and the embedded
+armv7 wheelhouse must be consumed ONLY from an already signature-and-platform-
+verified artifact tree. Authenticating an installer AFTER it has been extracted
+from the very artifact under test is circular; instead the operator runs THIS
+small wrapper first, from a TRUSTED source checkout (git), against the downloaded
+release assets, using a publisher anchor obtained OUT-OF-BAND.
+
+It reuses backend.update_verify -- the SAME device verifier used by One-Click
+Update -- so install-time and update-time authenticity share one implementation.
+The verifier code comes from the trusted git checkout this script lives in, NOT
+from the untrusted artifact.
+
+Usage:
+  ccc-verify-release --manifest ccc-X.Y.Z.manifest.json \\
+                     --signature ccc-X.Y.Z.manifest.json.sig \\
+                     --artifact ccc-X.Y.Z-<arch>.tar.gz \\
+                     --trust-store /path/to/allowed_signers   # obtained OUT-OF-BAND
+
+Exit: 0 = VERIFIED (authentic AND for this host platform -> safe to extract);
+      2 = REJECTED (do NOT extract or install); 3 = usage/tooling error.
+On success the canonical artifact filename to extract is printed to stdout.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+
+def _host_platform() -> str:
+    """Real host platform (uname -m). This is the ONLY platform source in
+    production; there is intentionally no CLI override (a caller-selected platform
+    would defeat the clean-install platform check). Tests monkeypatch this seam."""
+    return os.uname().machine
+
+
+def _load_verifier():
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(os.path.dirname(here))   # deployment/bin -> repo root
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    try:
+        from backend import update_verify as V   # noqa: E402
+    except Exception as exc:  # noqa: BLE001 - fail-closed
+        sys.stderr.write(f"ccc-verify-release: cannot load verifier: {exc}\n")
+        raise SystemExit(3)
+    return V
+
+
+def main(argv=None) -> int:
+    V = _load_verifier()
+    ap = argparse.ArgumentParser(prog="ccc-verify-release", add_help=True)
+    ap.add_argument("--manifest", required=True)
+    ap.add_argument("--signature", required=True)
+    ap.add_argument("--artifact", required=True)
+    ap.add_argument("--trust-store", required=True,
+                    help="publisher allowed_signers file (obtain OUT-OF-BAND; never from the artifact)")
+    a = ap.parse_args(argv)
+
+    platform = _host_platform()
+    r = V.verify_release(manifest_path=a.manifest, signature_path=a.signature,
+                         artifact_path=a.artifact, trust_store_path=a.trust_store,
+                         platform=platform)
+    if r.ok:
+        m = r.metadata
+        sys.stderr.write(
+            f"ccc-verify-release: VERIFIED {m['product']} {m['version']} "
+            f"platform={m['platform']} signed-by={m['signing_principal']}\n")
+        print(m["artifact_name"])   # the canonical file the operator should extract
+        return 0
+    sys.stderr.write(
+        f"ccc-verify-release: REJECTED ({r.reason}); do NOT extract or install.\n")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
