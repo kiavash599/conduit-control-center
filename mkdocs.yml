@@ -87,6 +87,9 @@ exclude_docs: |
   ENGINEERING-PROCESS-GUIDE.md
   PROJECT-LIFECYCLE.md
   adr/
+  # Internal operator runbooks. These are release/field procedures, not public
+  # end-user documentation, so keep them out of the published site and nav.
+  runbooks/
 
 # Pages that ARE published (reachable via links from the user guide) but are not
 # top-level nav entries. Listing them here keeps those links valid while satisfying
