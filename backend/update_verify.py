@@ -41,9 +41,20 @@ PRODUCT = "conduit-control-center"
 SSHSIG_NAMESPACE = "ccc-update-manifest"
 DIGEST_ALGORITHM = "sha256"
 PUBLISHER_IDENTITY = "conduit-control-center-publisher"   # allowed-signers principal
-SUPPORTED_MANIFEST_FORMATS = frozenset({1})
+# V2-only (ADR-0003 amendment): the platform-artifact manifest. V1 (single-artifact,
+# no platform binding) is intentionally NOT accepted -- supporting it would keep a
+# platform-unbound manifest shape valid and create a format-downgrade / platform-gate
+# bypass vector. No field client needs V1 (no external users; the legacy RPi4 migrates
+# manually over SSH), so the trusted surface is narrowed to {2}.
+SUPPORTED_MANIFEST_FORMATS = frozenset({2})
+
+# Canonical host-platform tokens (raw `uname -m`); the manifest's per-artifact
+# `platform` field uses exactly these strings, removing any producer<->device
+# mapping ambiguity. armv6 (Pi Zero / Pi 1) is intentionally unsupported.
+SUPPORTED_PLATFORMS = frozenset({"aarch64", "armv7l"})
 
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 # --- Fail-closed reject reason codes (failure taxonomy; IC-11) -------------- #
 
@@ -53,6 +64,7 @@ REASON_STORE = "reject_store"             # trust store missing / empty / unread
 REASON_SIGNATURE = "reject_signature"     # signature not from a trusted publisher
 REASON_MANIFEST = "reject_manifest"       # manifest missing / malformed / unsupported
 REASON_DIGEST = "reject_digest"           # artifact content does not match manifest
+REASON_PLATFORM = "reject_platform"       # manifest has no signed entry for this host
 
 # --- E1.1 additive outcome codes (authorization / cross-check / deploy / operational) --- #
 # Registered for Phase B audit consumption; no producer emits these yet.
@@ -82,7 +94,7 @@ OUTCOME_APPLY_FAILED = "apply_failed"
 # NOTE: TAXONOMY_VERSION is unrelated to the manifest SUPPORTED_MANIFEST_FORMATS
 # (format_version); they version different things and must not be conflated.
 
-TAXONOMY_VERSION = 2
+TAXONOMY_VERSION = 3   # +reject_platform (V2 platform-artifact authorization)
 
 OUTCOME_STAGES = frozenset({"verify", "cross-check", "authorize", "deploy", "operational"})
 OUTCOME_CATEGORIES = frozenset({
@@ -115,6 +127,7 @@ _OUTCOME_REGISTRY = {
         OutcomeClass(REASON_SIGNATURE, "verify", "trust-integrity", "permanent-for-artifact", "update.verify.signature"),
         OutcomeClass(REASON_MANIFEST,  "verify", "trust-integrity", "permanent-for-artifact", "update.verify.manifest"),
         OutcomeClass(REASON_DIGEST,    "verify", "trust-integrity", "permanent-for-artifact", "update.verify.digest"),
+        OutcomeClass(REASON_PLATFORM,  "verify", "trust-integrity", "permanent-for-artifact", "update.verify.platform"),
         # --- E1.1 additive codes (authorization / cross-check / deploy / operational) ---
         OutcomeClass(OUTCOME_ACCEPTED,                "authorize",   "authorization-informational", "informational",          "update.authorize.accepted"),
         OutcomeClass(OUTCOME_REJECT_PRODUCT_SCOPE,    "authorize",   "authorization-informational", "informational",          "update.authorize.product_scope"),
@@ -209,9 +222,72 @@ def verify_manifest_signature(
 
 # --- Manifest parsing (only after signature verification) ------------------- #
 
+def _is_hex64(v: object) -> bool:
+    return isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) is not None
+
+
+def _validate_digest(digest: object) -> None:
+    if not isinstance(digest, dict) or digest.get("algorithm") != DIGEST_ALGORITHM:
+        raise VerifyError(f"unsupported digest algorithm: {digest!r}")
+    if not _is_hex64(digest.get("value")):
+        raise VerifyError(f"malformed sha256 digest value: {digest.get('value')!r}")
+
+
+def _validate_wheelhouse(wh: object) -> None:
+    """Fail-closed structural + semantic validation of the armv7l wheelhouse block.
+    Every digest field must be a real lowercase sha256; the path is fixed; the
+    provenance record reference must be a non-empty bare-ish path."""
+    if not isinstance(wh, dict):
+        raise VerifyError("wheelhouse block must be an object")
+    if wh.get("path") != "wheelhouse-armhf/":
+        raise VerifyError(f"wheelhouse path must be 'wheelhouse-armhf/': {wh.get('path')!r}")
+    for field in ("bundle_sha256", "requirements_sha256", "lock_sha256",
+                  "build_lock_sha256", "provenance_sha256"):
+        if not _is_hex64(wh.get(field)):
+            raise VerifyError(f"wheelhouse {field} is not a sha256: {wh.get(field)!r}")
+    prov = wh.get("provenance")
+    if not isinstance(prov, str) or not prov or prov.startswith("/") or ".." in prov:
+        raise VerifyError(f"wheelhouse provenance reference invalid: {prov!r}")
+
+
+def _validate_artifact_entry(entry: object, version: str) -> None:
+    if not isinstance(entry, dict):
+        raise VerifyError("artifact entry is not an object")
+    platform = entry.get("platform")
+    if platform not in SUPPORTED_PLATFORMS:
+        raise VerifyError(f"unsupported artifact platform: {platform!r}")
+    name = entry.get("name")
+    expected = f"ccc-{version}-{platform}.tar.gz"
+    # Name/platform/version self-consistency WITHIN the signed manifest (not a
+    # received-filename check -- the frame carries no independent name; see
+    # verify_release: digest-to-platform-entry is the root authorization).
+    if name != expected:
+        raise VerifyError(f"artifact name {name!r} != canonical {expected!r}")
+    _validate_digest(entry.get("digest"))
+    tl = entry.get("top_level")
+    if not isinstance(tl, list) or not tl or not all(
+            isinstance(x, str) and x and "/" not in x and "\\" not in x and x not in (".", "..")
+            for x in tl):
+        raise VerifyError("artifact top_level must be a non-empty list of bare names")
+    wh = entry.get("wheelhouse")
+    if platform == "armv7l":
+        _validate_wheelhouse(wh)
+    elif wh is not None:
+        raise VerifyError("aarch64 artifact must not declare a wheelhouse (isolation)")
+
+
 def parse_verified_manifest(manifest_bytes: bytes) -> dict:
-    """Parse and structurally validate a manifest whose signature has ALREADY
-    verified. Raises VerifyError on any malformed/unsupported content."""
+    """Parse and structurally validate a V2 platform-artifact manifest whose
+    signature has ALREADY verified. Raises VerifyError on any malformed/unsupported
+    content. Fail-closed policy enforced here (Owner-approved):
+      * format_version == 2, product == PRODUCT, semver version;
+      * source {vcs:git, commit:<40hex>, tag};
+      * BOTH aarch64 AND armv7l artifact entries are MANDATORY (a full release);
+      * each entry name == canonical `ccc-<version>-<platform>.tar.gz`;
+      * armv7l carries a fully-validated wheelhouse block; aarch64 carries none;
+      * dependency_locks binds requirements.txt + both platform-lock sha256 digests,
+        and must agree with the armv7l wheelhouse block's own lock references.
+    """
     try:
         obj = json.loads(manifest_bytes.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
@@ -220,20 +296,59 @@ def parse_verified_manifest(manifest_bytes: bytes) -> dict:
         raise VerifyError("manifest is not an object")
     if obj.get("format_version") not in SUPPORTED_MANIFEST_FORMATS:
         raise VerifyError(f"unsupported manifest format_version: {obj.get('format_version')!r}")
-    if not obj.get("product"):
-        raise VerifyError("manifest missing product")
+    if obj.get("product") != PRODUCT:
+        raise VerifyError(f"manifest product not {PRODUCT!r}: {obj.get('product')!r}")
     version = obj.get("version")
     if not isinstance(version, str) or not _SEMVER_RE.match(version):
         raise VerifyError(f"manifest version not semver: {version!r}")
-    artifact = obj.get("artifact")
-    if not isinstance(artifact, dict):
-        raise VerifyError("manifest missing artifact")
-    digest = artifact.get("digest")
-    if not isinstance(digest, dict) or digest.get("algorithm") != DIGEST_ALGORITHM:
-        raise VerifyError(f"unsupported digest algorithm: {digest!r}")
-    if not isinstance(digest.get("value"), str) or not digest["value"]:
-        raise VerifyError("manifest missing digest value")
+    source = obj.get("source")
+    if not isinstance(source, dict) or source.get("vcs") != "git" \
+       or not _COMMIT_RE.match(str(source.get("commit", ""))) \
+       or not isinstance(source.get("tag"), str) or not source.get("tag"):
+        raise VerifyError(f"manifest missing/invalid source provenance: {source!r}")
+    if source["tag"] != f"v{version}":
+        raise VerifyError(f"source.tag must be 'v{version}', got {source['tag']!r}")
+    artifacts = obj.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise VerifyError("manifest missing artifacts[]")
+    seen: set = set()
+    for entry in artifacts:
+        _validate_artifact_entry(entry, version)
+        if entry["platform"] in seen:
+            raise VerifyError(f"duplicate platform entry: {entry['platform']!r}")
+        seen.add(entry["platform"])
+    if seen != set(SUPPORTED_PLATFORMS):
+        raise VerifyError(f"incomplete release: platforms {sorted(seen)} != {sorted(SUPPORTED_PLATFORMS)}")
+    locks = obj.get("dependency_locks")
+    if not isinstance(locks, dict):
+        raise VerifyError("manifest missing dependency_locks")
+    for field in ("requirements_sha256", "aarch64_lock_sha256",
+                  "armv7_lock_sha256", "armv7_build_lock_sha256"):
+        if not _is_hex64(locks.get(field)):
+            raise VerifyError(f"dependency_locks.{field} is not a sha256: {locks.get(field)!r}")
+    # cross-consistency: the armv7l wheelhouse must reference the SAME requirements,
+    # runtime-lock, and build-lock digests bound at the top level.
+    armv7 = next(a for a in artifacts if a["platform"] == "armv7l")
+    wh = armv7["wheelhouse"]
+    if wh["requirements_sha256"] != locks["requirements_sha256"]:
+        raise VerifyError("wheelhouse requirements_sha256 disagrees with dependency_locks")
+    if wh["lock_sha256"] != locks["armv7_lock_sha256"]:
+        raise VerifyError("wheelhouse lock_sha256 disagrees with dependency_locks.armv7_lock_sha256")
+    if wh["build_lock_sha256"] != locks["armv7_build_lock_sha256"]:
+        raise VerifyError("wheelhouse build_lock_sha256 disagrees with dependency_locks.armv7_build_lock_sha256")
     return obj
+
+
+def select_platform_entry(manifest: dict, platform: str) -> Optional[dict]:
+    """Return the signed artifact entry for `platform` (raw uname -m), or None.
+    None is the caller's REJECT_PLATFORM signal -- there is NEVER a fallback to a
+    different platform's artifact (Owner-approved platform-authority invariant)."""
+    if platform not in SUPPORTED_PLATFORMS:
+        return None
+    for entry in manifest.get("artifacts", []):
+        if entry.get("platform") == platform:
+            return entry
+    return None
 
 
 def content_digest_ok(artifact_bytes: bytes, expected_digest: dict) -> bool:
@@ -258,20 +373,26 @@ def verify_release(
     signature_path: str,
     artifact_path: str,
     trust_store_path: str,
+    platform: str,
 ) -> VerifyResult:
-    """The single, ordered, fail-closed verification decision (IC-2):
+    """The single, ordered, fail-closed verification decision (IC-2), V2:
 
-        1. trust store present & non-empty                (else REJECT_STORE)
-        2. verification tooling present                   (else REJECT_TOOLING)
-        3. manifest signature verifies against the store  (else REJECT_SIGNATURE)
-        4. parse the now-verified manifest                (else REJECT_MANIFEST)
-        5. artifact content digest matches the manifest   (else REJECT_DIGEST)
+        1. trust store present & non-empty                  (else REJECT_STORE)
+        2. verification tooling present                     (else REJECT_TOOLING)
+        3. manifest signature verifies against the store    (else REJECT_SIGNATURE)
+        4. parse the now-verified V2 manifest                (else REJECT_MANIFEST)
+        5. a signed artifact entry EXISTS for THIS host      (else REJECT_PLATFORM)
+        6. received artifact digest == that platform entry   (else REJECT_DIGEST)
 
-    On success returns VerifyResult(ok=True, "verified", metadata). The metadata
-    (product, version, compatibility, digest, format_version) is authoritative and
+    `platform` is the host's real `uname -m`, supplied by the privileged caller
+    which detects it INDEPENDENTLY of the manifest and the untrusted backend. The
+    received bytes are bound to the entry for THAT platform only; an artifact whose
+    digest matches a DIFFERENT platform's signed entry is rejected (no fallback).
+
+    On success the metadata (product, version, source, platform, artifact name +
+    digest, compatibility, format_version, signing_principal) is authoritative and
     is the ONLY source the caller may use for downstream Authorization. The
-    manifest-version <-> artifact-version cross-check is `cross_check_version`,
-    applied by the caller after it reads the artifact's own version.
+    manifest-version <-> payload-version cross-check is `cross_check_version`.
     """
     if read_trust_store(trust_store_path) is None:
         return VerifyResult(False, REASON_STORE)
@@ -283,17 +404,29 @@ def verify_release(
         with open(manifest_path, "rb") as fh:
             manifest_bytes = fh.read()
         manifest = parse_verified_manifest(manifest_bytes)
-        with open(artifact_path, "rb") as fh:
-            artifact_bytes = fh.read()
     except (OSError, VerifyError) as exc:
         return VerifyResult(False, REASON_MANIFEST if isinstance(exc, VerifyError) else REASON_STORE)
-    if not content_digest_ok(artifact_bytes, manifest["artifact"]["digest"]):
+    entry = select_platform_entry(manifest, platform)
+    if entry is None:
+        return VerifyResult(False, REASON_PLATFORM)
+    try:
+        with open(artifact_path, "rb") as fh:
+            artifact_bytes = fh.read()
+    except OSError:
+        return VerifyResult(False, REASON_DIGEST)
+    if not content_digest_ok(artifact_bytes, entry["digest"]):
         return VerifyResult(False, REASON_DIGEST)
     metadata = {
         "product": manifest["product"],
         "version": manifest["version"],
+        "source": manifest["source"],
+        "platform": entry["platform"],
+        "artifact_name": entry["name"],
+        "top_level": entry["top_level"],
+        "wheelhouse": entry.get("wheelhouse"),
         "compatibility": manifest.get("compatibility", {}),
-        "digest": manifest["artifact"]["digest"],
+        "digest": entry["digest"],
+        "dependency_locks": manifest.get("dependency_locks", {}),
         "format_version": manifest["format_version"],
         # E3/Phase B: the verified expected allowed-signers principal (verification
         # ran `-Y verify -I PUBLISHER_IDENTITY`). Additive metadata; NOT dynamic

@@ -21,6 +21,7 @@ import datetime
 import json
 import logging
 import os
+import platform
 import re
 import select
 import struct
@@ -152,13 +153,24 @@ def _gh_download(url: str) -> bytes:
     return data
 
 
+def _host_platform() -> str:
+    """Real host arch token (uname -m). CONVENIENCE ONLY: it selects which platform
+    artifact to download to save bandwidth. It is NON-AUTHORIZING -- the privileged
+    helper detects the platform independently and re-binds the artifact digest to
+    the signed entry for the real host, so a wrong/compromised selection here is
+    caught fail-closed downstream (never a platform-confusion bypass)."""
+    return platform.machine()
+
+
 def _release_assets(data: dict, version: str) -> dict:
-    """Resolve the canonical SIGNED release asset URLs by name (host-allow-listed).
-    Raises if any of the three assets is absent (the release is not signed)."""
+    """Resolve the SIGNED V2 asset URLs by name (host-allow-listed): the shared
+    manifest + signature, and the artifact for THIS host platform only. Raises if
+    any is absent (release not signed, or no artifact for this platform)."""
+    arch = _host_platform()
     want = {
         "manifest_url": f"ccc-{version}.manifest.json",
         "signature_url": f"ccc-{version}.manifest.json.sig",
-        "artifact_url": f"ccc-{version}.tar.gz",
+        "artifact_url": f"ccc-{version}-{arch}.tar.gz",
     }
     by_name: dict = {}
     for asset in data.get("assets") or []:

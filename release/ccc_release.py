@@ -41,10 +41,18 @@ import sys
 import tarfile
 from typing import Optional
 
+try:
+    from release import lock_validate as _lockval
+except Exception:  # noqa: BLE001 - allow `python release/ccc_release.py` (script dir on path)
+    import os as _os_boot
+    import sys as _sys_boot
+    _sys_boot.path.insert(0, _os_boot.path.dirname(_os_boot.path.dirname(_os_boot.path.abspath(__file__))))
+    from release import lock_validate as _lockval
+
 # --- Normative constants (ADR-0003) ---------------------------------------- #
 
 PRODUCT = "conduit-control-center"          # Product identity (authoritative)
-MANIFEST_FORMAT_VERSION = 1                  # Manifest schema version (evolvable)
+MANIFEST_FORMAT_VERSION = 2                  # V2 platform-artifact manifest schema
 DIGEST_ALGORITHM = "sha256"                  # Content-digest algorithm
 SSHSIG_NAMESPACE = "ccc-update-manifest"     # Fixed SSHSIG namespace (sign+verify)
 
@@ -81,35 +89,373 @@ def sha256_hex(data: bytes) -> str:
 
 # --- Manifest construction (S2) -------------------------------------------- #
 
+SUPPORTED_PLATFORMS = ("aarch64", "armv7l")     # raw uname -m tokens (must match verifier)
+
+# Files/markers that must NEVER enter a release artifact (Invariant I2 + secret
+# exclusion). Scanned pre-sign over the FINAL composed tree of each artifact.
+_FORBIDDEN_BASENAMES = frozenset({
+    ".env", "allowed_signers", "trusted_publishers",
+    "id_ed25519", "id_rsa", "id_ecdsa",
+})
+_SECRET_MARKERS = (b"PRIVATE KEY-----", b"BEGIN OPENSSH PRIVATE KEY")
+
+# Binary payload extensions EXEMPT from the private-key-marker + no-NUL-in-text
+# scan (legitimately binary). Everything else -- including extensionless
+# executables/scripts and textual wheelhouse metadata such as SHA256SUMS -- IS
+# scanned. A NUL in a text/source member is corruption and fails the release closed.
+_BINARY_EXTS = frozenset({
+    "whl", "gz", "tgz", "tar", "zip", "bz2", "xz", "7z",
+    "png", "jpg", "jpeg", "gif", "ico", "webp", "bmp",
+    "woff", "woff2", "ttf", "otf", "eot",
+    "pdf", "so", "pyc", "pyo", "o", "a", "bin", "dat", "db", "sqlite",
+    "jar", "class", "mo", "wasm",
+})
+
+
+def _is_hex64(v: object) -> bool:
+    return isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) is not None
+
+
+def _is_oci_digest(v: object) -> bool:
+    """Canonical OCI-style content digest: 'sha256:' + exactly 64 lowercase hex."""
+    return isinstance(v, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", v) is not None
+
+
+def _validate_wheelhouse_block(wh: object) -> None:
+    """Fail-closed structural/semantic validation of the armv7l wheelhouse block
+    (mirrors backend.update_verify._validate_wheelhouse)."""
+    if not isinstance(wh, dict):
+        raise ReleaseError("wheelhouse block must be an object")
+    if wh.get("path") != "wheelhouse-armhf/":
+        raise ReleaseError(f"wheelhouse path must be 'wheelhouse-armhf/': {wh.get('path')!r}")
+    for field in ("bundle_sha256", "requirements_sha256", "lock_sha256",
+                  "build_lock_sha256", "provenance_sha256"):
+        if not _is_hex64(wh.get(field)):
+            raise ReleaseError(f"wheelhouse {field} must be a sha256: {wh.get(field)!r}")
+    prov = wh.get("provenance")
+    if not isinstance(prov, str) or not prov or prov.startswith("/") or ".." in prov:
+        raise ReleaseError(f"wheelhouse provenance reference invalid: {prov!r}")
+
+
+def _bare_name(name: str) -> str:
+    if not name or "/" in name or "\\" in name:
+        raise ReleaseError(f"artifact_name must be a bare filename, got {name!r}")
+    return name
+
+
+def _validate_top_level(top_level: object) -> list:
+    if not isinstance(top_level, list) or not top_level:
+        raise ReleaseError("top_level must be a non-empty list")
+    out = []
+    for name in top_level:
+        if not isinstance(name, str) or not name or "/" in name or "\\" in name or name in (".", ".."):
+            raise ReleaseError(f"top_level entry must be a bare name: {name!r}")
+        out.append(name)
+    return sorted(set(out))
+
+
+def build_artifact_entry(*, platform: str, name: str, artifact_bytes: bytes,
+                         top_level: list, wheelhouse: Optional[dict] = None) -> dict:
+    """One signed platform-artifact entry: platform (uname -m) + bare name + sha256
+    content digest + the SIGNED top-level allowlist (the exact set of top-level
+    members in this artifact), and (armv7l only) an internal-wheelhouse provenance
+    block. aarch64 MUST NOT declare a wheelhouse (isolation)."""
+    if platform not in SUPPORTED_PLATFORMS:
+        raise ReleaseError(f"unsupported platform: {platform!r}")
+    entry = {
+        "platform": platform,
+        "name": _bare_name(name),
+        "digest": {"algorithm": DIGEST_ALGORITHM, "value": sha256_hex(artifact_bytes)},
+        "top_level": _validate_top_level(top_level),
+    }
+    if platform == "armv7l":
+        _validate_wheelhouse_block(wheelhouse)
+        entry["wheelhouse"] = wheelhouse
+    elif wheelhouse is not None:
+        raise ReleaseError("aarch64 entry must not declare a wheelhouse")
+    return entry
+
+
 def build_manifest(
     *,
     version: str,
-    artifact_name: str,
-    artifact_bytes: bytes,
-    recommended_conduit_core: Optional[str] = None,
-    platform: Optional[str] = None,
+    source: dict,
+    artifacts: list,
+    dependency_locks: Optional[dict] = None,
+    compatibility: Optional[dict] = None,
     product: str = PRODUCT,
     format_version: int = MANIFEST_FORMAT_VERSION,
 ) -> dict:
-    """Assemble the manifest that binds identity + version + compatibility to
-    the artifact's content digest. Carries no trust material."""
+    """Assemble the canonical V2 manifest binding product, version, source/tag
+    provenance, the per-platform artifact set (each bound by sha256 digest), and
+    the dependency-lock digests. Carries NO trust material. Artifacts are sorted
+    by platform so the canonical bytes are order-stable."""
     if not _SEMVER_RE.match(version):
         raise ReleaseError(f"version must be strict semver X.Y.Z, got {version!r}")
-    if not artifact_name or "/" in artifact_name or "\\" in artifact_name:
-        raise ReleaseError(f"artifact_name must be a bare filename, got {artifact_name!r}")
+    if not isinstance(source, dict) or source.get("vcs") != "git" \
+       or not re.fullmatch(r"[0-9a-f]{40}", str(source.get("commit", ""))) \
+       or not source.get("tag"):
+        raise ReleaseError(f"source must be {{vcs:git, commit:<40hex>, tag:<str>}}, got {source!r}")
+    if source["tag"] != f"v{version}":
+        raise ReleaseError(f"source.tag must be 'v{version}', got {source['tag']!r}")
+    if not artifacts:
+        raise ReleaseError("at least one artifact entry is required")
+    plats = [e["platform"] for e in artifacts]
+    if len(artifacts) != 2 or sorted(plats) != ["aarch64", "armv7l"]:
+        raise ReleaseError(f"a full V2 release requires EXACTLY one aarch64 + one armv7l entry; got {plats}")
+    for e in artifacts:
+        expected = f"ccc-{version}-{e['platform']}.tar.gz"
+        if e["name"] != expected:
+            raise ReleaseError(f"artifact name {e['name']!r} != canonical {expected!r}")
+    locks = dependency_locks or {}
+    for field in ("requirements_sha256", "aarch64_lock_sha256",
+                  "armv7_lock_sha256", "armv7_build_lock_sha256"):
+        if not _is_hex64(locks.get(field)):
+            raise ReleaseError(f"dependency_locks.{field} must be a sha256 (mandatory)")
     return {
         "format_version": format_version,
         "product": product,
         "version": version,
-        "compatibility": {
-            "recommended_conduit_core": recommended_conduit_core,
-            "platform": platform,
+        "source": {"vcs": "git", "commit": source["commit"], "tag": source["tag"]},
+        "artifacts": sorted(artifacts, key=lambda e: e["platform"]),
+        "dependency_locks": {
+            "requirements_sha256": locks["requirements_sha256"],
+            "aarch64_lock_sha256": locks["aarch64_lock_sha256"],
+            "armv7_lock_sha256": locks["armv7_lock_sha256"],
+            "armv7_build_lock_sha256": locks["armv7_build_lock_sha256"],
         },
-        "artifact": {
-            "name": artifact_name,
-            "digest": {"algorithm": DIGEST_ALGORITHM, "value": sha256_hex(artifact_bytes)},
-        },
+        "compatibility": compatibility or {},
     }
+
+
+def _wheelhouse_members(wheelhouse_dir: str) -> dict:
+    """Collect {arcname -> bytes} for a wheelhouse directory under the fixed
+    top-level path `wheelhouse-armhf/`. Bytes are left EXACT (never LF-munged);
+    injected AFTER source canonicalization so wheels are byte-preserved."""
+    base = os.path.abspath(wheelhouse_dir)
+    if not os.path.isdir(base):
+        raise ReleaseError(f"wheelhouse dir not found: {wheelhouse_dir!r}")
+    out: dict = {}
+    for root, dirs, files in os.walk(base):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, base).replace(os.sep, "/")
+            with open(path, "rb") as fh:
+                out[f"wheelhouse-armhf/{rel}"] = fh.read()
+    if not out:
+        raise ReleaseError("wheelhouse dir is empty")
+    return out
+
+
+def _read_provenance(path: str):
+    """Read the armv7 wheelhouse provenance record (a BUILD OUTPUT). Returns
+    (bytes, parsed_obj). Deep schema + bundle cross-check is `_validate_provenance`.
+    Lifecycle: the dependency LOCKS are committed pre-tag (build-independent); the
+    wheelhouse + this record are post-tag content-addressed inputs, digest-bound."""
+    if not path or not os.path.isfile(path):
+        raise ReleaseError(f"wheelhouse provenance record not found: {path!r}")
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if not data:
+        raise ReleaseError("wheelhouse provenance record is empty")
+    try:
+        obj = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ReleaseError(f"wheelhouse provenance record not valid JSON: {exc}")
+    if not isinstance(obj, dict):
+        raise ReleaseError("provenance record must be a JSON object")
+    return data, obj
+
+
+def _parse_wheel_name(fn: str):
+    if not fn.endswith(".whl"):
+        return None, None
+    parts = fn[:-4].split("-")
+    if len(parts) < 2:
+        return None, None
+    return parts[0].lower().replace("_", "-"), parts[1]
+
+
+def _require_valid_lock(requirements_text: str, lock_text: str, label: str) -> None:
+    problems = _lockval.validate(requirements_text, lock_text)
+    if problems:
+        raise ReleaseError(f"{label} is not a valid solution of requirements.txt: {problems}")
+
+
+def _validate_runtime_lock_against_wheelhouse(runtime_lock_text: str, wheelhouse_members: dict,
+                                              requirements_text: str) -> None:
+    """Fail-closed: the injected armv7 runtime lock must (a) be a valid solution of
+    canonical requirements.txt, and (b) be a BIJECTION with the embedded wheels --
+    every pin (name==version, hashed) maps to exactly one embedded wheel of that
+    name+version whose sha256 is among the pin's hashes, and every embedded wheel is
+    covered. Missing/extra/duplicate/unhashed/version- or hash-mismatched -> reject."""
+    _require_valid_lock(requirements_text, runtime_lock_text, "requirements-armv7.lock")
+    pins = _parse_lock_pins(runtime_lock_text)              # {name: (version, {hashes})}
+    if not pins:
+        raise ReleaseError("requirements-armv7.lock has no pins")
+    pin_set = {(name, ver) for name, (ver, _h) in pins.items()}
+    wheel_map: dict = {}                                    # (name, version) -> wheel sha256
+    for arc, dat in wheelhouse_members.items():
+        fn = arc.split("/", 1)[1] if "/" in arc else arc
+        if fn == "SHA256SUMS":
+            continue
+        name, ver = _parse_wheel_name(fn)
+        if name is None:
+            raise ReleaseError(f"non-wheel file in wheelhouse: {fn!r}")
+        key = (name, ver)
+        if key in wheel_map:
+            raise ReleaseError(f"duplicate embedded wheel for {name}=={ver}")
+        wheel_map[key] = sha256_hex(dat)
+    wheel_set = set(wheel_map)
+    if pin_set != wheel_set:
+        missing = sorted(wheel_set - pin_set)              # embedded wheel not in the lock
+        extra = sorted(pin_set - wheel_set)                # lock pin with no matching wheel
+        raise ReleaseError(f"runtime lock != embedded wheels (missing_from_lock={missing}, "
+                           f"extra_pins={extra})")
+    for (name, ver), wsha in wheel_map.items():
+        if wsha not in pins[name][1]:
+            raise ReleaseError(f"embedded wheel {name}=={ver} sha256 not authorized by runtime lock")
+
+
+def _parse_lock_pins(text: str) -> dict:
+    """Parse a pip lock STRICTLY (closed grammar; finding 2). Fails closed on any
+    unrecognized directive/line or duplicate pin."""
+    pins, problems = _lockval.parse_lock(text)
+    if problems:
+        raise ReleaseError(f"malformed lock: {problems}")
+    return pins
+
+
+def _parse_sdist_name(fn: str):
+    for suf in (".tar.gz", ".tgz", ".zip", ".tar.bz2"):
+        if fn.endswith(suf):
+            stem = fn[:-len(suf)]
+            if "-" in stem:
+                name, _, ver = stem.rpartition("-")
+                return name.lower().replace("_", "-"), ver
+    return None, None
+
+
+def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str,
+                         build_lock_text: str) -> None:
+    """Strict, fail-closed provenance schema + cross-check against the ACTUAL
+    embedded wheelhouse and its SHA256SUMS.
+
+    Schema:
+      builder: {identity:str, image_digest:str}
+      bundle:  {sha256: <bundle_sha256>}
+      wheels:  [{sdist_name:str, sdist_sha256:hex64,
+                 wheel_filename:str, wheel_sha256:hex64}, ...]
+
+    Cross-checks: the set of recorded wheel_filenames == the set of actual .whl-ish
+    files in the wheelhouse (no missing / extra / duplicate); each recorded
+    wheel_sha256 == the real file sha256 == its SHA256SUMS entry; SHA256SUMS is
+    present and covers EXACTLY the wheels; provenance.bundle.sha256 == the embedded
+    bundle digest. Anything short of an exact description of the embedded bundle
+    fails closed."""
+    builder = obj.get("builder")
+    if not isinstance(builder, dict) or not isinstance(builder.get("identity"), str) \
+       or not builder["identity"] or not _is_oci_digest(builder.get("image_digest")):
+        raise ReleaseError("provenance.builder needs identity + image_digest 'sha256:<64 lowercase hex>'")
+    bundle = obj.get("bundle")
+    if not isinstance(bundle, dict) or bundle.get("sha256") != bundle_sha256:
+        raise ReleaseError("provenance.bundle.sha256 must equal the embedded bundle digest")
+    wheels = obj.get("wheels")
+    if not isinstance(wheels, list) or not wheels:
+        raise ReleaseError("provenance.wheels must be a non-empty list")
+
+    # Actual wheelhouse contents (strip the fixed prefix); split payload vs metadata.
+    actual: dict = {}
+    sums: dict = {}
+    for arc, dat in wheelhouse_members.items():
+        fn = arc.split("/", 1)[1] if "/" in arc else arc
+        if fn == "SHA256SUMS":
+            for ln in dat.decode("utf-8", "replace").splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                parts = ln.split()
+                if len(parts) < 2:
+                    raise ReleaseError(f"malformed SHA256SUMS line: {ln!r}")
+                sums[parts[-1]] = parts[0]
+            continue
+        actual[fn] = sha256_hex(dat)
+    if not sums:
+        raise ReleaseError("wheelhouse SHA256SUMS is missing")
+    if set(sums) != set(actual):
+        raise ReleaseError("SHA256SUMS does not cover exactly the embedded wheels")
+    for fn, h in actual.items():
+        if sums.get(fn) != h:
+            raise ReleaseError(f"SHA256SUMS mismatch for {fn!r}")
+
+    recorded: dict = {}
+    for w in wheels:
+        if not isinstance(w, dict):
+            raise ReleaseError("each provenance wheel record must be an object")
+        wf, wh = w.get("wheel_filename"), w.get("wheel_sha256")
+        sn, ss = w.get("sdist_name"), w.get("sdist_sha256")
+        if not isinstance(wf, str) or not wf or not _is_hex64(wh) \
+           or not isinstance(sn, str) or not sn or not _is_hex64(ss):
+            raise ReleaseError(f"provenance wheel record missing/invalid fields: {w!r}")
+        if wf in recorded:
+            raise ReleaseError(f"duplicate provenance wheel record: {wf!r}")
+        recorded[wf] = wh
+    if set(recorded) != set(actual):
+        missing = sorted(set(actual) - set(recorded))
+        extra = sorted(set(recorded) - set(actual))
+        raise ReleaseError(f"provenance wheels != embedded wheels (missing={missing}, extra={extra})")
+    for wf, wh in recorded.items():
+        if actual[wf] != wh:
+            raise ReleaseError(f"provenance wheel_sha256 mismatch for {wf!r}")
+
+    # Build-input authorization (finding #1): every recorded SOURCE (sdist) must be
+    # authorized by the canonical requirements-armv7-build.lock -- an unapproved sdist
+    # cannot be built and then legitimized by writing its hash into provenance.
+    build_pins = _parse_lock_pins(build_lock_text)
+    if not build_pins:
+        raise ReleaseError("empty/invalid armv7 build-input lock")
+    src_pkgs: dict = {}
+    for w in wheels:
+        sd, ss = w.get("sdist_name"), w.get("sdist_sha256")
+        name, ver = _parse_sdist_name(sd) if isinstance(sd, str) else (None, None)
+        if name is None:
+            raise ReleaseError(f"unparseable sdist_name: {sd!r}")
+        if name in src_pkgs:
+            raise ReleaseError(f"duplicate source record for package: {name!r}")
+        src_pkgs[name] = (ver, ss)
+        if name not in build_pins:
+            raise ReleaseError(f"unapproved sdist (absent from build lock): {name!r}")
+        bver, bhashes = build_pins[name]
+        if ver != bver:
+            raise ReleaseError(f"sdist version mismatch for {name!r}: {ver} != {bver}")
+        if ss not in bhashes:
+            raise ReleaseError(f"sdist hash not authorized by build lock for {name!r}")
+    if set(src_pkgs) != set(build_pins):
+        missing = sorted(set(build_pins) - set(src_pkgs))
+        extra = sorted(set(src_pkgs) - set(build_pins))
+        raise ReleaseError(f"provenance sources != build lock (missing={missing}, extra={extra})")
+
+
+def _secret_scan(tree: dict) -> None:
+    """Fail-closed pre-sign scan of the composed artifact tree (Invariant I2 +
+    no-NUL-in-text). Rejects forbidden secret files and private-key markers, and
+    rejects any NUL byte in a NON-binary member. Only true binary payloads (by
+    extension: wheels, images, archives, fonts, compiled objects) are exempt --
+    extensionless executables/scripts AND textual wheelhouse metadata (e.g.
+    SHA256SUMS) ARE scanned."""
+    for arcname, data in tree.items():
+        base = arcname.rsplit("/", 1)[-1]
+        if base in _FORBIDDEN_BASENAMES or base.endswith((".pem", ".key")):
+            raise ReleaseError(f"refusing to package secret-bearing file: {arcname!r}")
+        ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+        if ext in _BINARY_EXTS:
+            continue   # legitimately-binary payload: exempt from marker/NUL scan
+        for marker in _SECRET_MARKERS:
+            if marker in data:
+                raise ReleaseError(f"private-key marker found in {arcname!r}")
+        if b"\x00" in data:
+            raise ReleaseError(f"NUL byte in text member {arcname!r} (no-NUL-in-text invariant)")
 
 
 # --- Canonicalization layer (.gitattributes-driven) ------------------------ #
@@ -117,7 +463,7 @@ def build_manifest(
 # ADR-0003 defines a *Canonical Release Artifact*. Canonicality is a property of
 # the ARTIFACT (deterministic, reproducible, platform-independent bytes), not of
 # the storage backend. Git is therefore ONE valid producer of a source tree, not
-# the definition of canonical. Every producer (--source, --git-ref) passes its
+# the definition of canonical. The production producer is tag-only (--git-ref);
 # collected {path -> bytes} tree through this layer before packing, so the same
 # content yields byte-identical artifacts regardless of the OS/checkout that
 # produced the tree (this is what a Windows CRLF checkout broke for 0.3.13).
@@ -233,8 +579,10 @@ def canonicalize_tree(raw: dict[str, bytes]) -> dict[str, bytes]:
 # --- Tree collectors (producers) ------------------------------------------- #
 
 def _raw_from_dir(source_dir: str) -> dict[str, bytes]:
-    """Collect {arcname -> raw bytes} from a source directory (the `--source`
-    producer). The `.git` directory, if present, is excluded."""
+    """Collect {arcname -> raw bytes} from a local source directory (generic /
+    backwards-compatible canonicalization helper used by deterministic-artifact
+    tests). This is NOT a production provenance path -- production releases are
+    tag-only via --git-ref. The `.git` directory, if present, is excluded."""
     src = os.path.abspath(source_dir)
     if not os.path.isdir(src):
         raise ReleaseError(f"source is not a directory: {source_dir!r}")
@@ -391,59 +739,168 @@ def verify_signed_manifest(
 
 # --- Release production ----------------------------------------------------- #
 
+def _resolve_source(git_ref, repo_dir):
+    """Resolve the canonical source tree + provenance from a TAG only (ADR-0003 I4).
+    Production releases MUST be built from a tag under refs/tags/; caller-asserted
+    source directories/commits/tags are NOT accepted (that path is removed). The
+    recorded commit is the peeled tag commit (annotated tags handled), and the tree
+    is archived from that same tagged commit."""
+    if not git_ref:
+        raise ReleaseError("--git-ref vX.Y.Z is required (tagged-source provenance; I4)")
+    chk = _run(["git", "-C", repo_dir, "rev-parse", "--verify", "--quiet", f"refs/tags/{git_ref}"])
+    if chk.returncode != 0:
+        raise ReleaseError(f"--git-ref must be a tag under refs/tags/: {git_ref!r}")
+    peel = _run(["git", "-C", repo_dir, "rev-parse", f"refs/tags/{git_ref}^{{commit}}"])
+    if peel.returncode != 0:
+        raise ReleaseError(f"cannot peel tag {git_ref!r} to a commit")
+    commit = peel.stdout.decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ReleaseError(f"peeled commit is not a 40-hex sha: {commit!r}")
+    raw = _raw_from_git_ref(f"refs/tags/{git_ref}", repo_dir)
+    return raw, {"vcs": "git", "commit": commit, "tag": git_ref}
+
+
 def produce_release(
     *,
     version: str,
     out_dir: str,
     key_path: str,
-    source_dir: Optional[str] = None,
-    artifact_path: Optional[str] = None,
+    wheelhouse_armv7_dir: str,
+    provenance_armv7_path: str,
+    armv7_runtime_lock_path: str,
     git_ref: Optional[str] = None,
+    source_dir: Optional[str] = None,
+    source_commit: Optional[str] = None,
+    source_tag: Optional[str] = None,
     repo_dir: str = ".",
+    expected_requirements_sha256: Optional[str] = None,
+    expected_armv7_lock_sha256: Optional[str] = None,
+    expected_aarch64_lock_sha256: Optional[str] = None,
+    expected_armv7_build_lock_sha256: Optional[str] = None,
     recommended_conduit_core: Optional[str] = None,
-    platform: Optional[str] = None,
 ) -> dict:
-    """Produce the canonical release asset set: {artifact, manifest, manifest.sig}.
+    """Produce the V2 signed release: TWO deterministic platform artifacts
+    (aarch64 without a wheelhouse; armv7l = same source + embedded wheelhouse-armhf/)
+    bound by ONE canonical V2 manifest and ONE signature. Both artifacts are
+    required for a full release. Pre-sign secret-exclusion is enforced on both
+    composed trees.
 
-    Exactly one producer must be given:
-      * git_ref      — PREFERRED production mode; canonical tree from the object DB.
-      * source_dir   — canonical only AFTER canonicalization (relies on the tree's
-                       own `.gitattributes` + content detection).
-      * artifact_path— a prebuilt artifact, consumed byte-exact (expert use).
+    Determinism: given (source commit/tag, wheelhouse bundle), both artifacts are
+    byte-reproducible; the only difference is the injected wheelhouse.
     """
-    if sum(bool(x) for x in (source_dir, artifact_path, git_ref)) != 1:
-        raise ReleaseError("provide exactly one of --git-ref, --source, or --artifact")
+    if source_dir is not None or source_commit is not None or source_tag is not None:
+        raise ReleaseError("caller-asserted source provenance is not accepted; use --git-ref vX.Y.Z")
+    raw, source = _resolve_source(git_ref, repo_dir)
+    canon = canonicalize_tree(raw)
 
-    if artifact_path:
-        with open(artifact_path, "rb") as fh:
-            artifact_bytes = fh.read()
-        artifact_name = os.path.basename(artifact_path)
-    elif git_ref:
-        artifact_bytes = build_canonical_artifact_from_git_ref(git_ref, repo_dir)
-        artifact_name = f"ccc-{version}.tar.gz"
-    else:
-        artifact_bytes = build_deterministic_artifact(source_dir)  # type: ignore[arg-type]
-        artifact_name = f"ccc-{version}.tar.gz"
+    # Dependency digests are computed from the CANONICAL (LF-normalized) committed
+    # bytes IN the artifact tree -- never from caller input -- so the binding is
+    # independent of the producer's checkout line endings. Optional caller values
+    # are used ONLY as expected-value cross-checks (fail closed on mismatch).
+    def _canon_sha(name: str) -> str:
+        if name not in canon:
+            raise ReleaseError(f"required committed file missing from source tree: {name!r}")
+        return sha256_hex(canon[name])
+    # Build-INDEPENDENT digests come from the canonical committed bytes (pre-tag).
+    requirements_sha = _canon_sha("requirements.txt")
+    aarch64_lock_sha = _canon_sha("requirements-aarch64.lock")
+    armv7_build_lock_sha = _canon_sha("requirements-armv7-build.lock")
+    build_lock_text = canon["requirements-armv7-build.lock"].decode("utf-8", "replace")
 
+    # aarch64 = canonical source only (NO wheelhouse — isolation).
+    aarch64_bytes = pack_tree(canon)
+
+    # armv7l = canonical source + wheelhouse-armhf/ + provenance record + the
+    # POST-TAG, build-DEPENDENT runtime wheel lock (requirements-armv7.lock),
+    # injected as a content-addressed release input (never committed). Provenance is
+    # strictly validated against the embedded bundle/SHA256SUMS AND the build lock.
+    wh_members = _wheelhouse_members(wheelhouse_armv7_dir)
+    bundle_sha = sha256_hex(pack_tree(wh_members))
+    prov_bytes, prov_obj = _read_provenance(provenance_armv7_path)
+    _validate_provenance(prov_obj, wh_members, bundle_sha, build_lock_text)
+    provenance_sha = sha256_hex(prov_bytes)
+    if not armv7_runtime_lock_path or not os.path.isfile(armv7_runtime_lock_path):
+        raise ReleaseError(f"armv7 runtime lock not found: {armv7_runtime_lock_path!r}")
+    with open(armv7_runtime_lock_path, "rb") as fh:
+        armv7_lock_bytes = _to_lf(fh.read())
+    armv7_lock_sha = sha256_hex(armv7_lock_bytes)
+
+    # Semantic lock validation at the PRODUCER boundary (not only in CI):
+    #   * aarch64 + armv7-build locks are valid solutions of canonical requirements.txt;
+    #   * the injected armv7 runtime lock is valid AND a bijection with the embedded wheels.
+    requirements_text = canon["requirements.txt"].decode("utf-8", "replace")
+    _require_valid_lock(requirements_text,
+                        canon["requirements-aarch64.lock"].decode("utf-8", "replace"),
+                        "requirements-aarch64.lock")
+    _require_valid_lock(requirements_text, build_lock_text, "requirements-armv7-build.lock")
+    _validate_runtime_lock_against_wheelhouse(
+        armv7_lock_bytes.decode("utf-8", "replace"), wh_members, requirements_text)
+
+    for _label, _computed, _expected in (
+            ("requirements_sha256", requirements_sha, expected_requirements_sha256),
+            ("aarch64_lock_sha256", aarch64_lock_sha, expected_aarch64_lock_sha256),
+            ("armv7_lock_sha256", armv7_lock_sha, expected_armv7_lock_sha256),
+            ("armv7_build_lock_sha256", armv7_build_lock_sha, expected_armv7_build_lock_sha256)):
+        if _expected is not None and _expected != _computed:
+            raise ReleaseError(f"{_label} cross-check failed: expected {_expected!r}, computed {_computed!r}")
+
+    armv7_tree = dict(canon)
+    armv7_tree.update(wh_members)
+    armv7_tree["provenance/wheelhouse-armv7.json"] = prov_bytes
+    armv7_tree["requirements-armv7.lock"] = armv7_lock_bytes
+    armv7_bytes = pack_tree(armv7_tree)
+
+    # Fail-closed pre-sign secret scan of BOTH composed trees.
+    _secret_scan(canon)
+    _secret_scan(armv7_tree)
+
+    aarch64_name = f"ccc-{version}-aarch64.tar.gz"
+    armv7_name = f"ccc-{version}-armv7l.tar.gz"
+    aarch64_top = sorted({m.split("/", 1)[0] for m in canon})
+    armv7_top = sorted({m.split("/", 1)[0] for m in armv7_tree})
+    wheelhouse = {
+        "path": "wheelhouse-armhf/",
+        "bundle_sha256": bundle_sha,
+        "requirements_sha256": requirements_sha,
+        "lock_sha256": armv7_lock_sha,
+        "build_lock_sha256": armv7_build_lock_sha,
+        "provenance": "provenance/wheelhouse-armv7.json",
+        "provenance_sha256": provenance_sha,
+    }
+    artifacts = [
+        build_artifact_entry(platform="aarch64", name=aarch64_name, artifact_bytes=aarch64_bytes,
+                             top_level=aarch64_top),
+        build_artifact_entry(platform="armv7l", name=armv7_name, artifact_bytes=armv7_bytes,
+                             top_level=armv7_top, wheelhouse=wheelhouse),
+    ]
+    dependency_locks = {
+        "requirements_sha256": requirements_sha,
+        "aarch64_lock_sha256": aarch64_lock_sha,
+        "armv7_lock_sha256": armv7_lock_sha,
+        "armv7_build_lock_sha256": armv7_build_lock_sha,
+    }
     manifest = build_manifest(
-        version=version,
-        artifact_name=artifact_name,
-        artifact_bytes=artifact_bytes,
-        recommended_conduit_core=recommended_conduit_core,
-        platform=platform,
+        version=version, source=source, artifacts=artifacts,
+        dependency_locks=dependency_locks,
+        compatibility={"recommended_conduit_core": recommended_conduit_core},
     )
 
     os.makedirs(out_dir, exist_ok=True)
-    artifact_out = os.path.join(out_dir, artifact_name)
+    aarch64_out = os.path.join(out_dir, aarch64_name)
+    armv7_out = os.path.join(out_dir, armv7_name)
     manifest_out = os.path.join(out_dir, f"ccc-{version}.manifest.json")
-
-    with open(artifact_out, "wb") as fh:
-        fh.write(artifact_bytes)
+    with open(aarch64_out, "wb") as fh:
+        fh.write(aarch64_bytes)
+    with open(armv7_out, "wb") as fh:
+        fh.write(armv7_bytes)
     with open(manifest_out, "wb") as fh:
         fh.write(canonical_manifest_bytes(manifest))
-
     sig_out = sign_manifest(manifest_out, key_path)
-    return {"artifact": artifact_out, "manifest": manifest_out, "signature": sig_out}
+    return {
+        "artifacts": {"aarch64": aarch64_out, "armv7l": armv7_out},
+        "manifest": manifest_out,
+        "signature": sig_out,
+    }
 
 
 # --- Trust-store helper ----------------------------------------------------- #
@@ -469,13 +926,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="ADR-0003 Epic A — produce a signed CCC release.")
     p.add_argument("--version", help="release semver X.Y.Z (required unless --emit-trusted-publishers)")
     p.add_argument("--sign-key", required=True, help="path to the publisher Ed25519 private key")
-    src = p.add_mutually_exclusive_group(required=False)
-    src.add_argument("--git-ref", help="PREFERRED: build the canonical artifact from this Git ref/commit")
-    src.add_argument("--source", help="source tree (canonical only after canonicalization)")
-    src.add_argument("--artifact", help="prebuilt release artifact, consumed byte-exact (expert)")
+    p.add_argument("--git-ref", required=True,
+                   help="REQUIRED: build from this tag under refs/tags/ (vX.Y.Z). Caller-asserted "
+                        "source directories/commits are not accepted (tagged-source provenance, I4).")
+    p.add_argument("--wheelhouse-armv7", help="armv7 wheelhouse dir to embed in the armv7l artifact")
+    p.add_argument("--provenance-armv7", help="wheelhouse provenance record (JSON) to embed + bind")
+    p.add_argument("--armv7-runtime-lock", help="requirements-armv7.lock (post-tag; injected + bound)")
+    p.add_argument("--expect-requirements-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
+    p.add_argument("--expect-armv7-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
+    p.add_argument("--expect-aarch64-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
+    p.add_argument("--expect-armv7-build-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
     p.add_argument("--repo", default=".", help="repository directory for --git-ref (default: .)")
     p.add_argument("--recommended-core", default=None, help="advisory recommended Conduit Core version")
-    p.add_argument("--platform", default=None, help="advisory target platform")
     p.add_argument("--out", default="dist", help="output directory for the release asset set")
     p.add_argument("--emit-trusted-publishers", metavar="PATH",
                    help="write a safe UTF-8/no-BOM/LF trusted_publishers file for --sign-key and exit")
@@ -493,25 +955,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
         if not args.version:
             raise ReleaseError("--version is required")
-        if args.source:
-            # Library stays silent; the advisory note belongs to the CLI layer.
-            print(
-                "note: --source is canonicalized via the tree's .gitattributes + "
-                "content detection; --git-ref <ref> is the preferred production producer.",
-                file=sys.stderr,
-            )
-        # Producer-count validation ("exactly one of …") is centralised in
-        # produce_release(); it raises ReleaseError, caught below.
+        if not (args.wheelhouse_armv7 and args.provenance_armv7 and args.armv7_runtime_lock):
+            raise ReleaseError("--wheelhouse-armv7, --provenance-armv7 and --armv7-runtime-lock are required")
         result = produce_release(
             version=args.version,
             out_dir=args.out,
             key_path=args.sign_key,
-            source_dir=args.source,
-            artifact_path=args.artifact,
+            wheelhouse_armv7_dir=args.wheelhouse_armv7,
+            provenance_armv7_path=args.provenance_armv7,
+            armv7_runtime_lock_path=args.armv7_runtime_lock,
             git_ref=args.git_ref,
             repo_dir=args.repo,
+            expected_requirements_sha256=args.expect_requirements_sha256,
+            expected_armv7_lock_sha256=args.expect_armv7_lock_sha256,
+            expected_aarch64_lock_sha256=args.expect_aarch64_lock_sha256,
+            expected_armv7_build_lock_sha256=args.expect_armv7_build_lock_sha256,
             recommended_conduit_core=args.recommended_core,
-            platform=args.platform,
         )
     except ReleaseError as exc:
         print(f"error: {exc}", file=sys.stderr)

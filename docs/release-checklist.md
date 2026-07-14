@@ -54,3 +54,45 @@ Step 3 is the automated backstop for steps 1–2: the CHANGELOG release heading 
 `APP_VERSION` are cross-checked in CI. The checklist is the human ritual; the test
 is what makes "we forgot to bump the version" a red build instead of a production
 surprise.
+
+
+## V2 platform-artifact release (ADR-0003 Amendment A1)
+
+Steps 5-7 above are replaced for V2 as follows.
+
+**5b. Commit the TWO build-independent locks PRE-TAG.** Generate with `release/gen_locks.py`:
+`requirements-aarch64.lock` (PyPI aarch64 wheels: `pip download --only-binary=:all: -r requirements.txt`)
+and `requirements-armv7-build.lock` (PyPI sdists: `pip download --no-binary=:all: -r requirements.txt`).
+Commit both at the repo root; CI `test_release_lock_drift` (semantic `release/lock_validate.py`) must
+pass. THEN tag `vX.Y.Z`. The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
+committed; it is produced with the wheelhouse and passed at build time via `--armv7-runtime-lock`
+(injected + digest-bound). Do NOT commit placeholder/0.0.0 locks (release-input gate).
+
+**5c. Build the two signed artifacts (one SRT ceremony).**
+```
+python3 release/ccc_release.py --version X.Y.Z --sign-key <key> \
+    --git-ref vX.Y.Z --wheelhouse-armv7 <wheelhouse-dir> \
+    --provenance-armv7 provenance/wheelhouse-armv7.json \
+    --armv7-runtime-lock requirements-armv7.lock \
+    --recommended-core <core> --out dist
+```
+The producer computes requirements + the two committed lock sha256 from the canonical bytes, computes the
+armv7 runtime-lock sha256 from the injected file, and binds all four. Pass `--expect-*-sha256` only for
+optional cross-checks. Provenance is strictly validated against the embedded wheelhouse + SHA256SUMS AND
+authorized against `requirements-armv7-build.lock`.
+
+Produces exactly: `ccc-X.Y.Z-aarch64.tar.gz`, `ccc-X.Y.Z-armv7l.tar.gz`,
+`ccc-X.Y.Z.manifest.json`, `ccc-X.Y.Z.manifest.json.sig`. The producer runs the pre-sign
+secret-exclusion + no-NUL-in-text scan and fails closed on any violation.
+
+**6b. Qualify locally.** For BOTH platforms: `ssh-keygen -Y verify` the manifest; recompute each
+artifact sha256 and confirm it matches its signed entry; confirm the armv7 wheelhouse `bundle_sha256`
+and `provenance_sha256`; run `deployment/bin/ccc-verify-release` per platform (expect exit 0 for the
+matching platform, exit 2 cross-platform). Record both artifact digests.
+
+**7b. Publish EXACTLY these four assets:** the two platform artifacts + manifest + signature. **Never
+publish** the wheelhouse standalone, the locks-as-assets (they are in Git), `trusted_publishers` /
+`allowed_signers`, or the signing key. The device trust anchor is provisioned out-of-band.
+
+**Both platform artifacts are mandatory** — a release missing either is incomplete and the verifier
+rejects the manifest.

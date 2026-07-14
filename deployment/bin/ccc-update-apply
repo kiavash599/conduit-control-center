@@ -187,19 +187,55 @@ def write_status(state: str, **fields) -> None:
     os.replace(tmp, STATUS_PATH)
 
 
-def _safe_extract(tar: tarfile.TarFile, dest: str) -> None:
-    # Reject absolute paths and parent traversal; prefer the stdlib data filter.
+MAX_UNCOMPRESSED_BYTES = 400 * 1024 * 1024                 # source + wheelhouse ceiling
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: str, allowed_top_level) -> None:
+    """Fail-closed extraction of the (already signature+digest-verified) artifact.
+    Defense-in-depth: reject traversal/abs paths, symlinks/hardlinks, device/FIFO/
+    special members, duplicate member names; enforce the SIGNED top-level allowlist
+    (every member's top-level component must be in `allowed_top_level`, the set bound
+    in the verified manifest for THIS platform -- so a non-armv7l payload cannot carry
+    a wheelhouse and no unexpected root is ever accepted); cap total uncompressed size;
+    and gate on free disk space (fail closed on insufficient space OR an inability to
+    query it -- the pre-extraction gate, not merely the extractall handler)."""
     dest_abs = os.path.realpath(dest)
+    allowed = set(allowed_top_level or ())
+    seen: set = set()
+    total = 0
     for member in tar.getmembers():
         target = os.path.realpath(os.path.join(dest, member.name))
         if not (target == dest_abs or target.startswith(dest_abs + os.sep)):
             die(3, f"unsafe path in tarball: {member.name!r}")
         if member.issym() or member.islnk():
             die(3, f"links not allowed in tarball: {member.name!r}")
+        if not (member.isfile() or member.isdir()):
+            die(3, f"special file not allowed in tarball: {member.name!r}")
+        if member.name in seen:
+            die(3, f"duplicate member in tarball: {member.name!r}")
+        seen.add(member.name)
+        top = member.name.split("/", 1)[0]
+        if top not in allowed:
+            die(3, f"unexpected top-level member {member.name!r} (not in signed allowlist)")
+        total += max(0, member.size)
+        if total > MAX_UNCOMPRESSED_BYTES:
+            die(3, "tarball uncompressed size exceeds limit")
+    # Pre-extraction free-space GATE (fail closed): both insufficient space AND an
+    # inability to query it abort before any file is written.
     try:
-        tar.extractall(dest, filter="data")  # Python >= 3.12
-    except TypeError:
-        tar.extractall(dest)  # older Python; guarded by the checks above
+        free = shutil.disk_usage(dest).free
+    except OSError as exc:
+        die(3, f"cannot determine free space to extract safely: {exc}")
+    if free < total + (32 * 1024 * 1024):
+        die(3, "insufficient disk space to extract update")
+    # Defense-in-depth: any OSError during extraction also fails closed.
+    try:
+        try:
+            tar.extractall(dest, filter="data")  # Python >= 3.12
+        except TypeError:
+            tar.extractall(dest)  # older Python; guarded by the checks above
+    except OSError as exc:
+        die(3, f"extraction failed (disk/io): {exc}")
 
 
 def _read_installed_version() -> tuple[int, int, int]:
@@ -268,9 +304,20 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
         die(2, "update rejected: verifier unavailable")
     manifest_p, sig_p, artifact_p = _read_framed_payload(work)
 
+    # Independent platform authority: the REAL host arch, detected here in the host
+    # namespace as root -- never taken from the payload or the untrusted backend.
+    host_platform = os.uname().machine
+
     # --- the single, fail-closed verification decision (ADR-0003) --------------
+    # Digest-to-platform-entry binding is the ROOT authorization: the received
+    # bytes are bound to the SIGNED entry for this host platform only; an artifact
+    # matching a different platform's entry (or an unknown platform) is rejected
+    # with no fallback. (The frame carries no independent filename, so there is no
+    # received-name check; the manifest's per-entry name is a signed self-consistency
+    # field validated inside verify_release.)
     result = verify_release(manifest_path=manifest_p, signature_path=sig_p,
-                            artifact_path=artifact_p, trust_store_path=TRUST_STORE)
+                            artifact_path=artifact_p, trust_store_path=TRUST_STORE,
+                            platform=host_platform)
     if not result.ok:
         _audit(result.reason, "verify")
         die(2, f"update rejected: {result.reason}")
@@ -285,7 +332,7 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
     os.makedirs(extract_dir, exist_ok=True)
     try:
         with tarfile.open(artifact_p, "r:gz") as tar:
-            _safe_extract(tar, extract_dir)
+            _safe_extract(tar, extract_dir, result.metadata.get("top_level"))
     except tarfile.TarError as exc:
         _audit(OUTCOME_REJECT_PAYLOAD_SHAPE, "deploy",
                verified_version=result.metadata.get("version"),
@@ -372,11 +419,19 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
             logf.write(f"=== ccc-update-apply worker {update_id}: "
                        f"{_version_str(frm)} -> {_version_str(to)} @ {_now()} ===\n")
             logf.flush()
+        # Pin the wheelhouse to the VERIFIED tree for armv7l; strip any inherited
+        # CCC_WHEELHOUSE_DIR so an injected env var can NEVER redirect privileged
+        # pip to unverified local content. aarch64 gets no wheelhouse (index path).
+        _env = dict(os.environ)
+        _env.pop("CCC_WHEELHOUSE_DIR", None)
+        if os.uname().machine == "armv7l":
+            _env["CCC_WHEELHOUSE_DIR"] = os.path.join(tree, "wheelhouse-armhf")
         try:
             proc = subprocess.run(
                 ["bash", INSTALLED_UPDATE_SH,
                  "--ccc-only", "--non-interactive", "--source", tree],
                 check=False,
+                env=_env,
                 stdin=subprocess.DEVNULL,
                 stdout=(logf if logf is not None else None),
                 stderr=(subprocess.STDOUT if logf is not None else None),
