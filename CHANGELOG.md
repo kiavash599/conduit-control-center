@@ -11,6 +11,79 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.16] — 2026-07-14
+
+**Signed V2 platform release artifacts and dependency supply-chain hardening.**
+
+### Added
+
+- A V2 release model with one product version, two mandatory deterministic
+  platform artifacts (`aarch64` and `armv7l`), and one signed canonical manifest.
+  The aarch64 artifact contains the application/runtime tree without a
+  wheelhouse; the armv7l artifact embeds its verified offline wheelhouse,
+  provenance record, and post-tag runtime lock.
+- Controlled, build-independent pre-tag dependency locks at the repository root:
+  `requirements-aarch64.lock` and `requirements-armv7-build.lock`. CI validates
+  both as complete, pinned, hashed solutions of `requirements.txt` before a tag
+  may be created.
+- V2 release-builder, lock-generator, lock-validator, wheelhouse-builder, and
+  platform-verifier coverage, including negative tests for cross-platform,
+  malformed-manifest, digest, provenance, extraction, disk-space, and secret
+  failures.
+
+### Changed
+
+- The update backend selects the signed artifact entry for the detected platform;
+  the privileged helper independently detects the real host platform and binds
+  the received bytes to that exact signed entry. Unknown platforms, missing
+  entries, and cross-platform artifacts fail closed with no fallback.
+- New releases are V2-only. The V1 single-artifact format is rejected, so legacy
+  v0.3.14 installations migrate once by the documented manual SSH procedure;
+  subsequent V2 releases use the dashboard One-Click Update path.
+- armv7l install/update dependency provisioning is strictly offline and
+  hash-locked. aarch64 remains wheelhouse-free and installs only the signed,
+  hash-locked aarch64 dependency solution.
+- Documentation builds now run as a pull-request gate. Deployment and GitHub
+  Pages permissions remain restricted to pushes, and internal release runbooks
+  are excluded from the public documentation site.
+
+### Fixed
+
+- Installer firewall planning now discovers and preserves the evidenced local
+  SSH administration port instead of assuming port 22 (ADR-0004), including
+  robust parsing of both observed `ss` output layouts. HTTP remains port 80,
+  HTTPS remains the installer-selected port, and no Conduit UDP rule is added.
+
+### Security
+
+- The signed V2 manifest binds source tag/commit, both platform artifacts,
+  dependency-lock digests, and the armv7l wheelhouse/runtime-lock/provenance
+  chain. Signature, canonical form, exact member allowlists, path safety,
+  digest-to-platform binding, disk-space checks, secret exclusion, and NUL-free
+  text checks are enforced before privileged apply.
+- The privileged update helper does not trust the backend's platform decision;
+  it derives the host architecture independently and authorizes only the matching
+  signed artifact.
+
+### Notes
+
+- This section is stamped for release-candidate preparation. No `v0.3.16` tag or
+  GitHub Release exists yet; the two final artifacts, manifest, and signature must
+  be built from the committed tag in one SRT ceremony and qualified before
+  publication.
+- Clean-image installation passed on real Raspberry Pi 2 armv7l (SSH 1222,
+  HTTPS 2053) and Raspberry Pi 4 aarch64 (SSH 22, HTTPS 443) at source commit
+  `6dbcc89`, reporting version 0.3.15. That validates the installer, platform
+  mapping, firewall transaction, services, and external health path; it does not
+  substitute for post-tag qualification of the final signed v0.3.16 artifacts.
+- The committed pre-tag lock SHA-256 values are
+  `9019cead48bf6c4fc25c27f41a7cd3d669969ef8101fe9e78493c031ecfb17f9`
+  (`requirements-aarch64.lock`) and
+  `8d31fad50e747c5d9a33782b49568cb63d186b29134d30ea3a8b5ed71455b95f`
+  (`requirements-armv7-build.lock`).
+
+---
+
 ## [0.3.15] — 2026-07-13
 
 **Raspberry Pi 2 / 32-bit (armhf) support (BL-0002).**

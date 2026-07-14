@@ -1,9 +1,9 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.23<br>
-**Date:** 2026-07-08<br>
-**Status:** Reconciled to v0.3.14  
+**Revision:** 1.24<br>
+**Date:** 2026-07-14<br>
+**Status:** v0.3.16 release candidate (not tagged or published)<br>
 **Author:** CCC Development Team
 
 ---
@@ -880,6 +880,7 @@ phase is active.
 | 1.21 | 2026-07-02 | CCC Development Team | **Reconciled to v0.3.12.** One-Click Update / Trusted Update Engine marked **Completed / Production-Proven / Maintenance Only**. Added shipped releases **v0.3.5–v0.3.12** to Release History and removed the obsolete *v0.3.5 (planned)* validation-milestone row. Replaced the *Deployment Strategy — validation milestone* subsection with a *One-Click Update — Completed / Production-Proven / Maintenance Only* status subsection referencing `docs/closure/one-click-update-closure.md` (future work limited to bug fixes / security hardening / maintenance; functional expansion requires a new ADR; artifact signing deferred). Marked **Log Management / SD-Card Protection released in v0.3.5**; removed **Update Centre** from *v0.4 Candidates* (delivered as Feature 2). Added a **Next Phase / Candidate Drivers** section (Conduit Core update design, Artifact signing, Documentation Normalization) as candidates only — the project remains **Idle between phases** until the Project Owner selects a driver. Roadmap Markdown only; PDF not regenerated; `docs/PROJECT-STATUS.md` unchanged (separate pass); historical rev-≤1.20 rows intact; no feature scope changed. |
 | 1.22 | 2026-07-07 | CCC Development Team | **Reconciled to v0.3.14 (release references only).** Added shipped releases **v0.3.13** and **v0.3.14** to Release History; updated header revision/date/status. No feature scope changed; historical rev-≤1.21 rows intact; PDF not regenerated. |
 | 1.23 | 2026-07-08 | CCC Development Team | **Documentation reconciliation (roadmap Markdown).** Corrected stale forward-looking status without altering release history. Recorded **Artifact signing as delivered** (signed, reproducible release artifacts with fail-closed on-device verification, **ADR-0003**, shipped v0.3.13–v0.3.14) and removed it from *Next Phase / Candidate Drivers* and from the One-Click Update *deferred hardening* note. **Retired the Architecture Atlas** from repository planning — removed from the candidate drivers and the idle-state activity list; it has been relocated as a frozen, historical Owner reference outside the repository and is no longer a source of truth. Header revision/date bumped to 1.23 / 2026-07-08; status remains *Reconciled to v0.3.14*. No release history changed; historical rev-≤1.22 rows intact. By **Project-Owner decision** the exported roadmap PDF (`CCC_Product_Roadmap_v1.pdf`) is **retired and removed** from the repository; this Markdown document is the **sole authoritative roadmap** and no PDF will be regenerated or included in future State Synchronization. |
+| 1.24 | 2026-07-14 | CCC Development Team | **v0.3.16 release-candidate preparation.** Recorded the accepted ADR-0003 Amendment A1 V2 platform-artifact release model: one version, mandatory deterministic aarch64 + armv7l artifacts, one signed canonical manifest, independent privileged-helper platform enforcement, committed pre-tag dependency locks, and embedded armv7l wheelhouse provenance/runtime lock. Added the draft closure record at `docs/closure/v0.3.16-closure.md`. The Release History table is intentionally unchanged until tag/publication; header status explicitly remains a release candidate. Historical rev-≤1.23 rows intact; no future feature scope changed. |
 
 ---
 
