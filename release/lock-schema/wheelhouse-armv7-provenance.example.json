@@ -1,0 +1,50 @@
+{
+  "builder": {
+    "identity": "conduit-control-center-armv7-wheelhouse-builder",
+    "recipe_path": "release/builder/Containerfile",
+    "recipe_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "build_backends_lock_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "apt_packages_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "rustup_init_file_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "extractor_tools_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "base_image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "image_manifest_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "image_id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "environment": {
+      "os": "Ubuntu 22.04.5 LTS",
+      "os_id": "ubuntu",
+      "os_version_id": "22.04",
+      "arch": "armv7l",
+      "python": "Python 3.10.12",
+      "rustc": "rustc 1.75.0 (82e1608df 2023-12-21)",
+      "cargo": "cargo 1.75.0 (1d8b05cdd 2023-11-20)",
+      "gcc": "gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0",
+      "glibc": "2.35",
+      "apt": {
+        "build-essential": "12.9ubuntu3",
+        "libssl-dev": "3.0.2-0ubuntu1.15"
+      },
+      "build_backends": {
+        "maturin": "1.5.1",
+        "setuptools": "69.5.1",
+        "setuptools-rust": "1.9.0",
+        "wheel": "0.43.0",
+        "cffi": "1.16.0",
+        "hatchling": "1.24.2"
+      },
+      "apt_architecture": "armhf"
+    },
+    "environment_sha256": "e87bf6796e86b0ddcd42ad82467855d9c68229830313bf9b943c73eade03f49c"
+  },
+  "bundle": {
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "wheels": [
+    {
+      "sdist_name": "cryptography-48.0.1.tar.gz",
+      "sdist_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "wheel_filename": "cryptography-48.0.1-cp39-abi3-linux_armv7l.whl",
+      "wheel_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

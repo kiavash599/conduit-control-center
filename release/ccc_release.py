@@ -49,6 +49,8 @@ except Exception:  # noqa: BLE001 - allow `python release/ccc_release.py` (scrip
     _sys_boot.path.insert(0, _os_boot.path.dirname(_os_boot.path.dirname(_os_boot.path.abspath(__file__))))
     from release import lock_validate as _lockval
 
+from release import oci_manifest as _ocim  # release/ is importable (path patched above if needed)
+
 # --- Normative constants (ADR-0003) ---------------------------------------- #
 
 PRODUCT = "conduit-control-center"          # Product identity (authoritative)
@@ -337,13 +339,339 @@ def _parse_sdist_name(fn: str):
     return None, None
 
 
+CANONICAL_RECIPE_PATH = "release/builder/Containerfile"   # committed builder recipe (bound in provenance)
+_ENV_REQUIRED = ("os", "os_id", "os_version_id", "arch", "apt_architecture",
+                 "python", "rustc", "cargo", "gcc", "glibc")
+BUILD_BACKENDS_LOCK_PATH = "release/builder/requirements-build-backends.lock"
+APT_PACKAGES_PATH = "release/builder/apt-packages.list"
+RUSTUP_SHA_PATH = "release/builder/rustup-init.sha256"
+EXTRACTOR_TOOLS_IN_PATH = "release/builder/requirements-extractor-tools.in"
+EXTRACTOR_TOOLS_LOCK_PATH = "release/builder/requirements-extractor-tools.lock"
+TARGET_GLIBC = "2.35"                # Ubuntu 22.04 (Jammy) armhf baseline
+TARGET_OS_ID = "ubuntu"
+TARGET_OS_VERSION = "22.04"
+TARGET_ARCH = ("armv7l", "armhf", "arm")
+TARGET_DPKG_ARCH = "armhf"   # dpkg --print-architecture on the Jammy armhf builder
+
+
+# --------------------------------------------------------------------------- #
+#  Lifecycle-aware builder-input validation (finding 6).                       #
+#                                                                              #
+#  Three files drive the builder ceremony: apt-packages.list, rustup-init.     #
+#  sha256, requirements-build-backends.lock. They may be legitimately ABSENT   #
+#  before the builder gate is run (pre-tag development). But when present they  #
+#  must pass strict semantic validation, and .example templates are NEVER      #
+#  accepted as active. Release/tag production requires all three (require_      #
+#  present=True). This replaces the brittle "the active lock must not exist"    #
+#  assertion, which would have failed the day a real valid lock is committed.   #
+# --------------------------------------------------------------------------- #
+BUILDER_DIR = "release/builder"
+BUILDER_INPUT_FILES = ("apt-packages.list", "rustup-init.sha256",
+                       "requirements-build-backends.lock")
+_PLACEHOLDER_TOKENS = ("example", "placeholder", "replace-me", "replaceme",
+                       "changeme", "todo", "your-", "<")
+
+
+def _reject_placeholder(text: str, label: str) -> None:
+    low = text.lower()
+    for tok in _PLACEHOLDER_TOKENS:
+        if tok in low:
+            raise ReleaseError(f"{label}: contains placeholder token {tok!r}; not an active input")
+
+
+def validate_apt_packages_list(text: str) -> None:
+    pkgs = [ln.strip() for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    if not pkgs:
+        raise ReleaseError("apt-packages.list: no packages")
+    _reject_placeholder("\n".join(pkgs), "apt-packages.list")
+    for ln in pkgs:
+        if "=" not in ln:
+            raise ReleaseError(f"apt-packages.list: entry not pinned as name[:arch]=version: {ln!r}")
+        tokpart, ver = ln.split("=", 1)
+        _parse_apt_token(tokpart)   # validates name and optional :arch (fails closed)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+.:~\-]*", ver):
+            raise ReleaseError(f"apt-packages.list: malformed version in {ln!r}")
+
+
+def validate_rustup_sha(text: str) -> None:
+    toks = [ln.strip().split()[0] for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    if len(toks) != 1:
+        raise ReleaseError("rustup-init.sha256: must contain exactly one sha256")
+    hx = toks[0].lower()
+    if not _is_hex64(hx):
+        raise ReleaseError("rustup-init.sha256: not a 64-hex sha256")
+    if set(hx) == {"0"}:
+        raise ReleaseError("rustup-init.sha256: all-zeros placeholder is not an active hash")
+
+
+def validate_build_backends_lock(text: str) -> None:
+    body = [ln for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    if not body:
+        raise ReleaseError("requirements-build-backends.lock: empty/comment-only")
+    pins = _parse_lock_pins(text)   # strict closed grammar; raises on malformed
+    if not pins:
+        raise ReleaseError("requirements-build-backends.lock: no pins")
+    for name, (version, _hashes) in pins.items():
+        if version in ("0.0.0", "0"):
+            raise ReleaseError(
+                f"requirements-build-backends.lock: placeholder version for {name}")
+
+
+def validate_extractor_tools_lock(lock_text: str, in_text: str) -> None:
+    """The committed extractor-tools lock (hash-pinned tomli for the connected-phase parser)
+    must be a valid closed-grammar lock that pins the EXACT tomli version requested by the
+    committed .in file (finding 4). Binds the extraction tool into the signed source chain."""
+    in_versions = {}
+    for raw in in_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s]+)", line)
+        if not m:
+            raise ReleaseError(f"malformed requirements-extractor-tools.in line: {raw!r}")
+        in_versions[m.group(1).lower()] = m.group(2)
+    if "tomli" not in in_versions:
+        raise ReleaseError("requirements-extractor-tools.in must request tomli")
+    pins = _parse_lock_pins(lock_text)   # strict closed grammar; raises on malformed/unhashed/dup
+    lock_versions = {k.lower(): v for k, (v, _h) in pins.items()}
+    # CLOSED authorization: the lock must pin EXACTLY the .in-requested packages (tomli has no
+    # runtime deps, so the authorized closure is exactly one pin). Reject any extra package.
+    extra = set(lock_versions) - set(in_versions)
+    if extra:
+        raise ReleaseError(f"extractor-tools lock contains unauthorized package(s): {sorted(extra)}")
+    missing = set(in_versions) - set(lock_versions)
+    if missing:
+        raise ReleaseError(f"extractor-tools lock missing authorized package(s): {sorted(missing)}")
+    for name, ver in in_versions.items():
+        if lock_versions[name] != ver:
+            raise ReleaseError(
+                f"extractor-tools lock pins {name} {lock_versions[name]!r} but .in requests {ver!r}")
+
+
+_INPUT_VALIDATORS = {
+    "apt-packages.list": validate_apt_packages_list,
+    "rustup-init.sha256": validate_rustup_sha,
+    "requirements-build-backends.lock": validate_build_backends_lock,
+}
+
+
+def validate_builder_inputs(builder_dir: str, *, require_present: bool) -> dict:
+    """Validate the three active builder inputs under ``builder_dir``.
+
+    * absent   -> allowed only when ``require_present`` is False (pre-gate dev);
+                  a release/tag production run passes ``require_present=True``.
+    * present  -> must pass its strict semantic validator (fail closed).
+    * .example -> never read here; templates are not active inputs.
+
+    Returns {name: 'present'|'absent'}; raises ReleaseError on any violation.
+    """
+    status = {}
+    for name in BUILDER_INPUT_FILES:
+        path = os.path.join(builder_dir, name)
+        if not os.path.isfile(path):
+            if require_present:
+                raise ReleaseError(f"required builder input absent: {name}")
+            status[name] = "absent"
+            continue
+        with open(path, "rb") as fh:
+            text = fh.read().decode("utf-8", "replace")
+        _INPUT_VALIDATORS[name](text)
+        status[name] = "present"
+    return status
+
+
+def _canonical_env_bytes(env: dict) -> bytes:
+    return json.dumps(env, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _glibc_tuple(v: str):
+    m = re.search(r"(\d+)\.(\d+)", v or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+_APT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9+.\-]*")
+_APT_ARCH_RE = re.compile(r"[a-z0-9][a-z0-9\-]*")
+
+
+def _parse_apt_token(tok: str):
+    """Parse a Debian binary-package identity 'name' or 'name:arch'. Fails closed on
+    multiple/empty/malformed qualifiers. Returns (name, arch_or_None)."""
+    if tok.count(":") > 1:
+        raise ReleaseError(f"apt token has multiple ':' qualifiers: {tok!r}")
+    if ":" in tok:
+        name, arch = tok.split(":", 1)
+        if not _APT_NAME_RE.fullmatch(name) or not _APT_ARCH_RE.fullmatch(arch):
+            raise ReleaseError(f"malformed architecture-qualified apt token: {tok!r}")
+        return name, arch
+    if not _APT_NAME_RE.fullmatch(tok):
+        raise ReleaseError(f"malformed apt package name: {tok!r}")
+    return tok, None
+
+
+def _validate_apt_environment(authorized_text: str, env: dict) -> None:
+    """Prove every authorized apt pin is actually installed in the recorded environment,
+    architecture-aware (finding 2). ``env['apt']`` is the recorded installed-package map
+    (``${binary:Package}`` -> ``${Version}``, installed-only; captured that way). Authorized
+    pins are a SUBSET; extra/transitive packages are allowed (they remain fully recorded and
+    covered by environment_sha256). Matching rules:
+      * apt_architecture must be the target dpkg arch (armhf);
+      * an explicitly qualified 'name:arch' matches that exact arch (native bare entries count
+        as the native arch);
+      * an unqualified 'name' resolves to exactly one NATIVE variant; a foreign-only match or
+        multiple recorded architecture variants fail closed;
+      * versions compare byte-exactly (epoch + Debian revision included).
+    """
+    apt_arch = env.get("apt_architecture")
+    if apt_arch != TARGET_DPKG_ARCH:
+        raise ReleaseError(f"builder apt_architecture must be {TARGET_DPKG_ARCH!r}; got {apt_arch!r}")
+    recorded = env.get("apt")
+    if not isinstance(recorded, dict) or not recorded:
+        raise ReleaseError("provenance.builder.environment.apt must be a non-empty mapping")
+    idx: dict = {}
+    for key, ver in recorded.items():
+        if not isinstance(ver, str) or not ver:
+            raise ReleaseError(f"environment.apt[{key!r}] version must be a non-empty string")
+        rname, rarch = _parse_apt_token(key)
+        idx.setdefault(rname, []).append((rarch, ver))
+    authorized = [ln.strip() for ln in authorized_text.splitlines()
+                  if ln.strip() and not ln.strip().startswith("#")]
+    if not authorized:
+        raise ReleaseError("apt-packages.list has no authorized pins")
+    for entry in authorized:
+        if "=" not in entry:
+            raise ReleaseError(f"apt-packages.list entry not name[:arch]=version: {entry!r}")
+        tokpart, aver = entry.split("=", 1)
+        aname, aarch = _parse_apt_token(tokpart)
+        if not aver:
+            raise ReleaseError(f"apt-packages.list entry missing version: {entry!r}")
+        variants = idx.get(aname, [])
+        if aarch is not None:
+            matches = [(ra, v) for (ra, v) in variants
+                       if ra == aarch or (ra is None and aarch == apt_arch)]
+        else:
+            if len(variants) > 1:
+                raise ReleaseError(f"apt package {aname!r} has multiple architecture variants; "
+                                   "the authorized entry must be architecture-qualified")
+            matches = [(ra, v) for (ra, v) in variants if ra is None or ra == apt_arch]
+        if not matches:
+            raise ReleaseError(f"authorized apt package {entry!r} is not installed as a "
+                               "native/architecture-matching package in the builder environment")
+        if len(matches) > 1:
+            raise ReleaseError(f"authorized apt package {entry!r} is ambiguous across architectures")
+        _ra, rver = matches[0]
+        if rver != aver:
+            raise ReleaseError(f"authorized apt package {aname!r} version mismatch: "
+                               f"authorized {aver!r}, installed {rver!r}")
+
+
+def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_lock_sha256: str,
+                      build_backends_lock_text: str, apt_packages_sha256: str,
+                      rustup_init_file_sha256: str, apt_packages_text: str,
+                      extractor_tools_lock_sha256: str, manifest_bytes=None) -> None:
+    """Fail-closed validation of the builder provenance block. Binds the builder to
+    the COMMITTED recipe and the COMMITTED build-backends lock (by sha256), the pinned
+    base image, the OCI image MANIFEST digest (independently recomputed from the OCI
+    manifest bytes when provided, and always REQUIRED to be present alongside a distinct
+    local image_id), and a declared environment whose declared build_backends must match
+    the authorized lock and whose glibc must not exceed the target baseline."""
+    if not isinstance(builder, dict):
+        raise ReleaseError("provenance.builder must be an object")
+    if not isinstance(builder.get("identity"), str) or not builder["identity"]:
+        raise ReleaseError("provenance.builder.identity is required")
+    if "image_digest" in builder:
+        raise ReleaseError("provenance.builder.image_digest is ambiguous; use base_image_digest + "
+                           "image_manifest_digest (distinct from local image_id)")
+    if builder.get("recipe_path") != CANONICAL_RECIPE_PATH:
+        raise ReleaseError(f"provenance.builder.recipe_path must be {CANONICAL_RECIPE_PATH!r}")
+    if not _is_hex64(builder.get("recipe_sha256")) or builder["recipe_sha256"] != recipe_sha256:
+        raise ReleaseError("provenance.builder.recipe_sha256 must match the committed builder recipe")
+    if not _is_hex64(builder.get("build_backends_lock_sha256")) \
+       or builder["build_backends_lock_sha256"] != build_backends_lock_sha256:
+        raise ReleaseError("provenance.builder.build_backends_lock_sha256 must match the committed "
+                           "requirements-build-backends.lock")
+    if not _is_hex64(builder.get("apt_packages_sha256")) \
+       or builder["apt_packages_sha256"] != apt_packages_sha256:
+        raise ReleaseError("provenance.builder.apt_packages_sha256 must match the committed apt-packages.list")
+    if not _is_hex64(builder.get("rustup_init_file_sha256")) \
+       or builder["rustup_init_file_sha256"] != rustup_init_file_sha256:
+        raise ReleaseError("provenance.builder.rustup_init_file_sha256 must match the committed rustup-init.sha256")
+    if not _is_hex64(builder.get("extractor_tools_lock_sha256")) \
+       or builder["extractor_tools_lock_sha256"] != extractor_tools_lock_sha256:
+        raise ReleaseError("provenance.builder.extractor_tools_lock_sha256 must match the committed "
+                           "requirements-extractor-tools.lock (missing/malformed/mismatched/substituted)")
+    if not _is_oci_digest(builder.get("base_image_digest")):
+        raise ReleaseError("provenance.builder.base_image_digest must be 'sha256:<64 lowercase hex>'")
+    if not _is_oci_digest(builder.get("image_manifest_digest")):
+        raise ReleaseError("provenance.builder.image_manifest_digest must be the OCI image MANIFEST "
+                           "digest 'sha256:<64 lowercase hex>' (NOT the Docker local image/config ID)")
+    # image_id is REQUIRED (so the manifest/local-id distinction is always enforced).
+    if not _is_oci_digest(builder.get("image_id")):
+        raise ReleaseError("provenance.builder.image_id (local image/config id, evidence) is required "
+                           "and must be 'sha256:<64hex>'")
+    if builder["image_id"] == builder["image_manifest_digest"]:
+        raise ReleaseError("provenance.builder.image_id must NOT equal image_manifest_digest -- a local "
+                           "image/config id is not an OCI manifest digest")
+    # SHARED, structural manifest validation (release/oci_manifest): parse the raw OCI
+    # manifest, enforce single-image schema-2/OCI shape + descriptors, recompute the digest,
+    # and BIND manifest.config.digest == image_id (the id Phase B actually executes). One
+    # implementation, used identically here and at Phase A / wheelhouse self-check.
+    if manifest_bytes is not None:
+        try:
+            _ocim.validate_image_manifest(
+                manifest_bytes, image_manifest_digest=builder["image_manifest_digest"],
+                image_id=builder["image_id"])
+        except _ocim.ManifestError as _exc:
+            raise ReleaseError(f"OCI image manifest invalid: {_exc}") from _exc
+    env = builder.get("environment")
+    if not isinstance(env, dict) or any(not isinstance(env.get(k), str) or not env.get(k)
+                                        for k in _ENV_REQUIRED):
+        raise ReleaseError(f"provenance.builder.environment must declare non-empty {list(_ENV_REQUIRED)}")
+    # Architecture-aware, installed-state binding: every authorized apt pin must be present
+    # in the recorded environment at the exact version (finding 2).
+    _validate_apt_environment(apt_packages_text, env)
+    if not isinstance(env.get("build_backends"), dict) or not env["build_backends"]:
+        raise ReleaseError("provenance.builder.environment.build_backends must be a non-empty mapping")
+    # STRUCTURAL Jammy/arch enforcement (finding 9): not merely a non-empty OS string.
+    if env["os_id"] != TARGET_OS_ID or env["os_version_id"] != TARGET_OS_VERSION:
+        raise ReleaseError(f"builder OS must be {TARGET_OS_ID} {TARGET_OS_VERSION} (Jammy); "
+                           f"got id={env['os_id']!r} version_id={env['os_version_id']!r}")
+    if env["arch"] not in TARGET_ARCH:
+        raise ReleaseError(f"builder arch must be one of {list(TARGET_ARCH)} (armv7l target); got {env['arch']!r}")
+    tgt, got = _glibc_tuple(TARGET_GLIBC), _glibc_tuple(env["glibc"])
+    if got is None or got > tgt:
+        raise ReleaseError(f"builder glibc {env['glibc']!r} exceeds target baseline {TARGET_GLIBC} "
+                           "(wheels must be built no newer than Ubuntu 22.04 armhf)")
+    # Every AUTHORIZED backend (from the committed lock) must be installed at the pinned
+    # version (finding 5): declared environment is bound to the authoritative lock.
+    backend_pins = _parse_lock_pins(build_backends_lock_text)
+    if not backend_pins:
+        raise ReleaseError("build-backends lock is empty/invalid (must pin >=1 backend)")
+    bbn = {str(k).lower().replace("_", "-"): v for k, v in env["build_backends"].items()}
+    for name, (ver, _h) in backend_pins.items():
+        if bbn.get(name) != ver:
+            raise ReleaseError(f"authorized build backend {name}=={ver} not present in the recorded "
+                               f"environment at that version (got {bbn.get(name)!r})")
+    if not _is_hex64(builder.get("environment_sha256")):
+        raise ReleaseError("provenance.builder.environment_sha256 must be a sha256")
+    if builder["environment_sha256"] != sha256_hex(_canonical_env_bytes(env)):
+        raise ReleaseError("provenance.builder.environment_sha256 does not match the recorded environment")
+
+
 def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str,
-                         build_lock_text: str) -> None:
+                         build_lock_text: str, recipe_sha256: str,
+                         build_backends_lock_sha256: str, build_backends_lock_text: str,
+                         apt_packages_sha256: str, rustup_init_file_sha256: str,
+                         apt_packages_text: str, extractor_tools_lock_sha256: str,
+                         image_manifest_bytes=None) -> None:
     """Strict, fail-closed provenance schema + cross-check against the ACTUAL
     embedded wheelhouse and its SHA256SUMS.
 
     Schema:
-      builder: {identity:str, image_digest:str}
+      builder: {identity, recipe_path, recipe_sha256, base_image_digest,
+                image_manifest_digest, image_id?, environment{...}, environment_sha256}
       bundle:  {sha256: <bundle_sha256>}
       wheels:  [{sdist_name:str, sdist_sha256:hex64,
                  wheel_filename:str, wheel_sha256:hex64}, ...]
@@ -354,10 +682,14 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
     present and covers EXACTLY the wheels; provenance.bundle.sha256 == the embedded
     bundle digest. Anything short of an exact description of the embedded bundle
     fails closed."""
-    builder = obj.get("builder")
-    if not isinstance(builder, dict) or not isinstance(builder.get("identity"), str) \
-       or not builder["identity"] or not _is_oci_digest(builder.get("image_digest")):
-        raise ReleaseError("provenance.builder needs identity + image_digest 'sha256:<64 lowercase hex>'")
+    _validate_builder(obj.get("builder"), recipe_sha256=recipe_sha256,
+                      build_backends_lock_sha256=build_backends_lock_sha256,
+                      build_backends_lock_text=build_backends_lock_text,
+                      apt_packages_sha256=apt_packages_sha256,
+                      rustup_init_file_sha256=rustup_init_file_sha256,
+                      apt_packages_text=apt_packages_text,
+                      extractor_tools_lock_sha256=extractor_tools_lock_sha256,
+                      manifest_bytes=image_manifest_bytes)
     bundle = obj.get("bundle")
     if not isinstance(bundle, dict) or bundle.get("sha256") != bundle_sha256:
         raise ReleaseError("provenance.bundle.sha256 must equal the embedded bundle digest")
@@ -768,6 +1100,7 @@ def produce_release(
     wheelhouse_armv7_dir: str,
     provenance_armv7_path: str,
     armv7_runtime_lock_path: str,
+    image_manifest_path: str,
     git_ref: Optional[str] = None,
     source_dir: Optional[str] = None,
     source_commit: Optional[str] = None,
@@ -806,6 +1139,51 @@ def produce_release(
     aarch64_lock_sha = _canon_sha("requirements-aarch64.lock")
     armv7_build_lock_sha = _canon_sha("requirements-armv7-build.lock")
     build_lock_text = canon["requirements-armv7-build.lock"].decode("utf-8", "replace")
+    recipe_bytes = canon.get(CANONICAL_RECIPE_PATH)
+    if recipe_bytes is None:
+        raise ReleaseError(f"canonical builder recipe missing from source: {CANONICAL_RECIPE_PATH}")
+    recipe_sha = sha256_hex(recipe_bytes)
+    bb_lock_bytes = canon.get(BUILD_BACKENDS_LOCK_PATH)
+    if bb_lock_bytes is None:
+        raise ReleaseError(f"committed build-backends lock missing from source: {BUILD_BACKENDS_LOCK_PATH}")
+    bb_lock_text = bb_lock_bytes.decode("utf-8", "replace")
+    bb_lock_sha = sha256_hex(bb_lock_bytes)
+    # All three committed builder inputs are REQUIRED for release production and bound
+    # by sha256 in provenance (finding 6): recipe + backend lock (above) + apt list + rustup hash.
+    apt_pkgs_bytes = canon.get(APT_PACKAGES_PATH)
+    if apt_pkgs_bytes is None:
+        raise ReleaseError(f"committed builder input missing from source: {APT_PACKAGES_PATH}")
+    apt_pkgs_sha = sha256_hex(apt_pkgs_bytes)
+    rustup_bytes = canon.get(RUSTUP_SHA_PATH)
+    if rustup_bytes is None:
+        raise ReleaseError(f"committed builder input missing from source: {RUSTUP_SHA_PATH}")
+    rustup_file_sha = sha256_hex(rustup_bytes)
+    # Present builder inputs at the release gate must pass strict semantic validation
+    # (finding 6): reject placeholders/malformed even if they are byte-bound in provenance.
+    validate_apt_packages_list(apt_pkgs_bytes.decode("utf-8", "replace"))
+    validate_rustup_sha(rustup_bytes.decode("utf-8", "replace"))
+    validate_build_backends_lock(bb_lock_text)
+    # The extractor-tools .in AND .lock are REQUIRED at the release/tag producer gate (F1):
+    # invoking the producer means the authoritative pinned-parser inputs must both exist and
+    # validate as a CLOSED tomli closure. (An incomplete pre-release working tree simply does
+    # not invoke produce_release; the gate itself never accepts their absence.)
+    _ext_in = canon.get(EXTRACTOR_TOOLS_IN_PATH)
+    if _ext_in is None:
+        raise ReleaseError(f"committed extractor-tools input missing from source: {EXTRACTOR_TOOLS_IN_PATH}")
+    _ext_lock = canon.get(EXTRACTOR_TOOLS_LOCK_PATH)
+    if _ext_lock is None:
+        raise ReleaseError(f"committed extractor-tools lock missing from source: {EXTRACTOR_TOOLS_LOCK_PATH}")
+    validate_extractor_tools_lock(_ext_lock.decode("utf-8", "replace"),
+                                  _ext_in.decode("utf-8", "replace"))
+    extractor_tools_lock_sha = sha256_hex(_ext_lock)
+    # The raw OCI image manifest is embedded into the SIGNED artifact so the producer
+    # (and any later auditor) can INDEPENDENTLY recompute image_manifest_digest (finding 4).
+    if not image_manifest_path or not os.path.isfile(image_manifest_path):
+        raise ReleaseError(f"OCI image manifest file not found: {image_manifest_path!r}")
+    with open(image_manifest_path, "rb") as fh:
+        image_manifest_bytes = fh.read()
+    if not image_manifest_bytes:
+        raise ReleaseError("OCI image manifest is empty")
 
     # aarch64 = canonical source only (NO wheelhouse — isolation).
     aarch64_bytes = pack_tree(canon)
@@ -817,7 +1195,10 @@ def produce_release(
     wh_members = _wheelhouse_members(wheelhouse_armv7_dir)
     bundle_sha = sha256_hex(pack_tree(wh_members))
     prov_bytes, prov_obj = _read_provenance(provenance_armv7_path)
-    _validate_provenance(prov_obj, wh_members, bundle_sha, build_lock_text)
+    _validate_provenance(prov_obj, wh_members, bundle_sha, build_lock_text, recipe_sha,
+                         bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
+                         apt_pkgs_bytes.decode("utf-8", "replace"), extractor_tools_lock_sha,
+                         image_manifest_bytes=image_manifest_bytes)
     provenance_sha = sha256_hex(prov_bytes)
     if not armv7_runtime_lock_path or not os.path.isfile(armv7_runtime_lock_path):
         raise ReleaseError(f"armv7 runtime lock not found: {armv7_runtime_lock_path!r}")
@@ -847,6 +1228,7 @@ def produce_release(
     armv7_tree = dict(canon)
     armv7_tree.update(wh_members)
     armv7_tree["provenance/wheelhouse-armv7.json"] = prov_bytes
+    armv7_tree["provenance/image-manifest.json"] = image_manifest_bytes
     armv7_tree["requirements-armv7.lock"] = armv7_lock_bytes
     armv7_bytes = pack_tree(armv7_tree)
 
@@ -932,6 +1314,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wheelhouse-armv7", help="armv7 wheelhouse dir to embed in the armv7l artifact")
     p.add_argument("--provenance-armv7", help="wheelhouse provenance record (JSON) to embed + bind")
     p.add_argument("--armv7-runtime-lock", help="requirements-armv7.lock (post-tag; injected + bound)")
+    p.add_argument("--image-manifest", help="raw OCI image manifest file (embedded + digest recomputed)")
     p.add_argument("--expect-requirements-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
     p.add_argument("--expect-armv7-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
     p.add_argument("--expect-aarch64-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
@@ -955,8 +1338,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
         if not args.version:
             raise ReleaseError("--version is required")
-        if not (args.wheelhouse_armv7 and args.provenance_armv7 and args.armv7_runtime_lock):
-            raise ReleaseError("--wheelhouse-armv7, --provenance-armv7 and --armv7-runtime-lock are required")
+        if not (args.wheelhouse_armv7 and args.provenance_armv7 and args.armv7_runtime_lock
+                and args.image_manifest):
+            raise ReleaseError("--wheelhouse-armv7, --provenance-armv7, --armv7-runtime-lock and "
+                               "--image-manifest are required")
         result = produce_release(
             version=args.version,
             out_dir=args.out,
@@ -964,6 +1349,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             wheelhouse_armv7_dir=args.wheelhouse_armv7,
             provenance_armv7_path=args.provenance_armv7,
             armv7_runtime_lock_path=args.armv7_runtime_lock,
+            image_manifest_path=args.image_manifest,
             git_ref=args.git_ref,
             repo_dir=args.repo,
             expected_requirements_sha256=args.expect_requirements_sha256,

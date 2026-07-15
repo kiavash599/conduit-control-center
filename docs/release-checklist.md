@@ -60,11 +60,29 @@ surprise.
 
 Steps 5-7 above are replaced for V2 as follows.
 
+**5a-builder. Construct the pinned builder image (Owner-gated ceremony).** Author/commit
+`release/builder/Containerfile` (base digest-pinned; toolchain + PEP 517 backends pinned via
+`requirements-build-backends.lock`). Prerequisites `docker`, `skopeo`, `sha256sum`, `python3` are **preflight-verified and never
+auto-installed** (skopeo is an explicit, out-of-band dependency on RPi2). Run
+`release/builder/build-builder-image.sh --base-image <ref@sha256:...>` to build it, capture the
+OCI image MANIFEST digest (not the local image ID) and the environment manifest, then build the
+wheelhouse offline with `release/builder/build-wheelhouse-offline.sh` (`--network=none`; the
+RAM/swap contract is mandatory: `--ram <RAM> --swap <extra> --host-reserve <reserve>
+--resource-evidence <path>`, host-validated — RAM+reserve ≤ MemTotal, RAM ≤ MemAvailable, swap
+bounded by active SwapTotal/SwapFree + cgroup capability — before Docker runs). Phase A also runs
+the shared `release/oci_manifest.py` gate (`config.digest == image_id`). See
+`release/builder/README.md`.
+The produced `provenance/wheelhouse-armv7.json` binds recipe/base/manifest/environment and is
+validated by the producer before signing.
+
 **5b. Commit the TWO build-independent locks PRE-TAG.** Generate with `release/gen_locks.py`:
 `requirements-aarch64.lock` (PyPI aarch64 wheels: `pip download --only-binary=:all: -r requirements.txt`)
 and `requirements-armv7-build.lock` (PyPI sdists: `pip download --no-binary=:all: -r requirements.txt`).
-Commit both at the repo root; CI `test_release_lock_drift` (semantic `release/lock_validate.py`) must
-pass. THEN tag `vX.Y.Z`. The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
+Commit both at the repo root. Also commit the **three active builder inputs** —
+`release/builder/{apt-packages.list,rustup-init.sha256,requirements-build-backends.lock}` — with
+real validated values (never the `.example` placeholders); `validate_builder_inputs` and CI must
+accept them. Also commit `release/builder/requirements-extractor-tools.{in,lock}` (the pinned tomli
+parser) before running extraction. Let CI go green, THEN tag `vX.Y.Z` (two-commit sequence). The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
 committed; it is produced with the wheelhouse and passed at build time via `--armv7-runtime-lock`
 (injected + digest-bound). Do NOT commit placeholder/0.0.0 locks (release-input gate).
 
@@ -74,12 +92,15 @@ python3 release/ccc_release.py --version X.Y.Z --sign-key <key> \
     --git-ref vX.Y.Z --wheelhouse-armv7 <wheelhouse-dir> \
     --provenance-armv7 provenance/wheelhouse-armv7.json \
     --armv7-runtime-lock requirements-armv7.lock \
+    --image-manifest release/builder/evidence/image-manifest.json \
     --recommended-core <core> --out dist
 ```
 The producer computes requirements + the two committed lock sha256 from the canonical bytes, computes the
 armv7 runtime-lock sha256 from the injected file, and binds all four. Pass `--expect-*-sha256` only for
 optional cross-checks. Provenance is strictly validated against the embedded wheelhouse + SHA256SUMS AND
-authorized against `requirements-armv7-build.lock`.
+authorized against `requirements-armv7-build.lock`. The raw OCI manifest is embedded into the
+armv7 artifact at `provenance/image-manifest.json` and the producer recomputes
+`sha256(manifest) == image_manifest_digest` before signing.
 
 Produces exactly: `ccc-X.Y.Z-aarch64.tar.gz`, `ccc-X.Y.Z-armv7l.tar.gz`,
 `ccc-X.Y.Z.manifest.json`, `ccc-X.Y.Z.manifest.json.sig`. The producer runs the pre-sign

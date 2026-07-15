@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pathlib
 
+from release import ccc_release as R
 from release import lock_validate as LV
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -49,3 +50,33 @@ def test_release_input_gate_active_locks_absent_or_valid():
         if path.exists():
             problems = LV.validate(_REQ, path.read_text(encoding="utf-8"))
             assert problems == [], f"active {lock} is not a valid solution: {problems}"
+
+
+def test_extractor_tools_in_requests_tomli():
+    # The committed .in must exist and request tomli (the pinned connected-phase TOML parser).
+    inp = _ROOT / "release" / "builder" / "requirements-extractor-tools.in"
+    assert inp.exists(), "requirements-extractor-tools.in must be committed"
+    text = inp.read_text(encoding="utf-8")
+    assert any(ln.strip().lower().startswith("tomli==") for ln in text.splitlines())
+
+
+def test_extractor_tools_lock_lifecycle():
+    # Lifecycle-aware: if the .lock is committed it must pin the .in-requested tomli exactly;
+    # if absent (blocked/pre-gate) this is a no-op (never a brittle 'must not exist').
+    inp = _ROOT / "release" / "builder" / "requirements-extractor-tools.in"
+    lock = _ROOT / "release" / "builder" / "requirements-extractor-tools.lock"
+    in_text = inp.read_text(encoding="utf-8")
+    if lock.exists():
+        R.validate_extractor_tools_lock(lock.read_text(encoding="utf-8"), in_text)
+    # Synthetic positive/negative always exercised (independent of the blocked real .lock):
+    good = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
+    R.validate_extractor_tools_lock(good, "tomli==2.0.1\n")
+    import pytest
+    with pytest.raises(R.ReleaseError):        # version drift vs .in
+        R.validate_extractor_tools_lock("tomli==1.0.0 --hash=sha256:%s\n" % ("7" * 64), "tomli==2.0.1\n")
+    with pytest.raises(R.ReleaseError):        # lock does not pin tomli
+        R.validate_extractor_tools_lock("wheel==0.43.0 --hash=sha256:%s\n" % ("7" * 64), "tomli==2.0.1\n")
+    with pytest.raises(R.ReleaseError):        # F6: unauthorized extra package in the closure
+        R.validate_extractor_tools_lock(
+            "tomli==2.0.1 --hash=sha256:%s\nevil==9.9 --hash=sha256:%s\n" % ("7" * 64, "8" * 64),
+            "tomli==2.0.1\n")

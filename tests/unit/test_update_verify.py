@@ -27,6 +27,43 @@ _e2e = pytest.mark.skipif(not (_HAS_SSH and _HAS_GIT), reason="need ssh-keygen +
 _COMMIT = "0" * 40
 _REQ, _ALOCK, _VLOCK, _BLOCK = "1" * 64, "2" * 64, "3" * 64, "4" * 64
 _SDH = "e" * 64
+_RECIPE = "FROM base\nRUN true\n"
+_RECIPE_SHA = R.sha256_hex(_RECIPE.encode())
+_BB_LOCK = "maturin==1.5.1 --hash=sha256:%s\n" % ("7" * 64)
+_BB_SHA = R.sha256_hex(_BB_LOCK.encode())
+_APT = "build-essential=12.9ubuntu3\n"
+_RUSTUP = "f" * 64 + "  rustup-init\n"
+_APT_SHA = R.sha256_hex(_APT.encode())
+_RUSTUP_SHA = R.sha256_hex(_RUSTUP.encode())
+def _manifest_bytes(image_id):
+    import json as _json
+    return _json.dumps({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+        "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
+                   "digest": image_id, "size": 1234},
+        "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                    "digest": "sha256:" + "a" * 64, "size": 5678}],
+    }).encode()
+_MANIFEST = _manifest_bytes("sha256:" + "d" * 64)
+_MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST).hexdigest()
+_EXT_IN = "tomli==2.0.1\n"
+_EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
+_EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
+_ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 1.75.0",
+        "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
+        "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
+        "apt": {"build-essential": "12.9ubuntu3"}, "build_backends": {"maturin": "1.5.1"}}
+
+
+def _builder():
+    return {"identity": "ccc-armv7-builder", "recipe_path": R.CANONICAL_RECIPE_PATH,
+            "recipe_sha256": _RECIPE_SHA, "build_backends_lock_sha256": _BB_SHA,
+            "apt_packages_sha256": _APT_SHA, "rustup_init_file_sha256": _RUSTUP_SHA,
+            "extractor_tools_lock_sha256": _EXT_LOCK_SHA,
+            "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _MANIFEST_DIGEST,
+            "image_id": "sha256:" + "d" * 64, "environment": dict(_ENV),
+            "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
 _REL_SEQ = 0
 
 
@@ -61,6 +98,13 @@ def _make_release(tmp_path, version="0.3.16", trusted=True):
     (repo / "requirements.txt").write_text("fastapi>=0.133.0,<1.0.0\n")
     (repo / "requirements-aarch64.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % ("a" * 64))
     (repo / "requirements-armv7-build.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % _SDH)
+    (repo / "release" / "builder").mkdir(parents=True)
+    (repo / "release" / "builder" / "Containerfile").write_text(_RECIPE)
+    (repo / "release" / "builder" / "requirements-build-backends.lock").write_text(_BB_LOCK)
+    (repo / "release" / "builder" / "apt-packages.list").write_text(_APT)
+    (repo / "release" / "builder" / "rustup-init.sha256").write_text(_RUSTUP)
+    (repo / "release" / "builder" / "requirements-extractor-tools.in").write_text(_EXT_IN)
+    (repo / "release" / "builder" / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
     g("add", "-A")
     g("commit", "-q", "-m", "c")
     g("tag", f"v{version}")
@@ -73,15 +117,18 @@ def _make_release(tmp_path, version="0.3.16", trusted=True):
     (wh / "SHA256SUMS").write_text("%s  %s\n" % (wsha, wname))
     bundle = R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))
     prov = base / "prov.json"
-    prov.write_text(json.dumps({"builder": {"identity": "b", "image_digest": "sha256:" + "a" * 64},
+    prov.write_text(json.dumps({"builder": _builder(),
                                 "bundle": {"sha256": bundle},
                                 "wheels": [{"sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
                                             "wheel_filename": wname, "wheel_sha256": wsha}]}))
     runtime = base / "requirements-armv7.lock"
     runtime.write_text("fastapi==0.133.0 --hash=sha256:%s\n" % wsha)
+    manifest = base / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST)
     res = R.produce_release(version=version, out_dir=str(base / "dist"), key_path=str(key),
                             wheelhouse_armv7_dir=str(wh), provenance_armv7_path=str(prov),
                             armv7_runtime_lock_path=str(runtime),
+                            image_manifest_path=str(manifest),
                             git_ref=f"v{version}", repo_dir=str(repo),
                             recommended_conduit_core="2.0.0")
     return {"manifest": res["manifest"], "signature": res["signature"],

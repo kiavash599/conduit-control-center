@@ -1,0 +1,5 @@
+# Connected-phase extraction tool (release/builder/extract_build_backends.py) parser.
+# Python 3.10 has no stdlib tomllib; tomli provides it. Generate the hash-pinned
+# requirements-extractor-tools.lock from THIS file with release/gen_locks.py, then install
+# it into an isolated venv with `pip install --require-hashes --no-deps`.
+tomli==2.0.1

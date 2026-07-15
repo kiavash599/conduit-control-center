@@ -142,3 +142,41 @@ index, cache, or network fallback on armv7l; I11 secret exclusion + no-NUL-in-te
 - **Release-input gate.** The active root `requirements-*.lock` are produced by the controlled build and
   committed pre-tag; until then they are absent and the hash-locked install fails closed. Do NOT merge
   with placeholder locks (schema fixtures live under `release/lock-schema/`).
+
+
+### A1 refinement — declared, bound builder environment (v0.3.17)
+
+The armv7 wheelhouse builder is now a committed, canonical OCI recipe
+(`release/builder/Containerfile`, base pinned by digest, toolchain + PEP 517 backends
+declared/pinned) and the provenance binds the environment fail-closed:
+`recipe_sha256` (== the committed recipe, covered by `source.commit`), `base_image_digest`,
+`image_manifest_digest` (the OCI image MANIFEST digest — NOT Docker's local image/config
+`image_id`, which is recorded only as evidence and must differ), and an `environment`
+manifest + `environment_sha256`. The legacy single `image_digest` field is rejected. The
+build runs in two phases with a hard boundary: connected, pinned image construction, then
+an offline (`--network=none`) wheel build consuming only authorized, hash-verified
+sdists/locks as read-only inputs; Phase B selects the image by its immutable local id after
+re-verifying the tag still maps to the captured id + manifest digest. A locally-built image
+ID alone no longer satisfies provenance (the manifest digest is recomputed from the raw OCI
+manifest bytes).
+
+**Target-libc policy (finding 8):** the builder base MUST be Ubuntu 22.04 (Jammy) armhf so
+the glibc baseline is no newer than the production RPi2 target; the provenance records
+`environment.glibc` and the producer rejects a glibc newer than the target. Final native
+wheels must additionally be import-tested in a clean Ubuntu 22.04 armhf environment before
+release. Connected construction inputs are pinned/verified (base by digest, apt by
+`name=version`, `rustup-init` by sha256, backends `--require-hashes`); full bit-for-bit
+image reproducibility is not claimed — the environment is content-bound and auditable.
+
+**Amendment A2 (refined builder-provenance binding).** Four boundaries are hardened:
+(1) a single shared, stdlib-only validator (`release/oci_manifest.py`) parses the raw OCI/
+Docker manifest at Phase A, the wheelhouse self-check, and the producer, enforcing the
+single-image schema-2/OCI shape and binding `manifest.config.digest == image_id` (the config
+id Phase B executes); (2) the recorded APT environment is architecture-aware and
+execution-bound — `${binary:Package}` identity, installed-only status, `apt_architecture ==
+armhf`, and every authorized pin proven present at the byte-exact version; (3) the offline
+build enforces a mandatory, host-validated RAM/swap/host-reserve contract (reserve-protecting,
+cgroup-capability-checked, evidence external only); (4) build-backend extraction uses a real
+TOML parser (stdlib `tomllib` or the hash-pinned `tomli` bootstrapped into an isolated venv;
+no regex fallback), strict-UTF-8 decoding, and an unambiguous sdist layout. The extractor-tools
+lock is bound into the signed source chain.

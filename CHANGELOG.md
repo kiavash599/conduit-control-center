@@ -11,6 +11,93 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.17] — 2026-07-14
+
+**Declared, auditable armv7 wheelhouse builder (pinned/verified inputs) + bound builder provenance.**
+
+### Added
+
+- Canonical, committed OCI builder recipe (`release/builder/Containerfile`) targeting
+  **Ubuntu 22.04 (Jammy) armhf** (glibc baseline no newer than the RPi2 target) with a
+  digest-pinned base image and pinned/verified connected inputs: apt packages by exact
+  `name=version` (unpinned fails the build), a sha256-verified `rustup-init`, and hash-pinned
+  PEP 517 backends from a non-empty `requirements-build-backends.lock` (empty/comment-only
+  fails closed). The armv7 wheel build no longer inherits undeclared RPi2 host state.
+  Full bit-for-bit image reproducibility is not claimed; the environment is content-bound and
+  the connected inputs are pinned/verified.
+- Extended fail-closed builder provenance: the wheelhouse provenance binds the committed
+  recipe (`recipe_sha256`), the pinned `base_image_digest`, the OCI `image_manifest_digest`
+  (explicitly distinct from Docker's local image/config `image_id`, which is evidence-only),
+  the committed build-backends lock (`build_backends_lock_sha256`), and an `environment`
+  manifest (captured from the executing image) with `environment_sha256`; the declared
+  build backends are cross-checked against the authorized lock and the glibc baseline is
+  enforced <= the target.
+- Controlled build tooling + runbook: `release/builder/build-builder-image.sh` (connected,
+  pinned image construction), `release/builder/build-wheelhouse-offline.sh` (offline
+  `--network=none` build; non-root, dropped capabilities, read-only inputs, bounded output,
+  RPi2 resource policy), `release/builder/extract_build_backends.py`, `release/builder/README.md`.
+
+### Changed
+
+- `release/build_wheelhouse.py` and `release/ccc_release.py` require and validate the
+  extended builder block; malformed, missing, unbound, local-image-ID-only, or legacy
+  `image_digest` provenance fails closed.
+- The builder provenance now also binds `apt_packages_sha256` and `rustup_init_file_sha256`
+  (the two remaining committed inputs), captures structured OS identity
+  (`os_id`/`os_version_id`/`arch`) and **structurally enforces** the Ubuntu 22.04 armhf/armv7l
+  (Jammy) target — not merely a non-empty OS string.
+- The raw OCI image manifest is embedded into the signed armv7 artifact
+  (`provenance/image-manifest.json`); the producer independently **recomputes**
+  `sha256(manifest) == image_manifest_digest` before signing (a local image ID cannot
+  masquerade as the manifest digest).
+- `release/builder/extract_build_backends.py` is hardened: it consumes the hash-pinned sdist
+  lock, verifies every sdist's sha256 before reading it, requires an exact bijection with the
+  lock (missing/extra/duplicate/unrecognized/mismatch fail closed), supports `.tar.*` and
+  `.zip`, and models the PEP 517 legacy default backend.
+- Phase B enforces an **explicit RAM/swap contract** (`--ram`, `--swap`; `--memory-swap` =
+  RAM+swap; swap on a swap-less host rejected before Docker). `skopeo` is an **explicit,
+  preflight-verified** prerequisite in both scripts (never auto-installed).
+- Lifecycle-aware validation of the three committed builder inputs: absent is allowed
+  pre-gate, present must pass strict semantic validation, `.example` templates are never
+  active, and release/tag production requires all three.
+- One shared, stdlib-only OCI/Docker image-manifest validator (`release/oci_manifest.py`)
+  used at all three trust boundaries (Phase A, wheelhouse self-check, producer). It parses the
+  manifest, enforces the single-image schema-2/OCI shape + descriptors, and BINDS
+  `manifest.config.digest == image_id` (the config id Phase B executes) -- a local id can no
+  longer masquerade as an unrelated manifest.
+- APT provenance is now execution-bound and architecture-aware: `${binary:Package}` identity,
+  installed-only status, `apt_architecture == armhf`, and every authorized pin proven present
+  at the byte-exact version (epoch/revision included) with strict Debian arch semantics.
+- The offline build enforces a mandatory, host-validated RAM/swap/host-reserve contract
+  (`--ram`/`--swap`/`--host-reserve`): reserve-protecting math (`RAM + reserve <= MemTotal`),
+  `RAM <= MemAvailable`, swap bounded by active `SwapTotal`/`SwapFree` with cgroup swap-limit
+  capability, all validated before any container starts; point-in-time evidence is external
+  only (never in signed artifact bytes).
+- The build-backend extractor uses a real TOML parser (stdlib `tomllib` on 3.11+, else the
+  hash-pinned `tomli` bootstrapped into an isolated venv) -- the regex fallback is gone,
+  malformed/unreadable TOML and invalid UTF-8 fail closed, and the sdist layout must be
+  unambiguous (one root, <=1 pyproject, no duplicate/unsafe members, regular-file only).
+- Independent-review corrections: the release producer now REQUIRES the extractor-tools
+  `.in` and `.lock` at the tag gate (no longer optional) and BINDS `extractor_tools_lock_sha256`
+  into the builder provenance (rejecting a missing/malformed/mismatched/substituted binding);
+  the `.in`<->lock relationship is a CLOSED authorization (exactly the hash-pinned `tomli`
+  closure, extra packages rejected); the extractor CLI wires the isolated-venv bootstrap with a
+  non-recursive re-exec; the shared manifest validator now parses JSON strictly (duplicate keys
+  at any depth and NaN/Infinity rejected); ZIP `pyproject.toml` candidates must be regular files
+  (symlink/special modes rejected) and `build-system.requires` must be non-empty strings (no
+  `str()` coercion); and swap-limit capability requires positive, attributable evidence (readable
+  cgroup control file or explicit override) — an unavailable/empty `docker info` can no longer
+  fall through as capable — with the decision recorded in external evidence, guarded against
+  input/output path collisions.
+
+### Security
+
+- The armv7 builder environment is auditable and content-addressed; a locally-built image
+  ID alone can no longer satisfy provenance. The connected image-construction / offline
+  network-isolated wheel-build trust boundary is enforced.
+
+---
+
 ## [0.3.16] — 2026-07-14
 
 **Signed V2 platform release artifacts and dependency supply-chain hardening.**

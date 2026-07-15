@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000000000000000000000000000
+# NOTE: rustup-init.sha256 example holds 64 zeros (a deliberately WRONG digest) so a
+# copy of it fails 'sha256sum -c'. The real armv7 rustup-init sha256 is filled at build.
