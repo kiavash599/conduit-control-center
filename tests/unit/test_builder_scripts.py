@@ -209,6 +209,9 @@ _FAKE_SKOPEO = (
 # `tar -tf <archive>` -> a single listing line so the lib can detect the archive transport.
 _FAKE_TAR = (
     "#!/usr/bin/env bash\n"
+    "if [[ \"$1\" == \"-tf\" && -n \"${MC_ARCHIVE_STAT_FILE:-}\" && -f \"$2\" ]]; then\n"
+    "  stat -c '%a' \"$2\" > \"$MC_ARCHIVE_STAT_FILE\"\n"      # record the created-archive mode
+    "fi\n"
     "echo \"${FAKE_ARCHIVE_KIND:-manifest.json}\"\n"
 )
 _FAKE_DOCKER = (
@@ -219,13 +222,10 @@ _FAKE_DOCKER = (
     "  image) echo \"$FAKE_IMAGE_ID\";;\n"
     "  info) exit 0;;\n"
     "  pull) exit 0;;\n"
-    "  save)\n"                                  # docker save <tag> -o <tar>
-    "    out=\"\"\n"
-    "    while [[ $# -gt 0 ]]; do\n"
-    "      if [[ \"$1\" == \"-o\" ]]; then out=\"$2\"; shift 2; continue; fi\n"
-    "      shift\n"
-    "    done\n"
-    "    [[ -n \"$out\" ]] && printf 'FAKE_DOCKER_SAVE_TARBALL' > \"$out\";;\n"
+    "  save)\n"                                  # streams to STDOUT; the root '-o' form is refused
+    "    for a in \"$@\"; do [[ \"$a\" == \"-o\" ]] && { echo 'FAKE: refusing docker save -o' >&2; exit 3; }; done\n"
+    "    [[ \"${FAKE_SAVE_FAIL:-0}\" == \"1\" ]] && exit 1\n"
+    "    printf 'FAKE_DOCKER_OCI_ARCHIVE';;\n"
     "  run)\n"
     "    out=\"\"\n"
     "    while [[ $# -gt 0 ]]; do\n"
@@ -298,6 +298,7 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
     env["FAKE_IMAGE_ID"] = image_id
     env["FAKE_MANIFEST_FILE"] = str(manifest)
     env["FAKE_ARCHIVE_KIND"] = "manifest.json"      # -> docker-archive transport
+    env["MC_ARCHIVE_STAT_FILE"] = str(tmp_path / "archive.mode")
     env["CCC_MEMINFO_PATH"] = str(meminfo)
     env["CCC_SWAPS_PATH"] = str(swaps)
     env["CCC_CGROUP2_SWAP_MAX"] = str(tmp_path / "nocg2")   # nonexistent -> no positive cgroup evidence
@@ -608,6 +609,7 @@ def _prep_phase_a(tmp_path, *, manifest=_MANIFEST_CONTENT, archive_kind="manifes
     env["FAKE_IMAGE_ID"] = image_id
     env["FAKE_MANIFEST_FILE"] = str(man)
     env["FAKE_ARCHIVE_KIND"] = archive_kind
+    env["MC_ARCHIVE_STAT_FILE"] = str(tmp_path / "archive.mode")
     return evid, log, env
 
 
@@ -696,3 +698,45 @@ def test_phase_b_reuses_recorded_transport_and_rejects_drift(tmp_path):
     r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
     assert r.returncode != 0 and "transport drift" in r.stderr
     assert _no_docker_run(log)
+
+
+def test_capture_uses_protected_user_owned_redirection_not_root_o():
+    # req: no root-created `docker save -o`; use the umask-protected user-owned redirection.
+    assert 'docker save "${tag}" -o' not in _LIB
+    assert '-o "${tar}"' not in _LIB
+    assert '( umask 077; sudo docker save "${tag}" > "${tar}" )' in _LIB
+    # tar's own diagnostic is preserved (real permission/format cause is not discarded)
+    assert 'tar -tf "${tar}" 2>/dev/null' not in _LIB
+    assert 'listing="$(tar -tf "${tar}")"' in _LIB
+
+
+@_needs_bash
+def test_capture_archive_is_user_owned_mode_600(tmp_path):
+    # The lib creates the archive via `(umask 077; sudo docker save ... > tar)`, so it is owned
+    # by the unprivileged ceremony user and mode 0600 (never a root-created 0600 file).
+    evid, log, env = _prep_phase_a(tmp_path)
+    r = _run_phase_a(env, evid)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "archive.mode").read_text().strip() == "600"
+
+
+@_needs_bash
+def test_capture_rejects_root_o_form_via_fake(tmp_path):
+    # Defensive: if the production command still used `docker save -o`, the fake refuses it and
+    # capture fails. A SUCCESSFUL run therefore proves the lib uses stdout redirection, not -o.
+    evid, log, env = _prep_phase_a(tmp_path)
+    r = _run_phase_a(env, evid)
+    assert r.returncode == 0, r.stderr
+    assert "refusing docker save -o" not in r.stderr
+
+
+@_needs_bash
+def test_phase_a_docker_save_failure_fails_closed(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path)
+    env["FAKE_SAVE_FAIL"] = "1"
+    r = _run_phase_a(env, evid)
+    assert r.returncode != 0
+    assert not (evid / "image-manifest.json").exists()
+    assert not (evid / "builder-inputs.env").exists()
+    assert "docker build" not in log.read_text()      # aborted at the preflight capture
+    assert _no_temp_left(evid)

@@ -5,7 +5,8 @@
 #
 # The incompatible `skopeo inspect --raw docker-daemon:` transport (rejected by modern Docker's
 # minimum API version) is replaced by a LOCAL-ARCHIVE flow that needs no daemon-API negotiation:
-#   docker save <tag> -> detect archive transport (oci-archive | docker-archive) -> skopeo
+#   docker save <tag> (streamed to an unprivileged user-owned fd) -> detect archive transport
+#   (oci-archive | docker-archive) -> skopeo
 #   inspect --raw <transport>:<tar> -> shared oci_manifest gate (config.digest == image_id).
 #
 # Load-bearing invariant PRESERVED: manifest.config.digest == image_id (the config blob is the
@@ -21,7 +22,8 @@ _MC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # neither an OCI layout nor a legacy docker-save archive.
 mc_detect_transport() {   # <tar> -> echoes "oci-archive" | "docker-archive"
   local tar="$1" listing
-  listing="$(tar -tf "${tar}" 2>/dev/null)" || { echo "ERROR: cannot list archive: ${tar}" >&2; return 1; }
+  # tar's stderr is intentionally NOT discarded, so a permission/format failure keeps its cause.
+  listing="$(tar -tf "${tar}")" || { echo "ERROR: cannot list archive: ${tar}" >&2; return 1; }
   if grep -qE '(^|/)oci-layout$' <<<"${listing}"; then echo "oci-archive"; return 0; fi
   if grep -qE '(^|/)manifest\.json$' <<<"${listing}"; then echo "docker-archive"; return 0; fi
   echo "ERROR: unrecognized 'docker save' archive (neither OCI layout nor docker archive): ${tar}" >&2
@@ -47,7 +49,10 @@ capture_manifest() {
   trap 'rm -rf "${tmpd}"' RETURN
   tar="${tmpd}/image.tar"; manifest="${tmpd}/manifest.json"
 
-  sudo docker save "${tag}" -o "${tar}" \
+  # The redirection is opened by THIS unprivileged shell, so the archive is owned by the
+  # ceremony user; umask 077 makes it mode 0600. `docker save` (via sudo) streams the archive to
+  # that fd, so the file is never root-created. The subshell's status is docker save's status.
+  ( umask 077; sudo docker save "${tag}" > "${tar}" ) \
     || { echo "ERROR: 'docker save ${tag}' failed" >&2; return 1; }
   [[ -s "${tar}" ]] || { echo "ERROR: 'docker save' produced an empty archive" >&2; return 1; }
 
