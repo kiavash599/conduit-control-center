@@ -94,6 +94,9 @@ require_tool() {
 require_tool docker    "sudo apt-get install docker.io  OR the official Docker engine"
 require_tool skopeo    "sudo apt-get install skopeo (Jammy: skopeo 1.4.1-ubuntu)"
 require_tool sha256sum "coreutils"
+require_tool tar       "tar (coreutils)"
+# shellcheck source=manifest-capture.lib.sh
+source "${HERE}/manifest-capture.lib.sh"
 
 # --- Finding 3: mandatory, host-validated RAM/swap/host-reserve contract (before Docker) ---
 : "${RAM:?--ram is required (no default)}"
@@ -170,11 +173,20 @@ source "${INPUTS}"
 : "${SDIST_DIR:?--sdist-dir required}"; : "${OUT_DIR:?--out-dir required}"; : "${PROV_OUT:?--provenance-out required}"
 mkdir -p "${OUT_DIR}"
 
-# --- re-verify the tag STILL maps to the captured id AND manifest digest (no substitution) ---
+# --- re-verify the tag STILL maps to the captured image id (immutable execution target) ---
 CUR_ID="$(sudo docker image inspect --format '{{.Id}}' "${CCC_IMAGE_TAG}")"
 [[ "${CUR_ID}" == "${CCC_IMAGE_ID}" ]] || {
   echo "ERROR: tag ${CCC_IMAGE_TAG} no longer maps to the Phase-A image id (got ${CUR_ID})" >&2; exit 1; }
-CUR_MANIFEST_DIGEST="sha256:$(sudo skopeo inspect --raw "docker-daemon:${CCC_IMAGE_TAG}" | sha256sum | cut -d' ' -f1)"
+# Re-capture through the SAME shared contract, REUSING the transport recorded by Phase A (a
+# different representation must not silently pass), then confirm no manifest-digest drift. The
+# shared contract re-asserts config.digest == image_id; the temp recapture is auto-cleaned.
+: "${CCC_MANIFEST_CAPTURE_TRANSPORT:?Phase-A evidence missing CCC_MANIFEST_CAPTURE_TRANSPORT}"
+if ! RECAP_OUT="$(capture_manifest "${CCC_IMAGE_TAG}" "${CCC_IMAGE_ID}" "${OUT_DIR}/.recap-manifest.json" "${CCC_MANIFEST_CAPTURE_TRANSPORT}")"; then
+  rm -f "${OUT_DIR}/.recap-manifest.json"
+  echo "ERROR: Phase-B manifest re-capture/validation failed (transport ${CCC_MANIFEST_CAPTURE_TRANSPORT})" >&2; exit 1
+fi
+rm -f "${OUT_DIR}/.recap-manifest.json"
+CUR_MANIFEST_DIGEST="$(sed -n 's/^MANIFEST_DIGEST=//p' <<<"${RECAP_OUT}")"
 [[ "${CUR_MANIFEST_DIGEST}" == "${CCC_IMAGE_MANIFEST_DIGEST}" ]] || {
   echo "ERROR: manifest digest drift (Phase A ${CCC_IMAGE_MANIFEST_DIGEST}, now ${CUR_MANIFEST_DIGEST})" >&2; exit 1; }
 

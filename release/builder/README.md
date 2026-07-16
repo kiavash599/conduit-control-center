@@ -28,13 +28,26 @@ records `skopeo --version` in the evidence.
 
 **Phase A — connected construction** (`build-builder-image.sh`, network on):
 builds the image from `Containerfile` with a **digest-pinned** base
-(`--base-image ...@sha256:<64hex>`; unpinned fails closed), records the **OCI image
-MANIFEST digest** (via `skopeo inspect docker-daemon:`, the authoritative value — *not*
-the Docker local image ID, captured only as evidence), and captures the environment
-manifest (OS, python, rustc, cargo, gcc, apt versions, all installed PEP 517 backends).
-Immediately after capture it runs the shared validator (`release/oci_manifest.py`): the raw
-manifest must be a valid single-image schema-2/OCI manifest AND `manifest.config.digest` must
-equal the captured `image_id`; on failure Phase A exits nonzero and writes NO success record.
+(`--base-image ...@sha256:<64hex>`; unpinned fails closed) and captures the raw image manifest
+via the shared, fail-closed capture contract (`manifest-capture.lib.sh`):
+`docker save` → **detected archive transport** (`oci-archive` or `docker-archive`, chosen
+explicitly and recorded in evidence) → `skopeo inspect --raw <transport>:<tar>`. The obsolete
+`skopeo … docker-daemon:` transport is **removed**: modern Docker rejects Jammy skopeo's old
+client API version, and the local-archive flow needs no daemon-API negotiation. A **fail-fast
+interoperability smoke test** runs this exact path against the digest-pinned base image *before*
+the expensive build, so a tooling mismatch aborts in seconds. The captured manifest is validated
+by the shared `release/oci_manifest.py` gate: valid single-image schema-2/OCI manifest AND
+`manifest.config.digest == image_id` (the **load-bearing** binding — the config blob is the
+image's identity, invariant across representations; `image_manifest_digest` is a
+mechanism-consistent evidence value). Phase B re-captures through the **same** contract, reusing
+the recorded transport. `image-manifest.json` and `builder-inputs.env` are written **atomically**
+(temp → validate → rename), so a failed capture leaves no zero-byte final artifact. Phase A also
+captures the environment manifest (OS, python, rustc, cargo, gcc, apt versions, PEP 517 backends).
+
+**One-time RPi2 empirical gate:** the first corrected ceremony must confirm on the RPi2 that
+`docker save` + the detected archive transport yields `manifest.config.digest == docker image
+.Id`. The gate already asserts this and fails closed if it does not hold, so there is no silent
+acceptance — but it has not yet been empirically observed on-hardware.
 
 **Phase B — offline wheel build** (`build-wheelhouse-offline.sh`, `--network=none`):
 runs `release/build_wheelhouse.py` inside the Phase-A image with the authorized,

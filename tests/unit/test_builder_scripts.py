@@ -17,6 +17,7 @@ Three layers:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -41,7 +42,7 @@ _needs_bash = pytest.mark.skipif(_bash is None, reason="bash required")
 # --------------------------------------------------------------------------- #
 @_needs_bash
 def test_scripts_parse():
-    for s in ("build-builder-image.sh", "build-wheelhouse-offline.sh"):
+    for s in ("build-builder-image.sh", "build-wheelhouse-offline.sh", "manifest-capture.lib.sh"):
         r = subprocess.run([_bash, "-n", str(_B / s)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
@@ -187,14 +188,28 @@ def test_no_committed_active_inputs_yet_but_lifecycle_valid():
 # --------------------------------------------------------------------------- #
 #  Finding 7: behavioral script-contract tests (fake sudo/docker/skopeo)      #
 # --------------------------------------------------------------------------- #
-_MANIFEST_CONTENT = b'{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}'
-_MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST_CONTENT).hexdigest()
 _IMG_ID = "sha256:" + "1" * 64
+# Full, valid single-image manifest whose config.digest == image_id (the shared oci_manifest
+# gate now runs in BOTH phases via the capture contract, so the fake must be a real manifest).
+_MANIFEST_CONTENT = json.dumps({
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+    "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
+               "digest": _IMG_ID, "size": 1234},
+    "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                "digest": "sha256:" + "a" * 64, "size": 5678}],
+}).encode()
+_MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST_CONTENT).hexdigest()
 _FAKE_SUDO = "#!/usr/bin/env bash\nexec \"$@\"\n"
 _FAKE_SKOPEO = (
     "#!/usr/bin/env bash\n"
     "if [[ \"$1\" == \"--version\" ]]; then echo 'skopeo version 1.4.1'; exit 0; fi\n"
-    "cat \"$FAKE_MANIFEST_FILE\"\n"
+    "cat \"$FAKE_MANIFEST_FILE\"\n"          # inspect --raw <transport>:<tar> -> raw manifest
+)
+# `tar -tf <archive>` -> a single listing line so the lib can detect the archive transport.
+_FAKE_TAR = (
+    "#!/usr/bin/env bash\n"
+    "echo \"${FAKE_ARCHIVE_KIND:-manifest.json}\"\n"
 )
 _FAKE_DOCKER = (
     "#!/usr/bin/env bash\n"
@@ -203,6 +218,14 @@ _FAKE_DOCKER = (
     "case \"$sub\" in\n"
     "  image) echo \"$FAKE_IMAGE_ID\";;\n"
     "  info) exit 0;;\n"
+    "  pull) exit 0;;\n"
+    "  save)\n"                                  # docker save <tag> -o <tar>
+    "    out=\"\"\n"
+    "    while [[ $# -gt 0 ]]; do\n"
+    "      if [[ \"$1\" == \"-o\" ]]; then out=\"$2\"; shift 2; continue; fi\n"
+    "      shift\n"
+    "    done\n"
+    "    [[ -n \"$out\" ]] && printf 'FAKE_DOCKER_SAVE_TARBALL' > \"$out\";;\n"
     "  run)\n"
     "    out=\"\"\n"
     "    while [[ $# -gt 0 ]]; do\n"
@@ -238,11 +261,13 @@ def _write_meminfo(path, *, mem_total=4000000, mem_available=3500000,
 
 
 def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
+    # (FAKE_ARCHIVE_KIND / FAKE_MANIFEST_FILE may be overridden by callers via the returned env)
     binp = tmp_path / "bin"
     binp.mkdir()
     _mkbin(binp, "sudo", _FAKE_SUDO)
     _mkbin(binp, "docker", _FAKE_DOCKER)
     _mkbin(binp, "skopeo", _FAKE_SKOPEO)
+    _mkbin(binp, "tar", _FAKE_TAR)
     manifest = tmp_path / "image-manifest.json"
     manifest.write_bytes(_MANIFEST_CONTENT)
     evid = tmp_path / "evidence"
@@ -254,7 +279,8 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
         "CCC_IMAGE_TAG=ccc:local\n"
         "CCC_IMAGE_ID=%s\n" % _IMG_ID +
         "CCC_IMAGE_MANIFEST=%s\n" % manifest +
-        "CCC_IMAGE_MANIFEST_DIGEST=%s\n" % _MANIFEST_DIGEST)
+        "CCC_IMAGE_MANIFEST_DIGEST=%s\n" % _MANIFEST_DIGEST +
+        "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive\n")
     sdist = tmp_path / "sdists"
     sdist.mkdir()
     lock = tmp_path / "build.lock"
@@ -271,6 +297,7 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
     env["DOCKER_LOG"] = str(log)
     env["FAKE_IMAGE_ID"] = image_id
     env["FAKE_MANIFEST_FILE"] = str(manifest)
+    env["FAKE_ARCHIVE_KIND"] = "manifest.json"      # -> docker-archive transport
     env["CCC_MEMINFO_PATH"] = str(meminfo)
     env["CCC_SWAPS_PATH"] = str(swaps)
     env["CCC_CGROUP2_SWAP_MAX"] = str(tmp_path / "nocg2")   # nonexistent -> no positive cgroup evidence
@@ -543,3 +570,129 @@ def test_allowlist_lifecycle_grammar_only_when_lock_absent(tmp_path):
     st = R.validate_builder_inputs(str(tmp_path), require_present=False)
     assert st["requirements-build-backends.source-allowlist"] == "present"
     assert st["requirements-build-backends.lock"] == "absent"
+
+
+# --------------------------------------------------------------------------- #
+#  Manifest-capture correction: docker save -> archive transport -> skopeo     #
+#  (no docker-daemon transport), fail-fast preflight, atomic evidence.         #
+# --------------------------------------------------------------------------- #
+_LIB = (_B / "manifest-capture.lib.sh").read_text(encoding="utf-8")
+_BASE = "docker.io/arm32v7/ubuntu:22.04@sha256:" + "f" * 64
+
+
+def test_no_docker_daemon_transport_in_executable_paths():
+    # req 8: the executable docker-daemon capture path is gone everywhere; only the local
+    # archive flow remains (lib comments may mention the old transport for context).
+    for sh in (_PHASE_A, _PHASE_B, _LIB):
+        assert "docker-daemon:${" not in sh
+        assert 'skopeo inspect --raw "docker-daemon:' not in sh
+    assert "docker save" in _LIB and 'skopeo inspect --raw "${transport}:' in _LIB
+
+
+def _prep_phase_a(tmp_path, *, manifest=_MANIFEST_CONTENT, archive_kind="manifest.json",
+                  image_id=_IMG_ID):
+    binp = tmp_path / "bin"
+    binp.mkdir()
+    _mkbin(binp, "sudo", _FAKE_SUDO)
+    _mkbin(binp, "docker", _FAKE_DOCKER)
+    _mkbin(binp, "skopeo", _FAKE_SKOPEO)
+    _mkbin(binp, "tar", _FAKE_TAR)
+    man = tmp_path / "fake-manifest.json"
+    man.write_bytes(manifest)
+    evid = tmp_path / "evidence"
+    evid.mkdir()
+    log = tmp_path / "docker.log"
+    env = dict(os.environ)
+    env["PATH"] = str(binp) + os.pathsep + env["PATH"]
+    env["DOCKER_LOG"] = str(log)
+    env["FAKE_IMAGE_ID"] = image_id
+    env["FAKE_MANIFEST_FILE"] = str(man)
+    env["FAKE_ARCHIVE_KIND"] = archive_kind
+    return evid, log, env
+
+
+def _run_phase_a(env, evid, *, base=_BASE, tag="ccc:t"):
+    cmd = [_bash, str(_B / "build-builder-image.sh"),
+           "--base-image", base, "--tag", tag, "--evidence-dir", str(evid)]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(_ROOT))
+
+
+def _no_temp_left(evid):
+    names = [p.name for p in evid.iterdir()]
+    return not any(n.startswith(".mc.") or n.startswith(".smoke-manifest")
+                   or ".builder-inputs.env.tmp" in n or n.endswith(".tmp") for n in names)
+
+
+@_needs_bash
+def test_phase_a_success_records_transport_and_atomic_evidence(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path)
+    r = _run_phase_a(env, evid)
+    assert r.returncode == 0, r.stderr
+    assert (evid / "image-manifest.json").read_bytes() == _MANIFEST_CONTENT
+    inp = (evid / "builder-inputs.env").read_text()
+    assert "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive" in inp
+    assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_a_preflight_capture_runs_before_docker_build(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path)
+    r = _run_phase_a(env, evid)
+    assert r.returncode == 0, r.stderr
+    lines = log.read_text().splitlines()
+    first_save = next(i for i, ln in enumerate(lines) if ln.startswith("docker save"))
+    first_build = next(i for i, ln in enumerate(lines) if ln.startswith("docker build"))
+    assert first_save < first_build   # interop smoke capture precedes the expensive build
+
+
+@_needs_bash
+def test_phase_a_oci_archive_transport_detected_and_recorded(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path, archive_kind="oci-layout")
+    r = _run_phase_a(env, evid)
+    assert r.returncode == 0, r.stderr
+    assert "CCC_MANIFEST_CAPTURE_TRANSPORT=oci-archive" in (evid / "builder-inputs.env").read_text()
+
+
+@_needs_bash
+def test_phase_a_unrecognized_archive_fails_before_build(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path, archive_kind="not-an-image.txt")
+    r = _run_phase_a(env, evid)
+    assert r.returncode != 0
+    assert not (evid / "image-manifest.json").exists()
+    assert not (evid / "builder-inputs.env").exists()
+    assert "docker build" not in log.read_text()      # aborted at preflight
+    assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_a_config_digest_mismatch_fails_atomic_no_evidence(tmp_path):
+    # manifest.config.digest != image_id -> shared gate fails -> abort at preflight, no artifacts
+    bad = _MANIFEST_CONTENT.replace(_IMG_ID.encode(), (b"sha256:" + b"e" * 64))
+    evid, log, env = _prep_phase_a(tmp_path, manifest=bad)
+    r = _run_phase_a(env, evid)
+    assert r.returncode != 0
+    assert not (evid / "image-manifest.json").exists()
+    assert not (evid / "builder-inputs.env").exists()
+    assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_a_zero_byte_capture_rejected_atomic(tmp_path):
+    evid, log, env = _prep_phase_a(tmp_path, manifest=b"")
+    r = _run_phase_a(env, evid)
+    assert r.returncode != 0
+    assert not (evid / "image-manifest.json").exists()
+    assert not (evid / "builder-inputs.env").exists()
+    assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_b_reuses_recorded_transport_and_rejects_drift(tmp_path):
+    # builder-inputs.env recorded docker-archive; a Phase-B capture that detects oci-archive
+    # (representation drift) must fail rather than silently accept a different representation.
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    env["FAKE_ARCHIVE_KIND"] = "oci-layout"           # detected transport now differs
+    prov = tmp_path / "prov.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0 and "transport drift" in r.stderr
+    assert _no_docker_run(log)

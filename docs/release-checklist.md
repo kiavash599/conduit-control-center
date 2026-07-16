@@ -70,7 +70,10 @@ wheelhouse offline with `release/builder/build-wheelhouse-offline.sh` (`--networ
 RAM/swap contract is mandatory: `--ram <RAM> --swap <extra> --host-reserve <reserve>
 --resource-evidence <path>`, host-validated — RAM+reserve ≤ MemTotal, RAM ≤ MemAvailable, swap
 bounded by active SwapTotal/SwapFree + cgroup capability — before Docker runs). Phase A also runs
-the shared `release/oci_manifest.py` gate (`config.digest == image_id`). See
+the shared `release/oci_manifest.py` gate (`config.digest == image_id`). Manifest capture uses
+`docker save` → detected archive transport → `skopeo inspect --raw` (no `docker-daemon:`
+transport), with a fail-fast interop smoke test before the build and atomic evidence writes; the
+first corrected ceremony must confirm on-RPi2 that `config.digest == docker image .Id`. See
 `release/builder/README.md`.
 The produced `provenance/wheelhouse-armv7.json` binds recipe/base/manifest/environment and is
 validated by the producer before signing.
