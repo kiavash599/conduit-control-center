@@ -347,6 +347,7 @@ APT_PACKAGES_PATH = "release/builder/apt-packages.list"
 RUSTUP_SHA_PATH = "release/builder/rustup-init.sha256"
 EXTRACTOR_TOOLS_IN_PATH = "release/builder/requirements-extractor-tools.in"
 EXTRACTOR_TOOLS_LOCK_PATH = "release/builder/requirements-extractor-tools.lock"
+BACKEND_SOURCE_ALLOWLIST_PATH = "release/builder/requirements-build-backends.source-allowlist"
 TARGET_GLIBC = "2.35"                # Ubuntu 22.04 (Jammy) armhf baseline
 TARGET_OS_ID = "ubuntu"
 TARGET_OS_VERSION = "22.04"
@@ -367,7 +368,8 @@ TARGET_DPKG_ARCH = "armhf"   # dpkg --print-architecture on the Jammy armhf buil
 # --------------------------------------------------------------------------- #
 BUILDER_DIR = "release/builder"
 BUILDER_INPUT_FILES = ("apt-packages.list", "rustup-init.sha256",
-                       "requirements-build-backends.lock")
+                       "requirements-build-backends.lock",
+                       "requirements-build-backends.source-allowlist")
 _PLACEHOLDER_TOKENS = ("example", "placeholder", "replace-me", "replaceme",
                        "changeme", "todo", "your-", "<")
 
@@ -451,10 +453,52 @@ def validate_extractor_tools_lock(lock_text: str, in_text: str) -> None:
                 f"extractor-tools lock pins {name} {lock_versions[name]!r} but .in requests {ver!r}")
 
 
+_ALLOWLIST_NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def _normalize_pep503(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def validate_backend_source_allowlist(allowlist_text: str, lock_text: str = None) -> None:
+    """The committed backend source-allowlist authorizes specific build backends to be
+    installed from a hash-pinned SDIST (source-built) because no official target wheel exists.
+    Strict, fail-closed: names must ALREADY equal their PEP 503-normalized form (noncanonical
+    spellings like ``CFFI`` or underscores are REJECTED, never silently normalized), non-empty,
+    no duplicates, no malformed entries. When ``lock_text`` is provided, also enforce EXACT USE
+    -- every allowlisted backend MUST be pinned in the committed requirements-build-backends.lock
+    (an unused/unknown entry is rejected). ``lock_text=None`` performs grammar-only validation
+    (lifecycle/pre-gate, where the lock may not yet exist)."""
+    names, seen = [], set()
+    for raw in allowlist_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not _ALLOWLIST_NAME_RE.fullmatch(line):
+            raise ReleaseError(f"backend source-allowlist: malformed entry {raw!r}")
+        norm = _normalize_pep503(line)
+        if line != norm:
+            raise ReleaseError(f"backend source-allowlist: non-canonical entry {line!r} "
+                               f"(must already be PEP 503-normalized: {norm!r})")
+        if norm in seen:
+            raise ReleaseError(f"backend source-allowlist: duplicate entry {norm!r}")
+        seen.add(norm)
+        names.append(norm)
+    if not names:
+        raise ReleaseError("backend source-allowlist is empty")
+    if lock_text is not None:
+        lock_names = {_normalize_pep503(k) for k in _parse_lock_pins(lock_text)}
+        unused = [n for n in names if n not in lock_names]
+        if unused:
+            raise ReleaseError(f"backend source-allowlist entries not pinned in the backend lock "
+                               f"(unused/unauthorized): {sorted(unused)}")
+
+
 _INPUT_VALIDATORS = {
     "apt-packages.list": validate_apt_packages_list,
     "rustup-init.sha256": validate_rustup_sha,
     "requirements-build-backends.lock": validate_build_backends_lock,
+    "requirements-build-backends.source-allowlist": validate_backend_source_allowlist,
 }
 
 
@@ -478,7 +522,18 @@ def validate_builder_inputs(builder_dir: str, *, require_present: bool) -> dict:
             continue
         with open(path, "rb") as fh:
             text = fh.read().decode("utf-8", "replace")
-        _INPUT_VALIDATORS[name](text)
+        if name == "requirements-build-backends.source-allowlist":
+            # Lock-aware: grammar-only when the backend lock is absent (pre-tag dev, allowlist
+            # committed first); grammar PLUS exact-use whenever the lock is present. Because the
+            # lock is itself a required input, exact-use is MANDATORY at require_present=True.
+            lock_path = os.path.join(builder_dir, "requirements-build-backends.lock")
+            lock_text = None
+            if os.path.isfile(lock_path):
+                with open(lock_path, "rb") as _lf:
+                    lock_text = _lf.read().decode("utf-8", "replace")
+            validate_backend_source_allowlist(text, lock_text)
+        else:
+            _INPUT_VALIDATORS[name](text)
         status[name] = "present"
     return status
 
@@ -570,7 +625,8 @@ def _validate_apt_environment(authorized_text: str, env: dict) -> None:
 def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_lock_sha256: str,
                       build_backends_lock_text: str, apt_packages_sha256: str,
                       rustup_init_file_sha256: str, apt_packages_text: str,
-                      extractor_tools_lock_sha256: str, manifest_bytes=None) -> None:
+                      extractor_tools_lock_sha256: str,
+                      build_backends_source_allowlist_sha256: str, manifest_bytes=None) -> None:
     """Fail-closed validation of the builder provenance block. Binds the builder to
     the COMMITTED recipe and the COMMITTED build-backends lock (by sha256), the pinned
     base image, the OCI image MANIFEST digest (independently recomputed from the OCI
@@ -602,6 +658,11 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
        or builder["extractor_tools_lock_sha256"] != extractor_tools_lock_sha256:
         raise ReleaseError("provenance.builder.extractor_tools_lock_sha256 must match the committed "
                            "requirements-extractor-tools.lock (missing/malformed/mismatched/substituted)")
+    if not _is_hex64(builder.get("build_backends_source_allowlist_sha256")) \
+       or builder["build_backends_source_allowlist_sha256"] != build_backends_source_allowlist_sha256:
+        raise ReleaseError("provenance.builder.build_backends_source_allowlist_sha256 must match the "
+                           "committed requirements-build-backends.source-allowlist "
+                           "(missing/malformed/mismatched/substituted)")
     if not _is_oci_digest(builder.get("base_image_digest")):
         raise ReleaseError("provenance.builder.base_image_digest must be 'sha256:<64 lowercase hex>'")
     if not _is_oci_digest(builder.get("image_manifest_digest")):
@@ -665,6 +726,7 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                          build_backends_lock_sha256: str, build_backends_lock_text: str,
                          apt_packages_sha256: str, rustup_init_file_sha256: str,
                          apt_packages_text: str, extractor_tools_lock_sha256: str,
+                         build_backends_source_allowlist_sha256: str,
                          image_manifest_bytes=None) -> None:
     """Strict, fail-closed provenance schema + cross-check against the ACTUAL
     embedded wheelhouse and its SHA256SUMS.
@@ -689,6 +751,7 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                       rustup_init_file_sha256=rustup_init_file_sha256,
                       apt_packages_text=apt_packages_text,
                       extractor_tools_lock_sha256=extractor_tools_lock_sha256,
+                      build_backends_source_allowlist_sha256=build_backends_source_allowlist_sha256,
                       manifest_bytes=image_manifest_bytes)
     bundle = obj.get("bundle")
     if not isinstance(bundle, dict) or bundle.get("sha256") != bundle_sha256:
@@ -1176,6 +1239,14 @@ def produce_release(
     validate_extractor_tools_lock(_ext_lock.decode("utf-8", "replace"),
                                   _ext_in.decode("utf-8", "replace"))
     extractor_tools_lock_sha = sha256_hex(_ext_lock)
+    # The backend source-allowlist is a REQUIRED, security-relevant committed input: it must
+    # exist, parse strictly, and every allowlisted backend must be pinned in the backend lock.
+    _allowlist = canon.get(BACKEND_SOURCE_ALLOWLIST_PATH)
+    if _allowlist is None:
+        raise ReleaseError(f"committed backend source-allowlist missing from source: "
+                           f"{BACKEND_SOURCE_ALLOWLIST_PATH}")
+    validate_backend_source_allowlist(_allowlist.decode("utf-8", "replace"), bb_lock_text)
+    backend_source_allowlist_sha = sha256_hex(_allowlist)
     # The raw OCI image manifest is embedded into the SIGNED artifact so the producer
     # (and any later auditor) can INDEPENDENTLY recompute image_manifest_digest (finding 4).
     if not image_manifest_path or not os.path.isfile(image_manifest_path):
@@ -1198,6 +1269,7 @@ def produce_release(
     _validate_provenance(prov_obj, wh_members, bundle_sha, build_lock_text, recipe_sha,
                          bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
                          apt_pkgs_bytes.decode("utf-8", "replace"), extractor_tools_lock_sha,
+                         backend_source_allowlist_sha,
                          image_manifest_bytes=image_manifest_bytes)
     provenance_sha = sha256_hex(prov_bytes)
     if not armv7_runtime_lock_path or not os.path.isfile(armv7_runtime_lock_path):

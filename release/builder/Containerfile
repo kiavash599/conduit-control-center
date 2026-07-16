@@ -50,13 +50,30 @@ RUN arch=armv7-unknown-linux-gnueabihf; \
     /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
     rm -f /tmp/rustup-init; rustc --version; cargo --version
 
-# --- PEP 517 build backends: reject empty/comment-only, then hash-pinned install ---
+# --- PEP 517 build backends: reject empty/comment-only, then a TWO-PASS hash-pinned install ---
+# The committed source-allowlist authorizes specific backends (e.g. cffi) to source-build from
+# a hash-pinned sdist because no official target wheel exists. partition_backends.py splits the
+# lock into a disjoint WHEEL partition and a SOURCE partition (== the allowlist exactly). Pass 1
+# installs every wheel (build deps present FIRST); Pass 2 source-builds the allowlisted sdists
+# with build isolation OFF and no implicit dependency resolution/fetch. Both --require-hashes
+# --no-deps, so only the explicitly authorized, hash-pinned artifacts are ever fetched.
 ENV CARGO_BUILD_JOBS=1 MAKEFLAGS=-j1 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 COPY requirements-build-backends.lock /opt/ccc/requirements-build-backends.lock
+COPY requirements-build-backends.source-allowlist /opt/ccc/requirements-build-backends.source-allowlist
+COPY partition_backends.py /opt/ccc/partition_backends.py
 RUN python3 -c "import sys; L=[l for l in open('/opt/ccc/requirements-build-backends.lock') if l.strip() and not l.lstrip().startswith('#')]; sys.exit(0 if L else 1)" \
       || { echo 'ERROR: empty/comment-only build-backends lock (fail closed)' >&2; exit 1; }; \
-    python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all: \
-        -r /opt/ccc/requirements-build-backends.lock
+    python3 /opt/ccc/partition_backends.py \
+        --lock /opt/ccc/requirements-build-backends.lock \
+        --allowlist /opt/ccc/requirements-build-backends.source-allowlist \
+        --wheel-out /opt/ccc/backends.wheel.txt \
+        --source-out /opt/ccc/backends.source.txt; \
+    python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all: --no-deps \
+        -r /opt/ccc/backends.wheel.txt; \
+    if [ -s /opt/ccc/backends.source.txt ]; then \
+        python3 -m pip install --no-cache-dir --require-hashes --no-binary=:all: \
+            --no-build-isolation --no-deps -r /opt/ccc/backends.source.txt; \
+    fi
 
 RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin builder \
     && mkdir -p /work && chown -R builder:builder /work

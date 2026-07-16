@@ -82,7 +82,7 @@ Commit both at the repo root. Also commit the **three active builder inputs** â€
 `release/builder/{apt-packages.list,rustup-init.sha256,requirements-build-backends.lock}` â€” with
 real validated values (never the `.example` placeholders); `validate_builder_inputs` and CI must
 accept them. Also commit `release/builder/requirements-extractor-tools.{in,lock}` (the pinned tomli
-parser) before running extraction. Let CI go green, THEN tag `vX.Y.Z` (two-commit sequence). The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
+parser) before running extraction. Also commit `release/builder/requirements-build-backends.source-allowlist` (backends with no official target wheel, e.g. `cffi`); the generation gate must prove no compatible wheel exists (drift fails closed) and the image installs backends in two ordered `--require-hashes` passes. Let CI go green, THEN tag `vX.Y.Z` (two-commit sequence). The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
 committed; it is produced with the wheelhouse and passed at build time via `--armv7-runtime-lock`
 (injected + digest-bound). Do NOT commit placeholder/0.0.0 locks (release-input gate).
 

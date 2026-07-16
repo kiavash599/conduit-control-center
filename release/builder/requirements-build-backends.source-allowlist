@@ -1,0 +1,9 @@
+# Build backends authorized to install from a HASH-PINNED sdist (source-built in the
+# controlled builder image, Phase A) because no official wheel exists for the exact target
+# interpreter/platform. Keep this list MINIMAL and justify every entry; allowlist drift
+# (an entry that gains an official target wheel) is caught and fails generation.
+#
+#   cffi -- cryptography 48.0.1 declares `cffi>=2.0.0` in [build-system].requires; PyPI
+#           publishes no CPython 3.10 armv7l/armhf wheel, so cffi is source-built from its
+#           hash-pinned sdist against the pre-installed, locked build closure.
+cffi

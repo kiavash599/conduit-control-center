@@ -149,6 +149,18 @@ bijection with the lock. It reads both `.tar.*` and `.zip` sdists, and models th
 `release/gen_locks.py`) into `requirements-build-backends.lock`, which the image installs
 `--require-hashes`. Until populated, the image build fails closed.
 
+**Source-authorized backends (no official target wheel).** A backend with no official wheel for
+the exact target (currently `cffi`, from cryptography's `[build-system].requires`) source-builds
+from a **hash-pinned sdist** via the committed, minimal `requirements-build-backends.source-allowlist`
+(strict PEP 503 names). Generation proves — using pip's **complete** effective compatibility-tag
+set for the target, never a hand-enumerated list — that each allowlisted package has no compatible
+official wheel, records the target tags + result to external evidence, and **fails on drift**. The
+image installs in two ordered passes: `partition_backends.py` splits the lock into a disjoint WHEEL
+partition (`--require-hashes --only-binary=:all: --no-deps`, installed FIRST so build deps exist)
+and the SOURCE partition (`--require-hashes --no-binary=:all: --no-build-isolation --no-deps`) —
+build isolation off, no implicit resolution/fetch, so only the authorized hash-pinned sdist is
+fetched. The allowlist sha256 is bound in provenance and required by the producer.
+
 ## Not run here
 
 No image pulled/built, no container run, no wheel built, no Docker started, no Pi

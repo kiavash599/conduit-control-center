@@ -180,3 +180,13 @@ cgroup-capability-checked, evidence external only); (4) build-backend extraction
 TOML parser (stdlib `tomllib` or the hash-pinned `tomli` bootstrapped into an isolated venv;
 no regex fallback), strict-UTF-8 decoding, and an unambiguous sdist layout. The extractor-tools
 lock is bound into the signed source chain.
+
+**Amendment A3 (authorized backend-sdist allowlist).** Build backends with no official wheel for
+the exact target (currently `cffi`) install from a hash-pinned sdist authorized by the committed,
+minimal `requirements-build-backends.source-allowlist`. A generation gate proves, via pip's
+complete effective compatibility-tag set, that each allowlisted package has no compatible official
+wheel (drift fails closed) and records external evidence. The image installs in two ordered,
+disjoint passes (wheels first `--only-binary --no-deps`, then the allowlisted sdists `--no-binary
+--no-build-isolation --no-deps`, both `--require-hashes`) — no build isolation, no implicit
+dependency resolution/fetch. The allowlist sha256 is bound in the builder provenance and required
++ validated by the producer. The SRT signing model and V2 platform architecture are unchanged.

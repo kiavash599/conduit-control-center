@@ -28,6 +28,8 @@ _RUSTUP_SHA = R.sha256_hex(R._to_lf(_RUSTUP.encode()))
 _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
+_ALLOWLIST = "maturin\n"
+_ALLOWLIST_SHA = R.sha256_hex(_ALLOWLIST.encode())
 _BASE = "sha256:" + "b" * 64
 _IMAGE_ID = "sha256:" + "d" * 64
 def _manifest_bytes(image_id):
@@ -57,7 +59,8 @@ def _probe():
     return dict(_ENV)
 
 
-def _setup(tmp_path, *, lock=None, sdists=None, bb_lock=_BB_LOCK, manifest=_MANIFEST_BYTES):
+def _setup(tmp_path, *, lock=None, sdists=None, bb_lock=_BB_LOCK, manifest=_MANIFEST_BYTES,
+           allowlist=_ALLOWLIST):
     base = pathlib.Path(tempfile.mkdtemp(dir=str(tmp_path)))
     sdir = base / "sdists"
     sdir.mkdir()
@@ -66,6 +69,7 @@ def _setup(tmp_path, *, lock=None, sdists=None, bb_lock=_BB_LOCK, manifest=_MANI
     (base / "apt-packages.list").write_text(_APT)
     (base / "rustup-init.sha256").write_text(_RUSTUP)
     (base / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
+    (base / "requirements-build-backends.source-allowlist").write_text(allowlist)
     (base / "image-manifest.json").write_bytes(manifest)
     sh = {}
     for nm, data in (sdists or {"fastapi-0.133.0.tar.gz": b"SDIST"}).items():
@@ -84,6 +88,7 @@ def _run(tmp_path, *, build_fn=_good_build_fn, identity="ccc-builder", base=_BAS
         build_backends_lock_path=str(d / "requirements-build-backends.lock"),
         apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+        build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
         builder_identity=identity, base_image_digest=base,
         image_manifest_path=str(d / "image-manifest.json"), image_id=image_id,
         env_probe=env_probe or _probe, build_fn=build_fn)
@@ -100,7 +105,8 @@ def test_build_ok_and_round_trips(tmp_path):
     R._validate_provenance(res["provenance"], R._wheelhouse_members(str(d / "wh")), res["bundle_sha256"],
                            open(d / "requirements-armv7-build.lock").read(),
                            R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()), _BB_LOCK,
-                           _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, image_manifest_bytes=_MANIFEST_BYTES)
+                           _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
+                           image_manifest_bytes=_MANIFEST_BYTES)
 
 
 def test_default_env_probe_shape():
@@ -162,3 +168,19 @@ def test_dpkg_status_parser_excludes_non_installed():
     apt = B._parse_dpkg_status_lines(lines)
     assert apt == {"build-essential": "12.9ubuntu3", "libssl-dev:armhf": "3.0.2"}
     assert "old-pkg" not in apt and "ghost" not in apt
+
+
+def test_build_wheelhouse_rejects_unused_allowlist(tmp_path):
+    # 'evilpkg' is not pinned in the backend lock (maturin) -> semantic self-check fails
+    with pytest.raises(R.ReleaseError):
+        _run(tmp_path, allowlist="evilpkg\n")
+
+
+def test_build_wheelhouse_rejects_noncanonical_allowlist(tmp_path):
+    with pytest.raises(R.ReleaseError):
+        _run(tmp_path, allowlist="MATURIN\n")             # noncanonical spelling
+
+
+def test_build_wheelhouse_rejects_empty_allowlist(tmp_path):
+    with pytest.raises(R.ReleaseError):
+        _run(tmp_path, allowlist="# only a comment\n")

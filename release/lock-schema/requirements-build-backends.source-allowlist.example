@@ -1,0 +1,3 @@
+# EXAMPLE template (not an active input). One PEP 503-normalized backend name per line,
+# authorized to source-build from a hash-pinned sdist because no official target wheel exists.
+cffi

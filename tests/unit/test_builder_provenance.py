@@ -29,6 +29,7 @@ _BB_SHA = R.sha256_hex(_BB_LOCK.encode())
 _APT_SHA = "1" * 64
 _RUSTUP_SHA = "2" * 64
 _EXT_SHA = "3" * 64
+_ALLOW_SHA = "4" * 64
 _APT_TEXT = "build-essential=12.9ubuntu3\n"
 _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 1.75.0",
         "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
@@ -39,7 +40,8 @@ _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 
 def _kw(**over):
     d = {"recipe_sha256": _RS, "build_backends_lock_sha256": _BB_SHA, "build_backends_lock_text": _BB_LOCK,
          "apt_packages_sha256": _APT_SHA, "rustup_init_file_sha256": _RUSTUP_SHA,
-         "apt_packages_text": _APT_TEXT, "extractor_tools_lock_sha256": _EXT_SHA}
+         "apt_packages_text": _APT_TEXT, "extractor_tools_lock_sha256": _EXT_SHA,
+         "build_backends_source_allowlist_sha256": _ALLOW_SHA}
     d.update(over)
     return d
 
@@ -48,6 +50,7 @@ def _builder(**over):
     b = {"identity": "ccc-armv7-builder", "recipe_path": R.CANONICAL_RECIPE_PATH, "recipe_sha256": _RS,
          "build_backends_lock_sha256": _BB_SHA, "apt_packages_sha256": _APT_SHA,
          "rustup_init_file_sha256": _RUSTUP_SHA, "extractor_tools_lock_sha256": _EXT_SHA,
+         "build_backends_source_allowlist_sha256": _ALLOW_SHA,
          "base_image_digest": "sha256:" + "b" * 64,
          "image_manifest_digest": "sha256:" + "c" * 64, "image_id": "sha256:" + "d" * 64,
          "environment": dict(_ENV), "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
@@ -140,7 +143,8 @@ def test_empty_backend_lock_rejected():
                             recipe_sha256=_RS, build_backends_lock_sha256=R.sha256_hex(b"# only comments\n"),
                             build_backends_lock_text="# only comments\n",
                             apt_packages_sha256=_APT_SHA, rustup_init_file_sha256=_RUSTUP_SHA,
-                            apt_packages_text=_APT_TEXT, extractor_tools_lock_sha256=_EXT_SHA)
+                            apt_packages_text=_APT_TEXT, extractor_tools_lock_sha256=_EXT_SHA,
+                            build_backends_source_allowlist_sha256=_ALLOW_SHA)
 
 
 def test_apt_and_rustup_file_sha_binding():
@@ -165,5 +169,14 @@ def test_extractor_tools_lock_binding():
         R._validate_builder(_builder(extractor_tools_lock_sha256="9" * 64), **_kw())
     b = _builder()
     del b["extractor_tools_lock_sha256"]                # missing
+    with pytest.raises(R.ReleaseError):
+        R._validate_builder(b, **_kw())
+
+
+def test_backend_source_allowlist_binding():
+    with pytest.raises(R.ReleaseError):                 # sha mismatch / substituted
+        R._validate_builder(_builder(build_backends_source_allowlist_sha256="9" * 64), **_kw())
+    b = _builder()
+    del b["build_backends_source_allowlist_sha256"]     # missing
     with pytest.raises(R.ReleaseError):
         R._validate_builder(b, **_kw())

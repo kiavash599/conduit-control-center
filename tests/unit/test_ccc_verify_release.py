@@ -31,6 +31,8 @@ from release import ccc_release as R  # noqa: E402
 _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
+_ALLOWLIST = "maturin\n"
+_ALLOWLIST_SHA = R.sha256_hex(_ALLOWLIST.encode())
 from backend import update_verify as V  # noqa: E402
 
 
@@ -82,6 +84,7 @@ def _release(base):
     (repo / "release" / "builder" / "rustup-init.sha256").write_text(_rustup)
     (repo / "release" / "builder" / "requirements-extractor-tools.in").write_text(_EXT_IN)
     (repo / "release" / "builder" / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
+    (repo / "release" / "builder" / "requirements-build-backends.source-allowlist").write_text(_ALLOWLIST)
     g("add", "-A")
     g("commit", "-q", "-m", "c")
     g("tag", "v0.3.16")
@@ -107,6 +110,7 @@ def _release(base):
                 "apt_packages_sha256": R.sha256_hex(_apt.encode()),
                 "rustup_init_file_sha256": R.sha256_hex(_rustup.encode()),
                 "extractor_tools_lock_sha256": _EXT_LOCK_SHA,
+                "build_backends_source_allowlist_sha256": _ALLOWLIST_SHA,
                 "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _mdigest,
                 "image_id": "sha256:" + "d" * 64, "environment": _env,
                 "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_env))}

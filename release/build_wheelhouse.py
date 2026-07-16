@@ -109,7 +109,8 @@ def _default_env_probe() -> dict:
 
 def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                      recipe_path: str, build_backends_lock_path: str, apt_packages_path: str,
-                     rustup_sha_path: str, extractor_tools_lock_path: str, builder_identity: str,
+                     rustup_sha_path: str, extractor_tools_lock_path: str,
+                     build_backends_source_allowlist_path: str, builder_identity: str,
                      base_image_digest: str, image_manifest_path: str, image_id: str,
                      env_probe=None, build_fn=None) -> dict:
     """Build the armv7 wheelhouse + STRICT builder provenance. Binds the committed
@@ -145,6 +146,16 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         # Canonical-byte policy (matches recipe/backends/apt/rustup and canonicalize_tree):
         # LF-normalise before hashing so CRLF/LF working trees yield the same digest.
         extractor_tools_lock_sha = _R.sha256_hex(_R._to_lf(fh.read()))
+    if not build_backends_source_allowlist_path or not os.path.isfile(build_backends_source_allowlist_path):
+        raise ReleaseError(f"committed backend source-allowlist not found: "
+                           f"{build_backends_source_allowlist_path!r}")
+    with open(build_backends_source_allowlist_path, "rb") as fh:
+        _allowlist_raw = _R._to_lf(fh.read())
+    build_backends_source_allowlist_sha = _R.sha256_hex(_allowlist_raw)
+    # SEMANTIC self-check (not merely a hash): the allowlist must be canonical, non-empty, and
+    # every allowlisted backend must be pinned in THIS build-backends lock (exact use) BEFORE
+    # provenance is emitted.
+    _R.validate_backend_source_allowlist(_allowlist_raw.decode("utf-8", "replace"), bb_lock_text)
     if not _R._is_oci_digest(base_image_digest):
         raise ReleaseError("base_image_digest must be 'sha256:<64 lowercase hex>'")
     if not image_manifest_path or not os.path.isfile(image_manifest_path):
@@ -224,6 +235,7 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         "apt_packages_sha256": apt_pkgs_sha,
         "rustup_init_file_sha256": rustup_file_sha,
         "extractor_tools_lock_sha256": extractor_tools_lock_sha,
+        "build_backends_source_allowlist_sha256": build_backends_source_allowlist_sha,
         "base_image_digest": base_image_digest,
         "image_manifest_digest": image_manifest_digest,
         "image_id": image_id,
@@ -236,6 +248,7 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
     _R._validate_provenance(provenance, members, bundle_sha, build_lock_text, recipe_sha,
                             bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
                             apt_pkgs_text, extractor_tools_lock_sha,
+                            build_backends_source_allowlist_sha,
                             image_manifest_bytes=manifest_bytes)
     return {"provenance": provenance, "bundle_sha256": bundle_sha, "wheelhouse_dir": out_dir}
 
@@ -252,6 +265,8 @@ def main(argv=None) -> int:
     ap.add_argument("--rustup-sha", required=True, help="committed release/builder/rustup-init.sha256")
     ap.add_argument("--extractor-tools-lock", required=True,
                     help="committed release/builder/requirements-extractor-tools.lock")
+    ap.add_argument("--build-backends-source-allowlist", required=True,
+                    help="committed release/builder/requirements-build-backends.source-allowlist")
     ap.add_argument("--builder-identity", required=True)
     ap.add_argument("--base-image-digest", required=True, help="pinned base image OCI digest sha256:<64hex>")
     ap.add_argument("--image-manifest", required=True,
@@ -263,6 +278,7 @@ def main(argv=None) -> int:
                            recipe_path=a.recipe, build_backends_lock_path=a.build_backends_lock,
                            apt_packages_path=a.apt_packages, rustup_sha_path=a.rustup_sha,
                            extractor_tools_lock_path=a.extractor_tools_lock,
+                           build_backends_source_allowlist_path=a.build_backends_source_allowlist,
                            builder_identity=a.builder_identity, base_image_digest=a.base_image_digest,
                            image_manifest_path=a.image_manifest, image_id=a.image_id)
     with open(a.provenance_out, "w", encoding="utf-8") as fh:

@@ -89,6 +89,14 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cgroup control file or explicit override) — an unavailable/empty `docker info` can no longer
   fall through as capable — with the decision recorded in external evidence, guarded against
   input/output path collisions.
+- Authorized backend-sdist allowlist: a build backend with no official wheel for the target
+  (currently `cffi`) source-builds from a hash-pinned sdist via the committed, minimal
+  `requirements-build-backends.source-allowlist`. Generation proves no compatible wheel exists
+  using pip's complete effective tag set (drift fails closed) and records external evidence; the
+  image installs in two ordered passes (wheels first `--only-binary --no-deps`, then allowlisted
+  sdists `--no-binary --no-build-isolation --no-deps`, both `--require-hashes`) with no build
+  isolation or implicit fetch; the allowlist sha256 is bound in provenance and required by the
+  producer.
 
 ### Security
 

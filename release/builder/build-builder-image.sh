@@ -53,6 +53,8 @@ python3 "${HERE}/../oci_manifest.py" \
     echo "       refusing to write builder-inputs evidence." >&2; exit 1; }
 
 RECIPE_SHA="$(python3 -c "import hashlib;print(hashlib.sha256(open('${HERE}/Containerfile','rb').read().replace(b'\r\n',b'\n').replace(b'\r',b'\n')).hexdigest())")"
+ALLOWLIST_FILE="${HERE}/requirements-build-backends.source-allowlist"
+ALLOWLIST_SHA="$(python3 -c "import hashlib;print(hashlib.sha256(open('${ALLOWLIST_FILE}','rb').read().replace(b'\r\n',b'\n').replace(b'\r',b'\n')).hexdigest())")"
 cat > "${EVID}/builder-inputs.env" <<ENV
 CCC_BUILDER_IDENTITY=conduit-control-center-armv7-wheelhouse-builder
 CCC_RECIPE=${HERE}/Containerfile
@@ -60,6 +62,8 @@ CCC_RECIPE_SHA256=${RECIPE_SHA}
 CCC_BUILD_BACKENDS_LOCK=${HERE}/requirements-build-backends.lock
 CCC_APT_PACKAGES=${HERE}/apt-packages.list
 CCC_RUSTUP_SHA=${HERE}/rustup-init.sha256
+CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST=${ALLOWLIST_FILE}
+CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST_SHA256=${ALLOWLIST_SHA}
 CCC_BASE_IMAGE_DIGEST=${BASE_DIGEST}
 CCC_IMAGE_TAG=${TAG}
 CCC_IMAGE_ID=${IMAGE_ID}

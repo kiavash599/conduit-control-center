@@ -198,6 +198,7 @@ sudo docker run --rm \
     --apt-packages /repo/release/builder/apt-packages.list \
     --rustup-sha /repo/release/builder/rustup-init.sha256 \
     --extractor-tools-lock /repo/release/builder/requirements-extractor-tools.lock \
+    --build-backends-source-allowlist /repo/release/builder/requirements-build-backends.source-allowlist \
     --builder-identity "${CCC_BUILDER_IDENTITY}" \
     --base-image-digest "${CCC_BASE_IMAGE_DIGEST}" \
     --image-manifest /in/image-manifest.json \

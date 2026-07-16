@@ -107,22 +107,26 @@ def test_recipe_pins_and_jammy():
 _VALID_APT = "libssl-dev=3.0.2-0ubuntu1.15\npkg-config=0.29.2-1ubuntu3\n"
 _VALID_RUSTUP = "a" * 64 + "  rustup-init\n"
 _VALID_BB = "maturin==1.5.1 --hash=sha256:%s\n" % ("7" * 64)
+_VALID_ALLOWLIST = "maturin\n"
 
 
-def _write_inputs(d, apt=None, rustup=None, bb=None):
+def _write_inputs(d, apt=None, rustup=None, bb=None, allowlist=None):
     if apt is not None:
         (d / "apt-packages.list").write_text(apt)
     if rustup is not None:
         (d / "rustup-init.sha256").write_text(rustup)
     if bb is not None:
         (d / "requirements-build-backends.lock").write_text(bb)
+    if allowlist is not None:
+        (d / "requirements-build-backends.source-allowlist").write_text(allowlist)
 
 
 def test_absent_inputs_ok_pre_gate(tmp_path):
     # Nothing committed yet -> valid during development (require_present=False).
     status = R.validate_builder_inputs(str(tmp_path), require_present=False)
     assert status == {"apt-packages.list": "absent", "rustup-init.sha256": "absent",
-                      "requirements-build-backends.lock": "absent"}
+                      "requirements-build-backends.lock": "absent",
+                      "requirements-build-backends.source-allowlist": "absent"}
 
 
 def test_absent_inputs_rejected_at_release_gate(tmp_path):
@@ -131,7 +135,7 @@ def test_absent_inputs_rejected_at_release_gate(tmp_path):
 
 
 def test_present_valid_inputs_pass(tmp_path):
-    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB)
+    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB, _VALID_ALLOWLIST)
     status = R.validate_builder_inputs(str(tmp_path), require_present=True)
     assert set(status.values()) == {"present"}
 
@@ -141,6 +145,7 @@ def test_example_templates_are_not_active_inputs(tmp_path):
     (tmp_path / "apt-packages.list.example").write_text(_VALID_APT)
     (tmp_path / "rustup-init.sha256.example").write_text(_VALID_RUSTUP)
     (tmp_path / "requirements-build-backends.lock.example").write_text(_VALID_BB)
+    (tmp_path / "requirements-build-backends.source-allowlist.example").write_text(_VALID_ALLOWLIST)
     status = R.validate_builder_inputs(str(tmp_path), require_present=False)
     assert set(status.values()) == {"absent"}
     with pytest.raises(R.ReleaseError):
@@ -464,3 +469,77 @@ def test_phase_b_evidence_path_collision_rejected(tmp_path):
                      "--resource-evidence", str(prov))
     assert r.returncode != 0 and "collides" in r.stderr
     assert _no_docker_run(log)
+
+
+# --------------------------------------------------------------------------- #
+#  Backend source-allowlist: Containerfile two-pass ordered install contract   #
+# --------------------------------------------------------------------------- #
+
+
+def _norm(text):
+    # join shell line-continuations and collapse whitespace (whitespace-robust matching)
+    return " ".join(text.replace("\\\n", " ").split())
+
+
+def test_containerfile_two_pass_backend_install_ordering():
+    r = _RECIPE
+    n = _norm(r)
+    assert "partition_backends.py" in r
+    assert "requirements-build-backends.source-allowlist" in r
+    wheel_pass = ("pip install --no-cache-dir --require-hashes --only-binary=:all: "
+                  "--no-deps -r /opt/ccc/backends.wheel.txt")
+    source_pass = ("pip install --no-cache-dir --require-hashes --no-binary=:all: "
+                   "--no-build-isolation --no-deps -r /opt/ccc/backends.source.txt")
+    assert wheel_pass in n, "wheel pass flags/target wrong"
+    assert source_pass in n, "source pass flags/target wrong"
+    # ORDERING: wheel partition install must precede source partition install
+    assert n.index(wheel_pass) < n.index(source_pass)
+
+
+def test_containerfile_backend_install_is_hash_and_isolation_locked():
+    n = _norm(_RECIPE)
+    assert "--no-build-isolation" in n                 # source pass disables build isolation
+    assert n.count("--no-deps") >= 2                    # both passes disable implicit deps
+    # every backend-partition pip install is hash-pinned
+    for seg in n.split("pip install")[1:]:
+        head = seg[:220]
+        if "backends.wheel.txt" in head or "backends.source.txt" in head:
+            assert "--require-hashes" in head
+
+
+def test_allowlist_lifecycle_absent_present_required(tmp_path):
+    # absent pre-gate is fine; required at the release gate; present+valid passes.
+    st = R.validate_builder_inputs(str(tmp_path), require_present=False)
+    assert st["requirements-build-backends.source-allowlist"] == "absent"
+    with pytest.raises(R.ReleaseError):
+        R.validate_builder_inputs(str(tmp_path), require_present=True)
+    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB, _VALID_ALLOWLIST)
+    st2 = R.validate_builder_inputs(str(tmp_path), require_present=True)
+    assert st2["requirements-build-backends.source-allowlist"] == "present"
+
+
+def test_allowlist_noncanonical_entry_rejected_in_lifecycle(tmp_path):
+    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB, "CFFI\n")   # not normalized
+    with pytest.raises(R.ReleaseError):
+        R.validate_builder_inputs(str(tmp_path), require_present=False)
+    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB, "c_ffi\n")  # underscore
+    with pytest.raises(R.ReleaseError):
+        R.validate_builder_inputs(str(tmp_path), require_present=False)
+
+
+def test_allowlist_lifecycle_exact_use_when_lock_present(tmp_path):
+    # allowlist canonical but its name is NOT pinned in the PRESENT backend lock (maturin) ->
+    # exact-use fails at the lifecycle gate, INCLUDING the required release gate.
+    _write_inputs(tmp_path, _VALID_APT, _VALID_RUSTUP, _VALID_BB, "cffi\n")
+    with pytest.raises(R.ReleaseError):
+        R.validate_builder_inputs(str(tmp_path), require_present=False)
+    with pytest.raises(R.ReleaseError):
+        R.validate_builder_inputs(str(tmp_path), require_present=True)
+
+
+def test_allowlist_lifecycle_grammar_only_when_lock_absent(tmp_path):
+    # allowlist committed first (pre-tag dev), backend lock not yet present -> grammar-only passes
+    (tmp_path / "requirements-build-backends.source-allowlist").write_text("cffi\n")
+    st = R.validate_builder_inputs(str(tmp_path), require_present=False)
+    assert st["requirements-build-backends.source-allowlist"] == "present"
+    assert st["requirements-build-backends.lock"] == "absent"

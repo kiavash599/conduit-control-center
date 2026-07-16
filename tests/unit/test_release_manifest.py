@@ -51,6 +51,8 @@ _MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST).hexdigest()
 _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
+_ALLOWLIST = "maturin\n"
+_ALLOWLIST_SHA = R.sha256_hex(_ALLOWLIST.encode())
 _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 1.75.0",
         "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
         "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
@@ -62,6 +64,7 @@ def _builder(recipe_sha=_RECIPE_SHA, **over):
          "recipe_sha256": recipe_sha, "build_backends_lock_sha256": _BB_SHA,
          "apt_packages_sha256": _APT_SHA, "rustup_init_file_sha256": _RUSTUP_SHA,
          "extractor_tools_lock_sha256": _EXT_LOCK_SHA,
+         "build_backends_source_allowlist_sha256": _ALLOWLIST_SHA,
          "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _MANIFEST_DIGEST,
          "image_id": "sha256:" + "d" * 64, "environment": dict(_ENV),
          "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
@@ -185,7 +188,7 @@ def _prov_case(*, wname="fastapi-0.133.0-py3-none-any.whl", sname="fastapi-0.133
 
 def test_provenance_valid():
     prov, members, bundle, build = _prov_case()
-    R._validate_provenance(prov, members, bundle, build, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA)
+    R._validate_provenance(prov, members, bundle, build, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA)
 
 
 @pytest.mark.parametrize("kw", [
@@ -194,13 +197,13 @@ def test_provenance_valid():
 def test_provenance_negatives(kw):
     prov, members, bundle, build = _prov_case(**kw)
     with pytest.raises(R.ReleaseError):
-        R._validate_provenance(prov, members, bundle, build, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA)
+        R._validate_provenance(prov, members, bundle, build, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA)
 
 
 def test_provenance_unapproved_sdist_absent_from_build_lock():
     prov, members, bundle, _ = _prov_case()
     with pytest.raises(R.ReleaseError):
-        R._validate_provenance(prov, members, bundle, "other==1.0.0 --hash=sha256:%s\n" % _SDH, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA)
+        R._validate_provenance(prov, members, bundle, "other==1.0.0 --hash=sha256:%s\n" % _SDH, _RECIPE_SHA, _BB_SHA, _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA)
 
 
 # --- runtime lock <-> embedded wheels (finding 1) -------------------------- #
@@ -262,6 +265,7 @@ def _release_repo(tmp, version="0.3.16", aarch64_lock=None, build_lock=None, wit
     if with_extractor:
         (r / "release" / "builder" / "requirements-extractor-tools.in").write_text(_EXT_IN)
         (r / "release" / "builder" / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
+        (r / "release" / "builder" / "requirements-build-backends.source-allowlist").write_text(_ALLOWLIST)
     g("add", "-A")
     g("commit", "-q", "-m", "c")
     g("tag", f"v{version}")
