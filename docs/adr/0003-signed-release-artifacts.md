@@ -150,15 +150,14 @@ The armv7 wheelhouse builder is now a committed, canonical OCI recipe
 (`release/builder/Containerfile`, base pinned by digest, toolchain + PEP 517 backends
 declared/pinned) and the provenance binds the environment fail-closed:
 `recipe_sha256` (== the committed recipe, covered by `source.commit`), `base_image_digest`,
-`image_manifest_digest` (the OCI image MANIFEST digest — NOT Docker's local image/config
-`image_id`, which is recorded only as evidence and must differ), and an `environment`
-manifest + `environment_sha256`. The legacy single `image_digest` field is rejected. The
-build runs in two phases with a hard boundary: connected, pinned image construction, then
-an offline (`--network=none`) wheel build consuming only authorized, hash-verified
-sdists/locks as read-only inputs; Phase B selects the image by its immutable local id after
-re-verifying the tag still maps to the captured id + manifest digest. A locally-built image
-ID alone no longer satisfies provenance (the manifest digest is recomputed from the raw OCI
-manifest bytes).
+and the STORE-AGNOSTIC runtime identity — `runtime_image_id`, `image_manifest_digest`,
+`image_config_digest`, `image_identity_mode` (see Amendment A4) — plus an `environment`
+manifest + `environment_sha256`. The legacy single `image_digest`/`image_id` fields are
+rejected. The build runs in two phases with a hard boundary: connected, pinned image
+construction, then an offline (`--network=none`) wheel build consuming only authorized,
+hash-verified sdists/locks as read-only inputs; Phase B selects the image by its immutable
+`runtime_image_id` after re-verifying the recorded transport, identity mode, and manifest
+digest.
 
 **Target-libc policy (finding 8):** the builder base MUST be Ubuntu 22.04 (Jammy) armhf so
 the glibc baseline is no newer than the production RPi2 target; the provenance records
@@ -171,8 +170,9 @@ image reproducibility is not claimed — the environment is content-bound and au
 **Amendment A2 (refined builder-provenance binding).** Four boundaries are hardened:
 (1) a single shared, stdlib-only validator (`release/oci_manifest.py`) parses the raw OCI/
 Docker manifest at Phase A, the wheelhouse self-check, and the producer, enforcing the
-single-image schema-2/OCI shape and binding `manifest.config.digest == image_id` (the config
-id Phase B executes); (2) the recorded APT environment is architecture-aware and
+single-image schema-2/OCI shape and binding the runtime image id to the captured manifest
+(originally `manifest.config.digest == image_id`; SUPERSEDED by the store-agnostic model in
+Amendment A4); (2) the recorded APT environment is architecture-aware and
 execution-bound — `${binary:Package}` identity, installed-only status, `apt_architecture ==
 armhf`, and every authorized pin proven present at the byte-exact version; (3) the offline
 build enforces a mandatory, host-validated RAM/swap/host-reserve contract (reserve-protecting,
@@ -190,3 +190,20 @@ disjoint passes (wheels first `--only-binary --no-deps`, then the allowlisted sd
 --no-build-isolation --no-deps`, both `--require-hashes`) — no build isolation, no implicit
 dependency resolution/fetch. The allowlist sha256 is bound in the builder provenance and required
 + validated by the producer. The SRT signing model and V2 platform architecture are unchanged.
+
+**Amendment A4 (store-agnostic runtime image identity + capture mechanism).** Docker's `.Id` is
+store-dependent: the containerd image store (Docker 29 default, empirically confirmed on the RPi2)
+reports the MANIFEST digest; the legacy graphdriver reports the CONFIG digest. Manifest capture
+uses `docker save` -> detected archive transport (`oci-archive`/`docker-archive`) -> `skopeo
+inspect --raw` (the incompatible `docker-daemon:` transport is removed), with a fail-fast interop
+smoke test before the build and atomic evidence writes. The builder-provenance identity model is
+`runtime_image_id` + `image_manifest_digest` + `image_config_digest` + `image_identity_mode`
+(replacing the ambiguous `image_id`). Validation computes two independent matches and accepts
+EXACTLY ONE fail-closed relationship — **containerd**: `runtime_image_id == image_manifest_digest`;
+**legacy**: `runtime_image_id == image_config_digest` (and `!= image_manifest_digest`) — rejecting
+BOTH-match (ambiguous) and NEITHER-match (unbound), and rejecting a declared mode that disagrees
+with the derived one (mode confusion). The pre-build smoke test accepts the multi-arch OCI **index**
+base image ONLY under `allow_index`, bound to its index digest; the single-image gate applies to the
+built builder image. Phase A records `image_identity_mode`; Phase B reuses the recorded transport +
+mode and executes by `runtime_image_id`. The signed-manifest schema, verifier, updater, SRT, and V2
+model are unchanged; v0.3.17 was not yet produced, so there is no provenance migration.

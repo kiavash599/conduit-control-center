@@ -12,13 +12,13 @@ import pytest
 from release import ccc_release as R
 
 
-def _manifest_bytes(image_id):
+def _manifest_bytes(config_digest):
     import json as _json
     return _json.dumps({
         "schemaVersion": 2,
         "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
         "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
-                   "digest": image_id, "size": 1234},
+                   "digest": config_digest, "size": 1234},
         "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                     "digest": "sha256:" + "a" * 64, "size": 5678}],
     }).encode()
@@ -52,7 +52,8 @@ def _builder(**over):
          "rustup_init_file_sha256": _RUSTUP_SHA, "extractor_tools_lock_sha256": _EXT_SHA,
          "build_backends_source_allowlist_sha256": _ALLOW_SHA,
          "base_image_digest": "sha256:" + "b" * 64,
-         "image_manifest_digest": "sha256:" + "c" * 64, "image_id": "sha256:" + "d" * 64,
+         "image_manifest_digest": "sha256:" + "d" * 64, "image_config_digest": "sha256:" + "c" * 64,
+         "image_identity_mode": "containerd", "runtime_image_id": "sha256:" + "d" * 64,
          "environment": dict(_ENV), "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
     b.update(over)
     return b
@@ -81,22 +82,68 @@ def test_recipe_and_backend_lock_binding():
         R._validate_builder(_builder(build_backends_lock_sha256="f" * 64), **_kw())  # lock sha mismatch
 
 
-def test_image_id_required_and_distinct():
+def test_runtime_identity_fields_required():
+    for field in ("runtime_image_id", "image_config_digest"):
+        b = _builder()
+        del b[field]
+        with pytest.raises(R.ReleaseError):
+            R._validate_builder(b, **_kw())
     b = _builder()
-    del b["image_id"]
-    with pytest.raises(R.ReleaseError):                                          # local-id-only / missing
+    del b["image_identity_mode"]
+    with pytest.raises(R.ReleaseError):
         R._validate_builder(b, **_kw())
-    dig = "sha256:" + "c" * 64
-    with pytest.raises(R.ReleaseError):                                          # id == manifest digest
-        R._validate_builder(_builder(image_id=dig, image_manifest_digest=dig), **_kw())
+    with pytest.raises(R.ReleaseError):                                          # invalid mode value
+        R._validate_builder(_builder(image_identity_mode="bogus"), **_kw())
 
 
-def test_manifest_digest_recomputed_from_oci_bytes():
-    manifest = _manifest_bytes("sha256:" + "d" * 64)
-    good = "sha256:" + R.sha256_hex(manifest)
-    R._validate_builder(_builder(image_manifest_digest=good), **_kw(manifest_bytes=manifest))   # ok
-    with pytest.raises(R.ReleaseError):                                          # syntactically valid but != sha256(manifest)
-        R._validate_builder(_builder(image_manifest_digest="sha256:" + "c" * 64), **_kw(manifest_bytes=manifest))
+def test_ambiguous_image_id_key_rejected():
+    b = _builder()
+    b["image_id"] = "sha256:" + "d" * 64            # legacy ambiguous field name -> rejected
+    with pytest.raises(R.ReleaseError):
+        R._validate_builder(b, **_kw())
+
+
+def test_manifest_identity_containerd_and_mismatches():
+    cfg = "sha256:" + "c" * 64
+    manifest = _manifest_bytes(cfg)
+    mdig = "sha256:" + R.sha256_hex(manifest)       # containerd: runtime id == manifest digest
+    R._validate_builder(_builder(runtime_image_id=mdig, image_manifest_digest=mdig,
+                                 image_config_digest=cfg, image_identity_mode="containerd"),
+                        **_kw(manifest_bytes=manifest))                          # ok
+    with pytest.raises(R.ReleaseError):                                          # recorded manifest digest wrong
+        R._validate_builder(_builder(runtime_image_id=mdig, image_manifest_digest="sha256:" + "e" * 64,
+                                     image_config_digest=cfg, image_identity_mode="containerd"),
+                            **_kw(manifest_bytes=manifest))
+    with pytest.raises(R.ReleaseError):                                          # recorded config digest wrong
+        R._validate_builder(_builder(runtime_image_id=mdig, image_manifest_digest=mdig,
+                                     image_config_digest="sha256:" + "9" * 64,
+                                     image_identity_mode="containerd"),
+                            **_kw(manifest_bytes=manifest))
+    with pytest.raises(R.ReleaseError):                                          # mode confusion (declared legacy)
+        R._validate_builder(_builder(runtime_image_id=mdig, image_manifest_digest=mdig,
+                                     image_config_digest=cfg, image_identity_mode="legacy"),
+                            **_kw(manifest_bytes=manifest))
+
+
+def test_manifest_identity_legacy_mode():
+    # legacy graphdriver: runtime id == config digest, and != manifest digest
+    cfg = "sha256:" + "d" * 64
+    manifest = _manifest_bytes(cfg)
+    mdig = "sha256:" + R.sha256_hex(manifest)
+    R._validate_builder(_builder(runtime_image_id=cfg, image_manifest_digest=mdig,
+                                 image_config_digest=cfg, image_identity_mode="legacy"),
+                        **_kw(manifest_bytes=manifest))                          # ok (legacy)
+
+
+def test_manifest_identity_neither_relationship_fails():
+    cfg = "sha256:" + "c" * 64
+    manifest = _manifest_bytes(cfg)
+    mdig = "sha256:" + R.sha256_hex(manifest)
+    unrelated = "sha256:" + "7" * 64                # equals neither manifest nor config digest
+    with pytest.raises(R.ReleaseError):
+        R._validate_builder(_builder(runtime_image_id=unrelated, image_manifest_digest=mdig,
+                                     image_config_digest=cfg, image_identity_mode="containerd"),
+                            **_kw(manifest_bytes=manifest))
 
 
 @pytest.mark.parametrize("bad", [
@@ -104,7 +151,7 @@ def test_manifest_digest_recomputed_from_oci_bytes():
     "sha512:" + "a" * 64, "image:latest", "sha256:" + "a" * 63,
 ])
 def test_base_and_manifest_and_id_must_be_oci(bad):
-    for field in ("base_image_digest", "image_manifest_digest", "image_id"):
+    for field in ("base_image_digest", "image_manifest_digest", "runtime_image_id", "image_config_digest"):
         with pytest.raises(R.ReleaseError):
             R._validate_builder(_builder(**{field: bad}), **_kw())
 

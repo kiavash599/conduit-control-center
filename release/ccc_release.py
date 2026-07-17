@@ -629,17 +629,22 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
                       build_backends_source_allowlist_sha256: str, manifest_bytes=None) -> None:
     """Fail-closed validation of the builder provenance block. Binds the builder to
     the COMMITTED recipe and the COMMITTED build-backends lock (by sha256), the pinned
-    base image, the OCI image MANIFEST digest (independently recomputed from the OCI
-    manifest bytes when provided, and always REQUIRED to be present alongside a distinct
-    local image_id), and a declared environment whose declared build_backends must match
-    the authorized lock and whose glibc must not exceed the target baseline."""
+    base image, and the STORE-AGNOSTIC runtime identity (runtime_image_id +
+    image_manifest_digest + image_config_digest + image_identity_mode): when manifest bytes
+    are provided the mode is re-derived and cross-checked (containerd: runtime_image_id ==
+    manifest digest; legacy: == config digest; both/neither -> fail closed), and a declared
+    environment whose build_backends match the authorized lock and whose glibc does not
+    exceed the target baseline."""
     if not isinstance(builder, dict):
         raise ReleaseError("provenance.builder must be an object")
     if not isinstance(builder.get("identity"), str) or not builder["identity"]:
         raise ReleaseError("provenance.builder.identity is required")
     if "image_digest" in builder:
         raise ReleaseError("provenance.builder.image_digest is ambiguous; use base_image_digest + "
-                           "image_manifest_digest (distinct from local image_id)")
+                           "image_manifest_digest + runtime_image_id + image_config_digest")
+    if "image_id" in builder:
+        raise ReleaseError("provenance.builder.image_id is ambiguous under the containerd image "
+                           "store; use runtime_image_id + image_config_digest + image_identity_mode")
     if builder.get("recipe_path") != CANONICAL_RECIPE_PATH:
         raise ReleaseError(f"provenance.builder.recipe_path must be {CANONICAL_RECIPE_PATH!r}")
     if not _is_hex64(builder.get("recipe_sha256")) or builder["recipe_sha256"] != recipe_sha256:
@@ -666,26 +671,32 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
     if not _is_oci_digest(builder.get("base_image_digest")):
         raise ReleaseError("provenance.builder.base_image_digest must be 'sha256:<64 lowercase hex>'")
     if not _is_oci_digest(builder.get("image_manifest_digest")):
-        raise ReleaseError("provenance.builder.image_manifest_digest must be the OCI image MANIFEST "
-                           "digest 'sha256:<64 lowercase hex>' (NOT the Docker local image/config ID)")
-    # image_id is REQUIRED (so the manifest/local-id distinction is always enforced).
-    if not _is_oci_digest(builder.get("image_id")):
-        raise ReleaseError("provenance.builder.image_id (local image/config id, evidence) is required "
-                           "and must be 'sha256:<64hex>'")
-    if builder["image_id"] == builder["image_manifest_digest"]:
-        raise ReleaseError("provenance.builder.image_id must NOT equal image_manifest_digest -- a local "
-                           "image/config id is not an OCI manifest digest")
-    # SHARED, structural manifest validation (release/oci_manifest): parse the raw OCI
-    # manifest, enforce single-image schema-2/OCI shape + descriptors, recompute the digest,
-    # and BIND manifest.config.digest == image_id (the id Phase B actually executes). One
-    # implementation, used identically here and at Phase A / wheelhouse self-check.
+        raise ReleaseError("provenance.builder.image_manifest_digest must be 'sha256:<64 lowercase hex>'")
+    # Store-agnostic runtime identity (containerd image store: .Id is the MANIFEST digest; legacy
+    # graphdriver: .Id is the CONFIG digest). runtime_image_id is what Phase B executes.
+    if not _is_oci_digest(builder.get("runtime_image_id")):
+        raise ReleaseError("provenance.builder.runtime_image_id (docker .Id) is required, sha256:<64hex>")
+    if not _is_oci_digest(builder.get("image_config_digest")):
+        raise ReleaseError("provenance.builder.image_config_digest is required, sha256:<64hex>")
+    _mode = builder.get("image_identity_mode")
+    if _mode not in (_ocim.MODE_CONTAINERD, _ocim.MODE_LEGACY):
+        raise ReleaseError("provenance.builder.image_identity_mode must be "
+                           f"{_ocim.MODE_CONTAINERD!r} or {_ocim.MODE_LEGACY!r}")
+    # SHARED, structural validation (release/oci_manifest): parse the raw manifest, enforce the
+    # single-image schema-2/OCI shape + descriptors, RE-DERIVE the identity mode from the runtime
+    # id, reject a recorded mode that disagrees (mode confusion), and cross-check the recomputed
+    # manifest/config digests against the recorded fields. Index manifests are NOT allowed here.
     if manifest_bytes is not None:
         try:
-            _ocim.validate_image_manifest(
-                manifest_bytes, image_manifest_digest=builder["image_manifest_digest"],
-                image_id=builder["image_id"])
+            _r = _ocim.validate_capture(
+                manifest_bytes, runtime_image_id=builder["runtime_image_id"],
+                allow_index=False, expected_mode=_mode)
         except _ocim.ManifestError as _exc:
-            raise ReleaseError(f"OCI image manifest invalid: {_exc}") from _exc
+            raise ReleaseError(f"builder manifest identity invalid: {_exc}") from _exc
+        if _r["manifest_digest"] != builder["image_manifest_digest"]:
+            raise ReleaseError("provenance.builder.image_manifest_digest != recomputed manifest digest")
+        if _r["config_digest"] != builder["image_config_digest"]:
+            raise ReleaseError("provenance.builder.image_config_digest != manifest config.digest")
     env = builder.get("environment")
     if not isinstance(env, dict) or any(not isinstance(env.get(k), str) or not env.get(k)
                                         for k in _ENV_REQUIRED):
@@ -733,7 +744,8 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
 
     Schema:
       builder: {identity, recipe_path, recipe_sha256, base_image_digest,
-                image_manifest_digest, image_id?, environment{...}, environment_sha256}
+                image_manifest_digest, runtime_image_id, image_config_digest,
+                image_identity_mode, environment{...}, environment_sha256}
       bundle:  {sha256: <bundle_sha256>}
       wheels:  [{sdist_name:str, sdist_sha256:hex64,
                  wheel_filename:str, wheel_sha256:hex64}, ...]

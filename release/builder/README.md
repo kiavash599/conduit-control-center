@@ -36,18 +36,23 @@ explicitly and recorded in evidence) → `skopeo inspect --raw <transport>:<tar>
 client API version, and the local-archive flow needs no daemon-API negotiation. A **fail-fast
 interoperability smoke test** runs this exact path against the digest-pinned base image *before*
 the expensive build, so a tooling mismatch aborts in seconds. The captured manifest is validated
-by the shared `release/oci_manifest.py` gate: valid single-image schema-2/OCI manifest AND
-`manifest.config.digest == image_id` (the **load-bearing** binding — the config blob is the
-image's identity, invariant across representations; `image_manifest_digest` is a
-mechanism-consistent evidence value). Phase B re-captures through the **same** contract, reusing
-the recorded transport. `image-manifest.json` and `builder-inputs.env` are written **atomically**
-(temp → validate → rename), so a failed capture leaves no zero-byte final artifact. Phase A also
-captures the environment manifest (OS, python, rustc, cargo, gcc, apt versions, PEP 517 backends).
+by the shared `release/oci_manifest.py` gate with a **store-agnostic runtime-identity model**.
+Docker's `.Id` (`runtime_image_id`) differs by image store, so the gate binds whichever
+relationship holds: **containerd** (Docker 29 default) — `runtime_image_id == image_manifest_digest`;
+**legacy** graphdriver — `runtime_image_id == image_config_digest` and `!= image_manifest_digest`.
+Exactly one may hold (mutually exclusive); neither → fail closed. The derived `image_identity_mode`
+is recorded and re-derived at each boundary, and a declared mode that disagrees (mode confusion) is
+rejected. Provenance carries `runtime_image_id`, `image_manifest_digest`, `image_config_digest`,
+`image_identity_mode` (the ambiguous single `image_id` is gone). Phase B re-captures through the
+**same** contract, reusing the recorded transport **and mode**, and runs the container by
+`runtime_image_id`. `image-manifest.json` and `builder-inputs.env` are written **atomically**
+(temp → validate → rename). Phase A also captures the environment manifest.
 
-**One-time RPi2 empirical gate:** the first corrected ceremony must confirm on the RPi2 that
-`docker save` + the detected archive transport yields `manifest.config.digest == docker image
-.Id`. The gate already asserts this and fails closed if it does not hold, so there is no silent
-acceptance — but it has not yet been empirically observed on-hardware.
+**OCI-index base vs single-image builder / RPi2 empirical basis.** The digest-pinned base is a
+multi-arch OCI **index**, so the pre-build interop smoke test runs with `--allow-index` and binds
+only `runtime_image_id == index digest`; the full single-image + config-descriptor + identity gate
+applies to the built builder image. Empirically confirmed on the RPi2 (Docker 29 containerd store):
+base index `.Id` == index digest; built image `.Id` == manifest digest; both `!= config digest`.
 
 **Phase B — offline wheel build** (`build-wheelhouse-offline.sh`, `--network=none`):
 runs `release/build_wheelhouse.py` inside the Phase-A image with the authorized,
@@ -113,14 +118,14 @@ a controlled resource envelope is required:
 
 ## Evidence captured
 
-`Containerfile` (committed; `recipe_sha256` bound in provenance), base image digest,
-OCI image manifest digest (= `image_manifest_digest`), local image ID (`image_id`,
-evidence only), the environment manifest + its sha256, the build-input lock + verified
-sdist hashes, the per-wheel sdist→wheel mapping + logs, and `SHA256SUMS`. The **raw OCI
-manifest bytes** are embedded into the signed armv7 artifact at
-`provenance/image-manifest.json`; the producer (and any later auditor) independently
-recomputes `sha256(manifest) == image_manifest_digest` before signing — a local image ID
-cannot masquerade as the manifest digest.
+`Containerfile` (committed; `recipe_sha256` bound in provenance), base image digest, the
+store-agnostic runtime identity (`runtime_image_id`, `image_manifest_digest`,
+`image_config_digest`, `image_identity_mode`), the archive-capture transport, the environment
+manifest + its sha256, the build-input lock + verified sdist hashes, the per-wheel sdist→wheel
+mapping + logs, and `SHA256SUMS`. The **raw manifest bytes** are embedded into the signed armv7
+artifact at `provenance/image-manifest.json`; the producer (and any later auditor) independently
+re-derives the identity mode and recomputes the manifest/config digests, binding
+`runtime_image_id` to the captured manifest under the recorded mode before signing.
 
 ## PEP 517 build backends
 

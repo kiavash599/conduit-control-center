@@ -9,8 +9,10 @@
     "extractor_tools_lock_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
     "build_backends_source_allowlist_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
     "base_image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "image_manifest_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "image_id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "image_manifest_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "image_config_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "image_identity_mode": "containerd",
+    "runtime_image_id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "environment": {
       "os": "Ubuntu 22.04.5 LTS",
       "os_id": "ubuntu",

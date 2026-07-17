@@ -70,11 +70,14 @@ wheelhouse offline with `release/builder/build-wheelhouse-offline.sh` (`--networ
 RAM/swap contract is mandatory: `--ram <RAM> --swap <extra> --host-reserve <reserve>
 --resource-evidence <path>`, host-validated — RAM+reserve ≤ MemTotal, RAM ≤ MemAvailable, swap
 bounded by active SwapTotal/SwapFree + cgroup capability — before Docker runs). Phase A also runs
-the shared `release/oci_manifest.py` gate (`config.digest == image_id`). Manifest capture uses
-`docker save` → detected archive transport → `skopeo inspect --raw` (no `docker-daemon:`
-transport), with a fail-fast interop smoke test before the build and atomic evidence writes; the
-first corrected ceremony must confirm on-RPi2 that `config.digest == docker image .Id`. See
-`release/builder/README.md`.
+the shared `release/oci_manifest.py` gate with the STORE-AGNOSTIC runtime-identity binding
+(`runtime_image_id` == manifest digest on the containerd store / == config digest on the legacy
+store; exactly one relationship, both/neither → fail closed; mode recorded + reused by Phase B).
+Manifest capture uses `docker save` → detected archive transport → `skopeo inspect --raw` (no
+`docker-daemon:` transport), with a fail-fast interop smoke test before the build (the digest-pinned
+base is a multi-arch OCI index, accepted under `--allow-index` and bound to its index digest) and
+atomic evidence writes. Empirically confirmed on the RPi2 (Docker 29 containerd store): built-image
+`.Id` == manifest digest. See `release/builder/README.md`.
 The produced `provenance/wheelhouse-armv7.json` binds recipe/base/manifest/environment and is
 validated by the producer before signing.
 

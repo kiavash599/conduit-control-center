@@ -48,9 +48,9 @@ def test_scripts_parse():
 
 
 def test_phase_b_runs_immutable_image_id_and_reverifies():
-    assert '"${CCC_IMAGE_ID}" \\' in _PHASE_B
+    assert '"${CCC_RUNTIME_IMAGE_ID}" \\' in _PHASE_B
     assert 'python3 /repo/release/build_wheelhouse.py' in _PHASE_B
-    assert '{{.Id}}' in _PHASE_B and '"${CUR_ID}" == "${CCC_IMAGE_ID}"' in _PHASE_B
+    assert '{{.Id}}' in _PHASE_B and '"${CUR_ID}" == "${CCC_RUNTIME_IMAGE_ID}"' in _PHASE_B
     assert 'CUR_MANIFEST_DIGEST' in _PHASE_B and '== "${CCC_IMAGE_MANIFEST_DIGEST}"' in _PHASE_B
 
 
@@ -188,18 +188,19 @@ def test_no_committed_active_inputs_yet_but_lifecycle_valid():
 # --------------------------------------------------------------------------- #
 #  Finding 7: behavioral script-contract tests (fake sudo/docker/skopeo)      #
 # --------------------------------------------------------------------------- #
-_IMG_ID = "sha256:" + "1" * 64
-# Full, valid single-image manifest whose config.digest == image_id (the shared oci_manifest
-# gate now runs in BOTH phases via the capture contract, so the fake must be a real manifest).
+# Full, valid single-image manifest with a DISTINCT config digest; the runtime id equals the
+# manifest digest -> containerd identity mode (the real RPi2 Docker 29 containerd-store mode).
+_CONFIG_DIGEST = "sha256:" + "c" * 64
 _MANIFEST_CONTENT = json.dumps({
     "schemaVersion": 2,
     "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
     "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
-               "digest": _IMG_ID, "size": 1234},
+               "digest": _CONFIG_DIGEST, "size": 1234},
     "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                 "digest": "sha256:" + "a" * 64, "size": 5678}],
 }).encode()
 _MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST_CONTENT).hexdigest()
+_IMG_ID = _MANIFEST_DIGEST                       # containerd: docker .Id == manifest digest
 _FAKE_SUDO = "#!/usr/bin/env bash\nexec \"$@\"\n"
 _FAKE_SKOPEO = (
     "#!/usr/bin/env bash\n"
@@ -277,9 +278,11 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
         "CCC_BUILDER_IDENTITY=id\n"
         "CCC_BASE_IMAGE_DIGEST=sha256:%s\n" % ("b" * 64) +
         "CCC_IMAGE_TAG=ccc:local\n"
-        "CCC_IMAGE_ID=%s\n" % _IMG_ID +
+        "CCC_RUNTIME_IMAGE_ID=%s\n" % _IMG_ID +
         "CCC_IMAGE_MANIFEST=%s\n" % manifest +
         "CCC_IMAGE_MANIFEST_DIGEST=%s\n" % _MANIFEST_DIGEST +
+        "CCC_IMAGE_CONFIG_DIGEST=%s\n" % _CONFIG_DIGEST +
+        "CCC_IMAGE_IDENTITY_MODE=containerd\n"
         "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive\n")
     sdist = tmp_path / "sdists"
     sdist.mkdir()
@@ -633,6 +636,9 @@ def test_phase_a_success_records_transport_and_atomic_evidence(tmp_path):
     assert (evid / "image-manifest.json").read_bytes() == _MANIFEST_CONTENT
     inp = (evid / "builder-inputs.env").read_text()
     assert "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive" in inp
+    assert "CCC_IMAGE_IDENTITY_MODE=containerd" in inp
+    assert ("CCC_RUNTIME_IMAGE_ID=%s" % _IMG_ID) in inp
+    assert ("CCC_IMAGE_CONFIG_DIGEST=%s" % _CONFIG_DIGEST) in inp
     assert _no_temp_left(evid)
 
 
@@ -667,14 +673,15 @@ def test_phase_a_unrecognized_archive_fails_before_build(tmp_path):
 
 
 @_needs_bash
-def test_phase_a_config_digest_mismatch_fails_atomic_no_evidence(tmp_path):
-    # manifest.config.digest != image_id -> shared gate fails -> abort at preflight, no artifacts
-    bad = _MANIFEST_CONTENT.replace(_IMG_ID.encode(), (b"sha256:" + b"e" * 64))
-    evid, log, env = _prep_phase_a(tmp_path, manifest=bad)
+def test_phase_a_identity_relationship_mismatch_fails_atomic_no_evidence(tmp_path):
+    # runtime id equals neither the manifest digest nor the config digest -> no identity mode ->
+    # shared gate fails at the smoke test -> abort before build, no artifacts.
+    evid, log, env = _prep_phase_a(tmp_path, image_id="sha256:" + "9" * 64)
     r = _run_phase_a(env, evid)
     assert r.returncode != 0
     assert not (evid / "image-manifest.json").exists()
     assert not (evid / "builder-inputs.env").exists()
+    assert "docker build" not in log.read_text()
     assert _no_temp_left(evid)
 
 
@@ -740,3 +747,17 @@ def test_phase_a_docker_save_failure_fails_closed(tmp_path):
     assert not (evid / "builder-inputs.env").exists()
     assert "docker build" not in log.read_text()      # aborted at the preflight capture
     assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_b_rejects_identity_mode_drift(tmp_path):
+    # Phase-A recorded containerd, but rewrite the evidence to claim legacy; the recaptured
+    # manifest still derives containerd, so --expect-mode legacy fails closed.
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    txt = inputs.read_text().replace("CCC_IMAGE_IDENTITY_MODE=containerd",
+                                     "CCC_IMAGE_IDENTITY_MODE=legacy")
+    inputs.write_text(txt)
+    prov = tmp_path / "prov.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert _no_docker_run(log)

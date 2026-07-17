@@ -111,14 +111,15 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                      recipe_path: str, build_backends_lock_path: str, apt_packages_path: str,
                      rustup_sha_path: str, extractor_tools_lock_path: str,
                      build_backends_source_allowlist_path: str, builder_identity: str,
-                     base_image_digest: str, image_manifest_path: str, image_id: str,
+                     base_image_digest: str, image_manifest_path: str, runtime_image_id: str,
                      env_probe=None, build_fn=None) -> dict:
     """Build the armv7 wheelhouse + STRICT builder provenance. Binds the committed
-    recipe + committed build-backends lock (by sha256), the pinned base image, the OCI
-    image MANIFEST digest RECOMPUTED from the raw OCI manifest bytes (so a local image
-    ID cannot masquerade as a manifest digest) alongside a distinct required local
-    image_id, and the environment CAPTURED FROM THE EXECUTING IMAGE. Self-checked
-    before return (fail closed)."""
+    recipe + committed build-backends lock (by sha256), the pinned base image, and the
+    STORE-AGNOSTIC runtime identity derived from the captured manifest + runtime_image_id
+    (containerd: runtime_image_id == manifest digest; legacy: == config digest), recording
+    runtime_image_id + image_manifest_digest + image_config_digest + image_identity_mode,
+    plus the environment CAPTURED FROM THE EXECUTING IMAGE. Self-checked before return
+    (fail closed)."""
     if not builder_identity:
         raise ReleaseError("builder identity required")
     if not recipe_path or not os.path.isfile(recipe_path):
@@ -164,9 +165,18 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         manifest_bytes = fh.read()
     if not manifest_bytes:
         raise ReleaseError("OCI image manifest is empty")
-    image_manifest_digest = "sha256:" + _R.sha256_hex(manifest_bytes)   # derived from the real OCI object
-    if not _R._is_oci_digest(image_id):
-        raise ReleaseError("image_id (local image/config id) is required as 'sha256:<64hex>'")
+    if not _R._is_oci_digest(runtime_image_id):
+        raise ReleaseError("runtime_image_id (docker .Id) is required as 'sha256:<64hex>'")
+    # Store-agnostic identity: derive the mode + manifest/config digests from the captured
+    # manifest and the runtime id (containerd: id == manifest digest; legacy: id == config digest).
+    try:
+        _idr = _R._ocim.validate_capture(manifest_bytes, runtime_image_id=runtime_image_id,
+                                         allow_index=False)
+    except _R._ocim.ManifestError as _exc:
+        raise ReleaseError(f"builder manifest identity invalid: {_exc}") from _exc
+    image_manifest_digest = _idr["manifest_digest"]
+    image_config_digest = _idr["config_digest"]
+    image_identity_mode = _idr["identity_mode"]
     environment = (env_probe or _default_env_probe)()
     build_fn = build_fn or _default_build_fn
     with open(build_lock_path, encoding="utf-8") as fh:
@@ -238,7 +248,9 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         "build_backends_source_allowlist_sha256": build_backends_source_allowlist_sha,
         "base_image_digest": base_image_digest,
         "image_manifest_digest": image_manifest_digest,
-        "image_id": image_id,
+        "image_config_digest": image_config_digest,
+        "image_identity_mode": image_identity_mode,
+        "runtime_image_id": runtime_image_id,
         "environment": env,
         "environment_sha256": _R.sha256_hex(_R._canonical_env_bytes(env)),
     }
@@ -271,7 +283,7 @@ def main(argv=None) -> int:
     ap.add_argument("--base-image-digest", required=True, help="pinned base image OCI digest sha256:<64hex>")
     ap.add_argument("--image-manifest", required=True,
                     help="raw OCI image manifest file (skopeo inspect --raw); its sha256 is the manifest digest")
-    ap.add_argument("--image-id", required=True, help="docker local image/config id (evidence; must differ)")
+    ap.add_argument("--runtime-image-id", required=True, help="docker inspect .Id (store-agnostic runtime id)")
     ap.add_argument("--provenance-out", required=True)
     a = ap.parse_args(argv)
     res = build_wheelhouse(build_lock_path=a.build_lock, sdist_dir=a.sdist_dir, out_dir=a.out_dir,
@@ -280,7 +292,7 @@ def main(argv=None) -> int:
                            extractor_tools_lock_path=a.extractor_tools_lock,
                            build_backends_source_allowlist_path=a.build_backends_source_allowlist,
                            builder_identity=a.builder_identity, base_image_digest=a.base_image_digest,
-                           image_manifest_path=a.image_manifest, image_id=a.image_id)
+                           image_manifest_path=a.image_manifest, runtime_image_id=a.runtime_image_id)
     with open(a.provenance_out, "w", encoding="utf-8") as fh:
         json.dump(res["provenance"], fh)
     print(f"wheelhouse: {a.out_dir}  bundle_sha256={res['bundle_sha256']}  provenance={a.provenance_out}")

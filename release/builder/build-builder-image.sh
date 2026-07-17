@@ -41,20 +41,20 @@ trap _ba_cleanup EXIT
 
 # --- FAIL-FAST interoperability smoke test (BEFORE the expensive build): exercise the EXACT
 # docker-save -> detected-archive-transport -> skopeo -> oci_manifest capture path against the
-# already digest-pinned base image, including config.digest == image_id. A capability mismatch
-# aborts here in seconds, not after a Rust + cffi build. ---
+# already digest-pinned base image (which is a multi-arch OCI index, so allow_index=1, bound to
+# its index digest). A capability mismatch aborts here in seconds, not after a Rust + cffi build. ---
 sudo docker pull "${BASE_IMAGE}" >/dev/null \
   || { echo "ERROR: cannot pull digest-pinned base image ${BASE_IMAGE}" >&2; exit 1; }
 BASE_LOCAL_ID="$(sudo docker image inspect --format '{{.Id}}' "${BASE_IMAGE}")"
 [[ "${BASE_LOCAL_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || { echo "ERROR: unexpected base image id ${BASE_LOCAL_ID}" >&2; exit 1; }
-if ! SMOKE_OUT="$(capture_manifest "${BASE_IMAGE}" "${BASE_LOCAL_ID}" "${EVID}/.smoke-manifest.json")"; then
+if ! SMOKE_OUT="$(capture_manifest "${BASE_IMAGE}" "${BASE_LOCAL_ID}" "${EVID}/.smoke-manifest.json" 1)"; then
   rm -f "${EVID}/.smoke-manifest.json"
   echo "ERROR: manifest-capture interoperability smoke test FAILED (docker-save/archive/skopeo/" >&2
   echo "       oci_manifest). Aborting BEFORE the expensive image build." >&2; exit 1
 fi
 rm -f "${EVID}/.smoke-manifest.json"
-echo "Preflight OK: capture path works via $(sed -n 's/^TRANSPORT=//p' <<<"${SMOKE_OUT}")."
+echo "Preflight OK: capture path works via $(sed -n 's/^TRANSPORT=//p' <<<"${SMOKE_OUT}") ($(sed -n 's/^IDENTITY_MODE=//p' <<<"${SMOKE_OUT}"))."
 
 sudo docker build --build-arg CCC_BASE_IMAGE="${BASE_IMAGE}" -t "${TAG}" -f "${HERE}/Containerfile" "${HERE}"
 
@@ -62,17 +62,24 @@ IMAGE_ID="$(sudo docker image inspect --format '{{.Id}}' "${TAG}")"        # loc
 [[ "${IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ERROR: unexpected image id ${IMAGE_ID}" >&2; exit 1; }
 
 # --- Capture + validate the built image manifest via the SHARED contract (docker save ->
-# detected archive transport -> skopeo --raw -> oci_manifest gate: single-image shape AND
-# config.digest == image_id). image-manifest.json is published ATOMICALLY, only after a
-# successful non-empty validated capture; the daemon transport is NOT used anywhere. ---
-if ! CAP_OUT="$(capture_manifest "${TAG}" "${IMAGE_ID}" "${EVID}/image-manifest.json")"; then
+# detected archive transport -> skopeo --raw -> oci_manifest gate: single-image shape AND the
+# store-agnostic runtime-identity binding, recording runtime_image_id + image_manifest_digest +
+# image_config_digest + image_identity_mode). image-manifest.json is published ATOMICALLY, only
+# after a successful validated capture; the daemon transport is NOT used anywhere. ---
+if ! CAP_OUT="$(capture_manifest "${TAG}" "${IMAGE_ID}" "${EVID}/image-manifest.json" 0)"; then
   echo "ERROR: refusing to write builder-inputs evidence (manifest capture/validation failed)." >&2
   exit 1
 fi
 MANIFEST_TRANSPORT="$(sed -n 's/^TRANSPORT=//p' <<<"${CAP_OUT}")"
 MANIFEST_DIGEST="$(sed -n 's/^MANIFEST_DIGEST=//p' <<<"${CAP_OUT}")"
+MANIFEST_IDENTITY_MODE="$(sed -n 's/^IDENTITY_MODE=//p' <<<"${CAP_OUT}")"
+MANIFEST_CONFIG_DIGEST="$(sed -n 's/^CONFIG_DIGEST=//p' <<<"${CAP_OUT}")"
 [[ -n "${MANIFEST_TRANSPORT}" && "${MANIFEST_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
   || { echo "ERROR: capture returned malformed transport/digest" >&2; exit 1; }
+[[ "${MANIFEST_IDENTITY_MODE}" == "containerd" || "${MANIFEST_IDENTITY_MODE}" == "legacy" ]] \
+  || { echo "ERROR: built image identity mode must be containerd|legacy (got '${MANIFEST_IDENTITY_MODE}')" >&2; exit 1; }
+[[ "${MANIFEST_CONFIG_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  || { echo "ERROR: single-image capture must carry a config digest" >&2; exit 1; }
 
 RECIPE_SHA="$(python3 -c "import hashlib;print(hashlib.sha256(open('${HERE}/Containerfile','rb').read().replace(b'\r\n',b'\n').replace(b'\r',b'\n')).hexdigest())")"
 ALLOWLIST_FILE="${HERE}/requirements-build-backends.source-allowlist"
@@ -89,15 +96,17 @@ CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST=${ALLOWLIST_FILE}
 CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST_SHA256=${ALLOWLIST_SHA}
 CCC_BASE_IMAGE_DIGEST=${BASE_DIGEST}
 CCC_IMAGE_TAG=${TAG}
-CCC_IMAGE_ID=${IMAGE_ID}
+CCC_RUNTIME_IMAGE_ID=${IMAGE_ID}
 CCC_IMAGE_MANIFEST=${EVID}/image-manifest.json
 CCC_IMAGE_MANIFEST_DIGEST=${MANIFEST_DIGEST}
+CCC_IMAGE_CONFIG_DIGEST=${MANIFEST_CONFIG_DIGEST}
+CCC_IMAGE_IDENTITY_MODE=${MANIFEST_IDENTITY_MODE}
 CCC_MANIFEST_CAPTURE_TRANSPORT=${MANIFEST_TRANSPORT}
 CCC_SKOPEO_VERSION=${SKOPEO_VERSION}
 ENV
 # Publish builder-inputs.env ATOMICALLY: it appears at its final path only after everything
 # above (incl. the validated manifest capture) succeeded.
 mv -f "${BUILDER_INPUTS_TMP}" "${EVID}/builder-inputs.env"
-echo "Phase A complete. image_manifest_digest=${MANIFEST_DIGEST} image_id=${IMAGE_ID} (evidence)."
+echo "Phase A complete. runtime_image_id=${IMAGE_ID} image_manifest_digest=${MANIFEST_DIGEST} identity_mode=${MANIFEST_IDENTITY_MODE} (evidence)."
 echo "skopeo: ${SKOPEO_VERSION}"
 echo "The environment manifest is captured in Phase B, FROM the executing image."

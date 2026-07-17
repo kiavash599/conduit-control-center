@@ -175,13 +175,15 @@ mkdir -p "${OUT_DIR}"
 
 # --- re-verify the tag STILL maps to the captured image id (immutable execution target) ---
 CUR_ID="$(sudo docker image inspect --format '{{.Id}}' "${CCC_IMAGE_TAG}")"
-[[ "${CUR_ID}" == "${CCC_IMAGE_ID}" ]] || {
+[[ "${CUR_ID}" == "${CCC_RUNTIME_IMAGE_ID}" ]] || {
   echo "ERROR: tag ${CCC_IMAGE_TAG} no longer maps to the Phase-A image id (got ${CUR_ID})" >&2; exit 1; }
-# Re-capture through the SAME shared contract, REUSING the transport recorded by Phase A (a
-# different representation must not silently pass), then confirm no manifest-digest drift. The
-# shared contract re-asserts config.digest == image_id; the temp recapture is auto-cleaned.
+# Re-capture through the SAME shared contract, REUSING the transport AND identity mode recorded
+# by Phase A (a different representation/mode must not silently pass), then confirm no
+# manifest-digest drift. The contract re-binds runtime_image_id under the recorded mode; the temp
+# recapture is auto-cleaned. Single-image required (allow_index=0).
 : "${CCC_MANIFEST_CAPTURE_TRANSPORT:?Phase-A evidence missing CCC_MANIFEST_CAPTURE_TRANSPORT}"
-if ! RECAP_OUT="$(capture_manifest "${CCC_IMAGE_TAG}" "${CCC_IMAGE_ID}" "${OUT_DIR}/.recap-manifest.json" "${CCC_MANIFEST_CAPTURE_TRANSPORT}")"; then
+: "${CCC_IMAGE_IDENTITY_MODE:?Phase-A evidence missing CCC_IMAGE_IDENTITY_MODE}"
+if ! RECAP_OUT="$(capture_manifest "${CCC_IMAGE_TAG}" "${CCC_RUNTIME_IMAGE_ID}" "${OUT_DIR}/.recap-manifest.json" 0 "${CCC_MANIFEST_CAPTURE_TRANSPORT}" "${CCC_IMAGE_IDENTITY_MODE}")"; then
   rm -f "${OUT_DIR}/.recap-manifest.json"
   echo "ERROR: Phase-B manifest re-capture/validation failed (transport ${CCC_MANIFEST_CAPTURE_TRANSPORT})" >&2; exit 1
 fi
@@ -200,7 +202,7 @@ sudo docker run --rm \
   -v "${SDIST_DIR}:/in/sdists:ro" \
   -v "${CCC_IMAGE_MANIFEST}:/in/image-manifest.json:ro" \
   -v "${OUT_DIR}:/out:rw" \
-  "${CCC_IMAGE_ID}" \
+  "${CCC_RUNTIME_IMAGE_ID}" \
   python3 /repo/release/build_wheelhouse.py \
     --build-lock /in/requirements-armv7-build.lock \
     --sdist-dir /in/sdists \
@@ -214,7 +216,7 @@ sudo docker run --rm \
     --builder-identity "${CCC_BUILDER_IDENTITY}" \
     --base-image-digest "${CCC_BASE_IMAGE_DIGEST}" \
     --image-manifest /in/image-manifest.json \
-    --image-id "${CCC_IMAGE_ID}" \
+    --runtime-image-id "${CCC_RUNTIME_IMAGE_ID}" \
     --provenance-out /out/wheelhouse-armv7.json
 
 # --- write + verify the provenance output; handle same-file; fail closed ---

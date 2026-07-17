@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """release/build_wheelhouse.py tests (hardened builder block). Verifies the manifest
-digest is recomputed from the raw OCI manifest file, image_id is required + distinct,
+digest is recomputed from the raw OCI manifest file, the store-agnostic runtime identity
 the committed build-backends lock is bound + cross-checked, the environment is CAPTURED
 from the executing runtime (injectable env_probe), and the whole thing self-checks
 through the strict producer validator. Portable (no ssh/Linux/Docker)."""
@@ -31,18 +31,19 @@ _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
 _ALLOWLIST = "maturin\n"
 _ALLOWLIST_SHA = R.sha256_hex(_ALLOWLIST.encode())
 _BASE = "sha256:" + "b" * 64
-_IMAGE_ID = "sha256:" + "d" * 64
-def _manifest_bytes(image_id):
+_CONFIG_DIGEST = "sha256:" + "c" * 64
+def _manifest_bytes(config_digest):
     import json as _json
     return _json.dumps({
         "schemaVersion": 2,
         "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
         "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
-                   "digest": image_id, "size": 1234},
+                   "digest": config_digest, "size": 1234},
         "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                     "digest": "sha256:" + "a" * 64, "size": 5678}],
     }).encode()
-_MANIFEST_BYTES = _manifest_bytes(_IMAGE_ID)
+_MANIFEST_BYTES = _manifest_bytes(_CONFIG_DIGEST)
+_RUNTIME_ID = "sha256:" + hashlib.sha256(_MANIFEST_BYTES).hexdigest()   # containerd: .Id == manifest digest
 
 
 def _sdist(d, name, data):
@@ -80,7 +81,7 @@ def _setup(tmp_path, *, lock=None, sdists=None, bb_lock=_BB_LOCK, manifest=_MANI
 
 
 def _run(tmp_path, *, build_fn=_good_build_fn, identity="ccc-builder", base=_BASE,
-         image_id=_IMAGE_ID, env_probe=None, **kw):
+         runtime_image_id=_RUNTIME_ID, env_probe=None, **kw):
     d, sdir, sh = _setup(tmp_path, **kw)
     res = B.build_wheelhouse(
         build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
@@ -90,7 +91,7 @@ def _run(tmp_path, *, build_fn=_good_build_fn, identity="ccc-builder", base=_BAS
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
         build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
         builder_identity=identity, base_image_digest=base,
-        image_manifest_path=str(d / "image-manifest.json"), image_id=image_id,
+        image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=runtime_image_id,
         env_probe=env_probe or _probe, build_fn=build_fn)
     return res, d, sh
 
@@ -99,7 +100,10 @@ def test_build_ok_and_round_trips(tmp_path):
     res, d, _sh = _run(tmp_path)
     b = res["provenance"]["builder"]
     assert b["image_manifest_digest"] == "sha256:" + hashlib.sha256(_MANIFEST_BYTES).hexdigest()
-    assert b["image_id"] == _IMAGE_ID and b["image_id"] != b["image_manifest_digest"]
+    assert b["runtime_image_id"] == _RUNTIME_ID and b["image_identity_mode"] == "containerd"
+    assert b["image_config_digest"] == _CONFIG_DIGEST
+    assert b["runtime_image_id"] == b["image_manifest_digest"]        # containerd binding
+    assert "image_id" not in b
     assert b["build_backends_lock_sha256"] == R.sha256_hex(_BB_LOCK.encode())
     assert b["environment"]["glibc"] == "2.35"
     R._validate_provenance(res["provenance"], R._wheelhouse_members(str(d / "wh")), res["bundle_sha256"],
@@ -118,11 +122,17 @@ def test_default_env_probe_shape():
     assert isinstance(env["build_backends"], dict)
 
 
-def test_image_id_required_and_distinct(tmp_path):
-    with pytest.raises(R.ReleaseError):
-        _run(tmp_path, image_id="")
-    with pytest.raises(R.ReleaseError):        # id == derived manifest digest
-        _run(tmp_path, image_id="sha256:" + hashlib.sha256(_MANIFEST_BYTES).hexdigest())
+def test_runtime_image_id_required_and_bound(tmp_path):
+    with pytest.raises(R.ReleaseError):        # not an OCI digest
+        _run(tmp_path, runtime_image_id="")
+    with pytest.raises(R.ReleaseError):        # equals neither manifest nor config digest -> no mode
+        _run(tmp_path, runtime_image_id="sha256:" + "7" * 64)
+
+
+def test_legacy_mode_runtime_image_id_is_config(tmp_path):
+    # legacy store: .Id == config digest (!= manifest digest) is also accepted
+    res, d, _sh = _run(tmp_path, runtime_image_id=_CONFIG_DIGEST)
+    assert res["provenance"]["builder"]["image_identity_mode"] == "legacy"
 
 
 def test_missing_or_empty_manifest_file(tmp_path):

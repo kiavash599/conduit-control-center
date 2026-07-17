@@ -36,18 +36,20 @@ _APT = "build-essential=12.9ubuntu3\n"
 _RUSTUP = "f" * 64 + "  rustup-init\n"
 _APT_SHA = R.sha256_hex(_APT.encode())
 _RUSTUP_SHA = R.sha256_hex(_RUSTUP.encode())
-def _manifest_bytes(image_id):
+def _manifest_bytes(config_digest):
     import json as _json
     return _json.dumps({
         "schemaVersion": 2,
         "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
         "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
-                   "digest": image_id, "size": 1234},
+                   "digest": config_digest, "size": 1234},
         "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                     "digest": "sha256:" + "a" * 64, "size": 5678}],
     }).encode()
-_MANIFEST = _manifest_bytes("sha256:" + "d" * 64)
+_CONFIG_DIGEST = "sha256:" + "c" * 64
+_MANIFEST = _manifest_bytes(_CONFIG_DIGEST)
 _MANIFEST_DIGEST = "sha256:" + hashlib.sha256(_MANIFEST).hexdigest()
+_RUNTIME_ID = _MANIFEST_DIGEST                      # containerd store: .Id == manifest digest
 _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
@@ -66,7 +68,8 @@ def _builder(recipe_sha=_RECIPE_SHA, **over):
          "extractor_tools_lock_sha256": _EXT_LOCK_SHA,
          "build_backends_source_allowlist_sha256": _ALLOWLIST_SHA,
          "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _MANIFEST_DIGEST,
-         "image_id": "sha256:" + "d" * 64, "environment": dict(_ENV),
+         "image_config_digest": _CONFIG_DIGEST, "image_identity_mode": "containerd",
+         "runtime_image_id": _RUNTIME_ID, "environment": dict(_ENV),
          "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
     b.update(over)
     return b

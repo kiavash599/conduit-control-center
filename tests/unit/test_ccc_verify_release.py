@@ -37,13 +37,13 @@ from backend import update_verify as V  # noqa: E402
 
 
 
-def _manifest_bytes(image_id):
+def _manifest_bytes(config_digest):
     import json as _json
     return _json.dumps({
         "schemaVersion": 2,
         "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
         "config": {"mediaType": "application/vnd.docker.container.image.v1+json",
-                   "digest": image_id, "size": 1234},
+                   "digest": config_digest, "size": 1234},
         "layers": [{"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
                     "digest": "sha256:" + "a" * 64, "size": 5678}],
     }).encode()
@@ -103,8 +103,9 @@ def _release(base):
             "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
             "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
             "apt": {"build-essential": "12.9ubuntu3"}, "build_backends": {"maturin": "1.5.1"}}
-    _manifest = _manifest_bytes("sha256:" + "d" * 64)
-    _mdigest = "sha256:" + hashlib.sha256(_manifest).hexdigest()
+    _config_digest = "sha256:" + "c" * 64
+    _manifest = _manifest_bytes(_config_digest)
+    _mdigest = "sha256:" + hashlib.sha256(_manifest).hexdigest()   # containerd: .Id == manifest digest
     _builder = {"identity": "ccc-armv7-builder", "recipe_path": R.CANONICAL_RECIPE_PATH,
                 "recipe_sha256": _rsha, "build_backends_lock_sha256": _bbsha,
                 "apt_packages_sha256": R.sha256_hex(_apt.encode()),
@@ -112,7 +113,8 @@ def _release(base):
                 "extractor_tools_lock_sha256": _EXT_LOCK_SHA,
                 "build_backends_source_allowlist_sha256": _ALLOWLIST_SHA,
                 "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _mdigest,
-                "image_id": "sha256:" + "d" * 64, "environment": _env,
+                "image_config_digest": _config_digest, "image_identity_mode": "containerd",
+                "runtime_image_id": _mdigest, "environment": _env,
                 "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_env))}
     prov.write_text(json.dumps({"builder": _builder,
                                 "bundle": {"sha256": bs},

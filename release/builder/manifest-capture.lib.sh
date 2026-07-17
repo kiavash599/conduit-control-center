@@ -6,13 +6,17 @@
 # The incompatible `skopeo inspect --raw docker-daemon:` transport (rejected by modern Docker's
 # minimum API version) is replaced by a LOCAL-ARCHIVE flow that needs no daemon-API negotiation:
 #   docker save <tag> (streamed to an unprivileged user-owned fd) -> detect archive transport
-#   (oci-archive | docker-archive) -> skopeo
-#   inspect --raw <transport>:<tar> -> shared oci_manifest gate (config.digest == image_id).
+#   (oci-archive | docker-archive) -> skopeo inspect --raw <transport>:<tar> -> shared,
+#   store-agnostic oci_manifest gate (runtime-identity binding, below).
 #
-# Load-bearing invariant PRESERVED: manifest.config.digest == image_id (the config blob is the
-# image's identity, invariant across representations). image_manifest_digest is treated as a
-# mechanism-consistent EVIDENCE value; Phase A records the transport and Phase B MUST reuse it,
-# so the digest comparison is exact. There is NO docker-daemon fallback.
+# Store-agnostic runtime identity: Docker's .Id (runtime_image_id) is the MANIFEST digest on the
+# containerd image store (Docker 29 default) and the CONFIG digest on the legacy graphdriver. The
+# gate binds whichever SINGLE relationship holds -- containerd: runtime_image_id ==
+# image_manifest_digest; legacy: runtime_image_id == image_config_digest (and != manifest digest)
+# -- rejecting both-match (ambiguous) and neither-match (unbound). The derived image_identity_mode
+# is recorded by Phase A and REUSED by Phase B (a different transport/mode must not silently pass).
+# An OCI index is accepted ONLY on the pre-build smoke path (allow_index), bound to its index
+# digest. There is NO docker-daemon fallback.
 #
 # Requires on PATH: docker, skopeo, sha256sum, python3, tar, mktemp.
 
@@ -30,19 +34,26 @@ mc_detect_transport() {   # <tar> -> echoes "oci-archive" | "docker-archive"
   return 1
 }
 
-# capture_manifest <tag> <image_id> <manifest_out> [<expected_transport>]
+# docker save -> detect transport (== <want_transport> when given) -> skopeo inspect --raw ->
+# non-empty check -> shared, store-agnostic oci_manifest gate (single-image schema-2/OCI shape +
+# runtime-identity binding under the derived/expected mode) -> ATOMIC publish to <manifest_out>.
 #
-# docker save -> detect transport (must equal <expected_transport> when given) -> skopeo inspect
-# --raw -> non-empty check -> shared oci_manifest gate (config.digest == image_id + single-image
-# schema-2/OCI shape + self-consistent digest) -> ATOMIC publish to <manifest_out>.
-#
-# On success prints exactly two lines to stdout (nothing else goes to stdout):
+# On success prints these lines to stdout (nothing else goes to stdout):
 #   TRANSPORT=<oci-archive|docker-archive>
+#   IDENTITY_MODE=<containerd|legacy|index>
 #   MANIFEST_DIGEST=sha256:<hex>
-# All temporaries (the save tarball + the pre-publish manifest) are removed on EVERY return.
+#   CONFIG_DIGEST=sha256:<hex>       (empty for an index)
+#   MEDIA_TYPE=<manifest/index media type>
+#
+# Positional args:
+#   capture_manifest <tag> <runtime_image_id> <out> <allow_index:0|1> [<want_transport>] [<want_mode>]
+# <allow_index>=1 permits a multi-image index (pre-build smoke ONLY). When <want_transport> or
+# <want_mode> is given, the DETECTED transport / DERIVED identity mode must match (Phase B reuses
+# the values Phase A recorded). All temporaries are removed on EVERY return.
 capture_manifest() {
-  local tag="$1" image_id="$2" out="$3" want_transport="${4:-}"
-  local tmpd tar manifest transport digest out_tmp
+  local tag="$1" runtime_image_id="$2" out="$3" allow_index="${4:-0}"
+  local want_transport="${5:-}" want_mode="${6:-}"
+  local tmpd tar manifest transport out_tmp cli_out
   tmpd="$(mktemp -d "$(dirname "${out}")/.mc.XXXXXX")" \
     || { echo "ERROR: mktemp failed near ${out}" >&2; return 1; }
   # Clean the temp workdir on ANY return path (success or failure).
@@ -66,11 +77,14 @@ capture_manifest() {
     || { echo "ERROR: 'skopeo inspect --raw ${transport}:' failed" >&2; return 1; }
   [[ -s "${manifest}" ]] || { echo "ERROR: empty raw-manifest capture (${transport})" >&2; return 1; }
 
-  digest="sha256:$(sha256sum "${manifest}" | cut -d' ' -f1)"
-  # Shared gate: valid single-image schema-2/OCI manifest AND config.digest == image_id.
-  python3 "${_MC_LIB_DIR}/../oci_manifest.py" \
-      --manifest "${manifest}" --image-id "${image_id}" --expect-manifest-digest "${digest}" >/dev/null \
-    || { echo "ERROR: manifest failed shared validation (config.digest != image_id or bad shape)" >&2; return 1; }
+  # Shared, store-agnostic gate: bind runtime_image_id to the manifest via the derived identity
+  # mode (containerd/legacy for a single image; index only when allow_index=1). --expect-mode
+  # rejects mode confusion. The CLI prints IDENTITY_MODE/MANIFEST_DIGEST/CONFIG_DIGEST/MEDIA_TYPE.
+  local -a gate=( --manifest "${manifest}" --runtime-image-id "${runtime_image_id}" )
+  [[ "${allow_index}" == "1" ]] && gate+=( --allow-index )
+  [[ -n "${want_mode}" ]] && gate+=( --expect-mode "${want_mode}" )
+  cli_out="$(python3 "${_MC_LIB_DIR}/../oci_manifest.py" "${gate[@]}")" \
+    || { echo "ERROR: manifest failed shared identity validation (runtime_image_id/mode/shape)" >&2; return 1; }
 
   # ATOMIC publish: the final path appears only after a successful, non-empty, validated capture.
   out_tmp="${out}.tmp.$$"
@@ -78,6 +92,6 @@ capture_manifest() {
     || { rm -f "${out_tmp}"; echo "ERROR: could not publish manifest to ${out}" >&2; return 1; }
 
   echo "TRANSPORT=${transport}"
-  echo "MANIFEST_DIGEST=${digest}"
+  printf '%s\n' "${cli_out}"
   return 0
 }
