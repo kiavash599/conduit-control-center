@@ -36,7 +36,7 @@ BASE_DIGEST="${BASE_IMAGE##*@}"
 mkdir -p "${EVID}"
 # Remove capture/evidence temporaries on ANY exit (success or failure); final artifacts are
 # published atomically and are never these temp names.
-_ba_cleanup() { rm -rf "${EVID}/.smoke-manifest.json" "${EVID}/".mc.* "${EVID}/".builder-inputs.env.tmp.* 2>/dev/null || true; }
+_ba_cleanup() { rm -rf "${EVID}/.smoke-manifest.json" "${EVID}/".mc.* "${EVID}/".builder-inputs.kv.tmp.* 2>/dev/null || true; }
 trap _ba_cleanup EXIT
 
 # --- FAIL-FAST interoperability smoke test (BEFORE the expensive build): exercise the EXACT
@@ -84,7 +84,12 @@ MANIFEST_CONFIG_DIGEST="$(sed -n 's/^CONFIG_DIGEST=//p' <<<"${CAP_OUT}")"
 RECIPE_SHA="$(python3 -c "import hashlib;print(hashlib.sha256(open('${HERE}/Containerfile','rb').read().replace(b'\r\n',b'\n').replace(b'\r',b'\n')).hexdigest())")"
 ALLOWLIST_FILE="${HERE}/requirements-build-backends.source-allowlist"
 ALLOWLIST_SHA="$(python3 -c "import hashlib;print(hashlib.sha256(open('${ALLOWLIST_FILE}','rb').read().replace(b'\r\n',b'\n').replace(b'\r',b'\n')).hexdigest())")"
-BUILDER_INPUTS_TMP="${EVID}/.builder-inputs.env.tmp.$$"
+BUILDER_INPUTS_TMP="${EVID}/.builder-inputs.kv.tmp.$$"
+# builder-inputs.kv is DATA, never code. It is consumed by read_builder_inputs.py and MUST NOT be
+# `source`d/`.`-dotted/`eval`d by anyone. Values are therefore RAW (no shell quoting): the reader
+# validates every field. The heredoc delimiter is unquoted so ${...} expands into literal values.
+# CCC_SKOPEO_VERSION is deliberately NOT written here (no Phase-B reader; free-form/space-bearing);
+# it is preserved only in the transcript echo below.
 cat > "${BUILDER_INPUTS_TMP}" <<ENV
 CCC_BUILDER_IDENTITY=conduit-control-center-armv7-wheelhouse-builder
 CCC_RECIPE=${HERE}/Containerfile
@@ -102,11 +107,14 @@ CCC_IMAGE_MANIFEST_DIGEST=${MANIFEST_DIGEST}
 CCC_IMAGE_CONFIG_DIGEST=${MANIFEST_CONFIG_DIGEST}
 CCC_IMAGE_IDENTITY_MODE=${MANIFEST_IDENTITY_MODE}
 CCC_MANIFEST_CAPTURE_TRANSPORT=${MANIFEST_TRANSPORT}
-CCC_SKOPEO_VERSION=${SKOPEO_VERSION}
 ENV
-# Publish builder-inputs.env ATOMICALLY: it appears at its final path only after everything
-# above (incl. the validated manifest capture) succeeded.
-mv -f "${BUILDER_INPUTS_TMP}" "${EVID}/builder-inputs.env"
+# Producer-side trust boundary: validate the temporary file with the SAME strict reader Phase B
+# uses. Invalid producer output is NEVER published (fail closed before the atomic rename).
+python3 "${HERE}/read_builder_inputs.py" --inputs "${BUILDER_INPUTS_TMP}" >/dev/null \
+  || { echo "ERROR: producer wrote invalid builder inputs; refusing to publish." >&2; exit 1; }
+# Publish builder-inputs.kv ATOMICALLY: it appears at its final path only after everything above
+# (incl. the validated manifest capture AND the reader validation) succeeded.
+mv -f "${BUILDER_INPUTS_TMP}" "${EVID}/builder-inputs.kv"
 echo "Phase A complete. runtime_image_id=${IMAGE_ID} image_manifest_digest=${MANIFEST_DIGEST} identity_mode=${MANIFEST_IDENTITY_MODE} (evidence)."
 echo "skopeo: ${SKOPEO_VERSION}"
 echo "The environment manifest is captured in Phase B, FROM the executing image."

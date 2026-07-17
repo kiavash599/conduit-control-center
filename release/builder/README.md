@@ -45,8 +45,18 @@ is recorded and re-derived at each boundary, and a declared mode that disagrees 
 rejected. Provenance carries `runtime_image_id`, `image_manifest_digest`, `image_config_digest`,
 `image_identity_mode` (the ambiguous single `image_id` is gone). Phase B re-captures through the
 **same** contract, reusing the recorded transport **and mode**, and runs the container by
-`runtime_image_id`. `image-manifest.json` and `builder-inputs.env` are written **atomically**
+`runtime_image_id`. `image-manifest.json` and `builder-inputs.kv` are written **atomically**
 (temp → validate → rename). Phase A also captures the environment manifest.
+
+**`builder-inputs.kv` is DATA, never code.** The Phase-A → Phase-B handoff is a strict `KEY=VALUE`
+file (`.kv`, not `.env`) that is **never** `source`d/`.`-dotted/`eval`d. Both phases parse it only
+through the stdlib reader `read_builder_inputs.py`, which enforces the exact 16-key schema and
+per-field constraints (digests, hashes, identity mode, transport, image tag, builder identity,
+controlled absolute paths), rejects NUL/CR/CRLF/missing-final-LF/blank/comment/continuation/
+duplicate/foreign/missing records, and emits validated NUL-delimited records only when the whole
+file is valid. Phase A validates its temp file with the same reader before atomic publication, so
+invalid producer output is never published. This closes the shell command-execution class (`$()`,
+backticks, quotes, newline-smuggled assignments) that sourcing an evidence file would expose.
 
 **OCI-index base vs single-image builder / RPi2 empirical basis.** The digest-pinned base is a
 multi-arch OCI **index**, so the pre-build interop smoke test runs with `--allow-index` and binds

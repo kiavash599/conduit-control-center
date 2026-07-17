@@ -23,6 +23,7 @@ import pathlib
 import shutil
 import stat
 import subprocess
+import sys
 
 import pytest
 
@@ -33,8 +34,12 @@ _B = _ROOT / "release" / "builder"
 _PHASE_A = (_B / "build-builder-image.sh").read_text(encoding="utf-8")
 _PHASE_B = (_B / "build-wheelhouse-offline.sh").read_text(encoding="utf-8")
 _RECIPE = (_B / "Containerfile").read_text(encoding="utf-8")
-_bash = shutil.which("bash")
-_needs_bash = pytest.mark.skipif(_bash is None, reason="bash required")
+# Require a NATIVE POSIX bash. On Windows, shutil.which("bash") can resolve to the WindowsApps
+# WSL launcher (bash.exe), which then receives Windows paths through /bin/bash and mangles the
+# separators; the POSIX-only reader fixtures also (correctly) reject Windows absolute paths. So
+# these bash-backed tests must skip on Windows even when a bash.exe launcher exists.
+_bash = None if os.name == "nt" else shutil.which("bash")
+_needs_bash = pytest.mark.skipif(_bash is None, reason="native POSIX bash required")
 
 
 # --------------------------------------------------------------------------- #
@@ -245,6 +250,41 @@ _FAKE_DOCKER = (
 )
 
 
+_READER = _B / "read_builder_inputs.py"
+_py = shutil.which("python3") or sys.executable
+
+
+def _valid_kv(base, manifest_path, **over):
+    """Full, schema-valid builder-inputs.kv content as bytes; override any key for negatives.
+    Paths point under `base` (an absolute tmp dir) with the exact basenames the reader pins; they
+    need not exist (the reader validates shape, not existence)."""
+    d = {
+        "CCC_BUILDER_IDENTITY": "conduit-control-center-armv7-wheelhouse-builder",
+        "CCC_RECIPE": str(base / "Containerfile"),
+        "CCC_RECIPE_SHA256": "a" * 64,
+        "CCC_BUILD_BACKENDS_LOCK": str(base / "requirements-build-backends.lock"),
+        "CCC_APT_PACKAGES": str(base / "apt-packages.list"),
+        "CCC_RUSTUP_SHA": str(base / "rustup-init.sha256"),
+        "CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST": str(base / "requirements-build-backends.source-allowlist"),
+        "CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST_SHA256": "4" * 64,
+        "CCC_BASE_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        "CCC_IMAGE_TAG": "ccc:local",
+        "CCC_RUNTIME_IMAGE_ID": _IMG_ID,
+        "CCC_IMAGE_MANIFEST": str(manifest_path),
+        "CCC_IMAGE_MANIFEST_DIGEST": _MANIFEST_DIGEST,
+        "CCC_IMAGE_CONFIG_DIGEST": _CONFIG_DIGEST,
+        "CCC_IMAGE_IDENTITY_MODE": "containerd",
+        "CCC_MANIFEST_CAPTURE_TRANSPORT": "docker-archive",
+    }
+    d.update(over)
+    return "".join("%s=%s\n" % (k, v) for k, v in d.items()).encode("utf-8")
+
+
+def _run_reader(path):
+    # invoke the reader as a plain script (never sourced); stdout is NUL-delimited bytes
+    return subprocess.run([_py, str(_READER), "--inputs", str(path)], capture_output=True)
+
+
 def _mkbin(binp, name, body):
     p = binp / name
     p.write_text(body)
@@ -273,17 +313,8 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
     manifest.write_bytes(_MANIFEST_CONTENT)
     evid = tmp_path / "evidence"
     evid.mkdir()
-    inputs = evid / "builder-inputs.env"
-    inputs.write_text(
-        "CCC_BUILDER_IDENTITY=id\n"
-        "CCC_BASE_IMAGE_DIGEST=sha256:%s\n" % ("b" * 64) +
-        "CCC_IMAGE_TAG=ccc:local\n"
-        "CCC_RUNTIME_IMAGE_ID=%s\n" % _IMG_ID +
-        "CCC_IMAGE_MANIFEST=%s\n" % manifest +
-        "CCC_IMAGE_MANIFEST_DIGEST=%s\n" % _MANIFEST_DIGEST +
-        "CCC_IMAGE_CONFIG_DIGEST=%s\n" % _CONFIG_DIGEST +
-        "CCC_IMAGE_IDENTITY_MODE=containerd\n"
-        "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive\n")
+    inputs = evid / "builder-inputs.kv"
+    inputs.write_bytes(_valid_kv(tmp_path, manifest))
     sdist = tmp_path / "sdists"
     sdist.mkdir()
     lock = tmp_path / "build.lock"
@@ -625,7 +656,7 @@ def _run_phase_a(env, evid, *, base=_BASE, tag="ccc:t"):
 def _no_temp_left(evid):
     names = [p.name for p in evid.iterdir()]
     return not any(n.startswith(".mc.") or n.startswith(".smoke-manifest")
-                   or ".builder-inputs.env.tmp" in n or n.endswith(".tmp") for n in names)
+                   or ".builder-inputs.kv.tmp" in n or n.endswith(".tmp") for n in names)
 
 
 @_needs_bash
@@ -634,11 +665,15 @@ def test_phase_a_success_records_transport_and_atomic_evidence(tmp_path):
     r = _run_phase_a(env, evid)
     assert r.returncode == 0, r.stderr
     assert (evid / "image-manifest.json").read_bytes() == _MANIFEST_CONTENT
-    inp = (evid / "builder-inputs.env").read_text()
+    inp = (evid / "builder-inputs.kv").read_text()
     assert "CCC_MANIFEST_CAPTURE_TRANSPORT=docker-archive" in inp
     assert "CCC_IMAGE_IDENTITY_MODE=containerd" in inp
     assert ("CCC_RUNTIME_IMAGE_ID=%s" % _IMG_ID) in inp
     assert ("CCC_IMAGE_CONFIG_DIGEST=%s" % _CONFIG_DIGEST) in inp
+    assert "CCC_SKOPEO_VERSION" not in inp        # removed from the consumed contract
+    assert '"' not in inp                         # raw data values, not shell literals
+    # the published data file passes the SAME strict reader Phase B uses
+    assert _run_reader(evid / "builder-inputs.kv").returncode == 0
     assert _no_temp_left(evid)
 
 
@@ -658,7 +693,7 @@ def test_phase_a_oci_archive_transport_detected_and_recorded(tmp_path):
     evid, log, env = _prep_phase_a(tmp_path, archive_kind="oci-layout")
     r = _run_phase_a(env, evid)
     assert r.returncode == 0, r.stderr
-    assert "CCC_MANIFEST_CAPTURE_TRANSPORT=oci-archive" in (evid / "builder-inputs.env").read_text()
+    assert "CCC_MANIFEST_CAPTURE_TRANSPORT=oci-archive" in (evid / "builder-inputs.kv").read_text()
 
 
 @_needs_bash
@@ -667,7 +702,7 @@ def test_phase_a_unrecognized_archive_fails_before_build(tmp_path):
     r = _run_phase_a(env, evid)
     assert r.returncode != 0
     assert not (evid / "image-manifest.json").exists()
-    assert not (evid / "builder-inputs.env").exists()
+    assert not (evid / "builder-inputs.kv").exists()
     assert "docker build" not in log.read_text()      # aborted at preflight
     assert _no_temp_left(evid)
 
@@ -680,7 +715,7 @@ def test_phase_a_identity_relationship_mismatch_fails_atomic_no_evidence(tmp_pat
     r = _run_phase_a(env, evid)
     assert r.returncode != 0
     assert not (evid / "image-manifest.json").exists()
-    assert not (evid / "builder-inputs.env").exists()
+    assert not (evid / "builder-inputs.kv").exists()
     assert "docker build" not in log.read_text()
     assert _no_temp_left(evid)
 
@@ -691,13 +726,13 @@ def test_phase_a_zero_byte_capture_rejected_atomic(tmp_path):
     r = _run_phase_a(env, evid)
     assert r.returncode != 0
     assert not (evid / "image-manifest.json").exists()
-    assert not (evid / "builder-inputs.env").exists()
+    assert not (evid / "builder-inputs.kv").exists()
     assert _no_temp_left(evid)
 
 
 @_needs_bash
 def test_phase_b_reuses_recorded_transport_and_rejects_drift(tmp_path):
-    # builder-inputs.env recorded docker-archive; a Phase-B capture that detects oci-archive
+    # builder-inputs.kv recorded docker-archive; a Phase-B capture that detects oci-archive
     # (representation drift) must fail rather than silently accept a different representation.
     _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
     env["FAKE_ARCHIVE_KIND"] = "oci-layout"           # detected transport now differs
@@ -744,7 +779,7 @@ def test_phase_a_docker_save_failure_fails_closed(tmp_path):
     r = _run_phase_a(env, evid)
     assert r.returncode != 0
     assert not (evid / "image-manifest.json").exists()
-    assert not (evid / "builder-inputs.env").exists()
+    assert not (evid / "builder-inputs.kv").exists()
     assert "docker build" not in log.read_text()      # aborted at the preflight capture
     assert _no_temp_left(evid)
 
@@ -760,4 +795,202 @@ def test_phase_b_rejects_identity_mode_drift(tmp_path):
     prov = tmp_path / "prov.json"
     r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
     assert r.returncode != 0
+    assert _no_docker_run(log)
+
+
+# --------------------------------------------------------------------------- #
+#  Data-boundary: builder-inputs.kv is DATA, parsed by read_builder_inputs.py  #
+#  and NEVER sourced/eval'd. Adversarial + round-trip coverage.                #
+# --------------------------------------------------------------------------- #
+def test_no_source_or_eval_of_builder_inputs_data_file():
+    # builder-inputs.kv is data: never source/./eval'd anywhere; both phases parse via the reader.
+    assert "read_builder_inputs.py" in _PHASE_A and "read_builder_inputs.py" in _PHASE_B
+    assert 'source "${INPUTS}"' not in _PHASE_B
+    assert '. "${INPUTS}"' not in _PHASE_B
+    assert "builder-inputs.kv" in _PHASE_A and "builder-inputs.kv" in _PHASE_B
+    assert "builder-inputs.env" not in _PHASE_A and "builder-inputs.env" not in _PHASE_B
+    # No `eval` command, and the ONLY `source`/`.` is the shell LIBRARY -- never the data file.
+    # (comment lines may mention "eval"/"source" descriptively; ignore them.)
+    for sh in (_PHASE_A, _PHASE_B):
+        for ln in sh.splitlines():
+            s = ln.strip()
+            if s.startswith("#"):
+                continue
+            assert "eval" not in s, s
+            if s.startswith("source ") or s.startswith(". "):
+                assert "manifest-capture.lib.sh" in s, s
+
+
+@_needs_bash
+def test_reader_valid_round_trip(tmp_path):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    kv = tmp_path / "builder-inputs.kv"
+    kv.write_bytes(_valid_kv(tmp_path, manifest))
+    r = _run_reader(kv)
+    assert r.returncode == 0, r.stderr
+    recs = r.stdout.split(b"\x00")
+    assert recs[-1] == b""                                  # NUL-terminated stream
+    pairs = [rec.split(b"=", 1) for rec in recs[:-1]]
+    assert len(pairs) == 16
+    keys = [k.decode() for k, _ in pairs]
+    assert keys[0] == "CCC_BUILDER_IDENTITY"                # deterministic schema order
+    assert keys[-1] == "CCC_MANIFEST_CAPTURE_TRANSPORT"
+    got = {k.decode(): v.decode() for k, v in pairs}
+    assert got["CCC_IMAGE_IDENTITY_MODE"] == "containerd"
+    assert got["CCC_RUNTIME_IMAGE_ID"] == _IMG_ID
+
+
+@_needs_bash
+def test_reader_real_multiword_skopeo_version_is_foreign(tmp_path):
+    # the real offender: a space-bearing skopeo version is now OUTSIDE the consumed contract, so its
+    # presence is rejected as a foreign key -- harmless, never parsed into Phase-B state.
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    body = _valid_kv(tmp_path, manifest) + b"CCC_SKOPEO_VERSION=skopeo version 1.4.1\n"
+    kv = tmp_path / "builder-inputs.kv"
+    kv.write_bytes(body)
+    r = _run_reader(kv)
+    assert r.returncode != 0
+    assert b"foreign key" in r.stderr and r.stdout == b""
+
+
+@_needs_bash
+def test_reader_rejects_command_substitution_and_backticks_no_marker(tmp_path):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    marker = tmp_path / "pwned"
+    for tag in ("$(touch %s)" % marker, "`touch %s`" % marker):
+        kv = tmp_path / "bad.kv"
+        kv.write_bytes(_valid_kv(tmp_path, manifest, CCC_IMAGE_TAG=tag))
+        r = _run_reader(kv)
+        assert r.returncode != 0 and r.stdout == b""
+        assert not marker.exists()                          # never executed (reader is a parser)
+
+
+@_needs_bash
+@pytest.mark.parametrize("tag", ['a"b', "a'b", "a b", "a;b", "a|b", "a&b", "a>b"])
+def test_reader_rejects_embedded_quotes_and_metacharacters(tmp_path, tag):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    kv = tmp_path / "bad.kv"
+    kv.write_bytes(_valid_kv(tmp_path, manifest, CCC_IMAGE_TAG=tag))
+    r = _run_reader(kv)
+    assert r.returncode != 0 and r.stdout == b""
+
+
+@_needs_bash
+def test_reader_rejects_newline_smuggled_assignment(tmp_path):
+    # a smuggled extra record (what a newline in a value would create) fails closed.
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    body = _valid_kv(tmp_path, manifest).replace(
+        b"CCC_IMAGE_TAG=ccc:local\n",
+        b"CCC_IMAGE_TAG=ccc:local\nCCC_IMAGE_IDENTITY_MODE=legacy\n")   # duplicate/foreign smuggle
+    kv = tmp_path / "bad.kv"
+    kv.write_bytes(body)
+    r = _run_reader(kv)
+    assert r.returncode != 0 and r.stdout == b""
+
+
+@_needs_bash
+@pytest.mark.parametrize("mutate,needle", [
+    (lambda b: b.replace(b"containerd\n", b"container\x00d\n"), b"NUL"),
+    (lambda b: b.replace(b"\n", b"\r\n"), b"CRLF"),
+    (lambda b: b.rstrip(b"\n"), b"final LF"),
+    (lambda b: b + b"\n", b"blank line"),
+    (lambda b: b"# comment\n" + b, b"comment"),
+    (lambda b: b.replace(b"CCC_IMAGE_TAG=ccc:local\n",
+                         b"CCC_IMAGE_TAG=ccc:local\nCCC_IMAGE_TAG=ccc:local\n"), b"duplicate key"),
+    (lambda b: b + b"CCC_EVIL=1\n", b"foreign key"),
+    (lambda b: b.replace(b"CCC_IMAGE_IDENTITY_MODE=containerd\n", b""), b"missing required"),
+])
+def test_reader_structural_violations_fail_closed(tmp_path, mutate, needle):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    kv = tmp_path / "bad.kv"
+    kv.write_bytes(mutate(_valid_kv(tmp_path, manifest)))
+    r = _run_reader(kv)
+    assert r.returncode != 0 and r.stdout == b""
+    assert needle in r.stderr
+
+
+@_needs_bash
+@pytest.mark.parametrize("over", [
+    {"CCC_RUNTIME_IMAGE_ID": "sha256:short"},
+    {"CCC_RUNTIME_IMAGE_ID": "sha256:" + "A" * 64},          # uppercase hex
+    {"CCC_BASE_IMAGE_DIGEST": "sha512:" + "a" * 64},         # wrong algo
+    {"CCC_RECIPE_SHA256": "xyz"},                            # bad bare hash
+    {"CCC_IMAGE_IDENTITY_MODE": "bogus"},
+    {"CCC_IMAGE_IDENTITY_MODE": "index"},                    # index is smoke-only, not in contract
+    {"CCC_MANIFEST_CAPTURE_TRANSPORT": "docker-daemon"},     # removed transport
+    {"CCC_BUILDER_IDENTITY": "somethingelse"},
+    {"CCC_RECIPE": "relative/Containerfile"},                # not absolute
+    {"CCC_RECIPE": "/etc/../Containerfile"},                 # traversal
+    {"CCC_IMAGE_MANIFEST": "/tmp/wrong-basename.json"},      # basename not pinned
+])
+def test_reader_field_validation_fails_closed(tmp_path, over):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_bytes(_MANIFEST_CONTENT)
+    kv = tmp_path / "bad.kv"
+    kv.write_bytes(_valid_kv(tmp_path, manifest, **over))
+    r = _run_reader(kv)
+    assert r.returncode != 0 and r.stdout == b""
+
+
+@_needs_bash
+def test_phase_a_invalid_producer_output_not_published(tmp_path):
+    # producer-side gate (no prior artifact): a value the reader rejects (tag with a space) must
+    # abort Phase A BEFORE the atomic publish, so no builder-inputs.kv is ever published.
+    evid, log, env = _prep_phase_a(tmp_path)
+    r = _run_phase_a(env, evid, tag="ccc bad:local")
+    assert r.returncode != 0
+    assert "refusing to publish" in r.stderr
+    assert not (evid / "builder-inputs.kv").exists()
+    assert _no_temp_left(evid)
+
+
+@_needs_bash
+def test_phase_a_invalid_producer_does_not_replace_existing_valid_artifact(tmp_path):
+    # A failed Phase A must never clobber an ALREADY-published valid builder-inputs.kv: producer
+    # validation runs BEFORE the atomic rename and writes only a distinct temp, so an existing
+    # artifact is preserved byte-for-byte (not replaced, not deleted).
+    evid, log, env = _prep_phase_a(tmp_path)
+    published = evid / "builder-inputs.kv"
+    prior = _valid_kv(tmp_path, tmp_path / "image-manifest.json", CCC_IMAGE_TAG="prior:artifact")
+    published.write_bytes(prior)
+    before = published.read_bytes()                       # exact bytes of the existing valid artifact
+    assert _run_reader(published).returncode == 0         # the pre-existing artifact is genuinely valid
+    r = _run_phase_a(env, evid, tag="ccc bad:local")      # invalid producer output (tag with a space)
+    assert r.returncode != 0
+    assert "refusing to publish" in r.stderr
+    assert published.exists()                             # existing artifact NOT deleted
+    assert published.read_bytes() == before               # bytes EXACTLY unchanged (NOT replaced)
+    assert _no_temp_left(evid)                             # producer temp cleaned
+
+
+@_needs_bash
+def test_phase_b_rejects_injected_inputs_before_docker_no_marker(tmp_path):
+    # a malicious KV never reaches Docker: the reader rejects it, Phase B dies, no marker executes.
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    marker = tmp_path / "pwned"
+    inputs.write_bytes(_valid_kv(tmp_path, tmp_path / "image-manifest.json",
+                                 CCC_IMAGE_TAG="$(touch %s)" % marker))
+    prov = tmp_path / "prov.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert not marker.exists()
+    assert _no_docker_run(log)
+
+
+@_needs_bash
+def test_phase_b_partial_or_failed_reader_does_not_populate_state(tmp_path):
+    # if the reader fails, Phase B must not proceed with any builder-input state (fail closed).
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    inputs.write_bytes(_valid_kv(tmp_path, tmp_path / "image-manifest.json").replace(
+        b"CCC_IMAGE_IDENTITY_MODE=containerd\n", b""))          # missing required key
+    prov = tmp_path / "prov.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "strict validation" in r.stderr
     assert _no_docker_run(log)

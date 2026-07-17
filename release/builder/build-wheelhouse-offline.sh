@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/../.." && pwd)"
 SDIST_DIR=""; BUILD_LOCK="${REPO}/requirements-armv7-build.lock"; OUT_DIR=""; PROV_OUT=""
-INPUTS="${HERE}/evidence/builder-inputs.env"
+INPUTS="${HERE}/evidence/builder-inputs.kv"
 RAM=""; SWAP=""; HOST_RESERVE=""; RES_EVIDENCE=""
 # Test/CI indirection ONLY (production defaults read the real host); tests point these at
 # fixtures so behavioral tests never mutate or depend on the real host.
@@ -168,8 +168,37 @@ docker_memory_swap=${MEMORY_SWAP}
 EV
 
 [[ -f "${INPUTS}" ]] || { echo "missing Phase-A inputs: ${INPUTS}" >&2; exit 2; }
-# shellcheck disable=SC1090
-source "${INPUTS}"
+# --- Consume Phase-A evidence strictly as DATA. builder-inputs.kv is NEVER source/./eval'd: the
+# stdlib reader validates the exact schema + every field and emits validated NUL-delimited records.
+# We require a CLEAN reader exit before reading the temp, so partial output can never populate state,
+# then load records into an associative array with pure builtins (no command substitution). ---
+umask 077
+KV_TMP="$(mktemp "${TMPDIR:-/tmp}/ccc-binputs.XXXXXX")"
+trap 'rm -f "${KV_TMP}"' EXIT
+python3 "${HERE}/read_builder_inputs.py" --inputs "${INPUTS}" > "${KV_TMP}" \
+  || die "Phase-A builder inputs failed strict validation (${INPUTS}); refusing to proceed"
+declare -A CCC=()
+while IFS= read -r -d '' _rec; do
+  CCC["${_rec%%=*}"]="${_rec#*=}"
+done < "${KV_TMP}"
+# Re-verify the exact approved key set (defence in depth alongside the reader).
+for _k in CCC_BUILDER_IDENTITY CCC_RECIPE CCC_RECIPE_SHA256 CCC_BUILD_BACKENDS_LOCK \
+          CCC_APT_PACKAGES CCC_RUSTUP_SHA CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST \
+          CCC_BUILD_BACKENDS_SOURCE_ALLOWLIST_SHA256 CCC_BASE_IMAGE_DIGEST CCC_IMAGE_TAG \
+          CCC_RUNTIME_IMAGE_ID CCC_IMAGE_MANIFEST CCC_IMAGE_MANIFEST_DIGEST \
+          CCC_IMAGE_CONFIG_DIGEST CCC_IMAGE_IDENTITY_MODE CCC_MANIFEST_CAPTURE_TRANSPORT; do
+  [[ -v "CCC[${_k}]" ]] || die "validated builder inputs missing key ${_k}"
+done
+(( ${#CCC[@]} == 16 )) || die "validated builder inputs key-count mismatch (${#CCC[@]} != 16)"
+# Bind the fields consumed below (pure assignment; no source/eval/command-substitution).
+CCC_IMAGE_TAG="${CCC[CCC_IMAGE_TAG]}"
+CCC_RUNTIME_IMAGE_ID="${CCC[CCC_RUNTIME_IMAGE_ID]}"
+CCC_MANIFEST_CAPTURE_TRANSPORT="${CCC[CCC_MANIFEST_CAPTURE_TRANSPORT]}"
+CCC_IMAGE_IDENTITY_MODE="${CCC[CCC_IMAGE_IDENTITY_MODE]}"
+CCC_IMAGE_MANIFEST_DIGEST="${CCC[CCC_IMAGE_MANIFEST_DIGEST]}"
+CCC_IMAGE_MANIFEST="${CCC[CCC_IMAGE_MANIFEST]}"
+CCC_BUILDER_IDENTITY="${CCC[CCC_BUILDER_IDENTITY]}"
+CCC_BASE_IMAGE_DIGEST="${CCC[CCC_BASE_IMAGE_DIGEST]}"
 : "${SDIST_DIR:?--sdist-dir required}"; : "${OUT_DIR:?--out-dir required}"; : "${PROV_OUT:?--provenance-out required}"
 mkdir -p "${OUT_DIR}"
 
