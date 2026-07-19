@@ -166,17 +166,47 @@ def test_preflight_and_producer_share_one_target_tag_validator(payload, ok):
         assert len(tags) == R.TARGET_TAG_COUNT
 
 
+def _fixture_repo(tmp_path, *, state):
+    """An ISOLATED fixture repo pinned to an EXPLICIT derived-input state.
+
+    Semantic CLI tests must never depend on the real working tree: its lifecycle state legitimately
+    transitions from `pre_generation` to `generated` when the Owner imports the co-produced active
+    inputs, so any test hard-coding one of those states is only transiently true."""
+    info = F.make_release(tmp_path, version="0.3.17")
+    build_lock, authz = _derived_paths(info["repo"])
+    if state == "pre_generation":
+        os.remove(build_lock)
+        os.remove(authz)
+    elif state != "generated":
+        raise AssertionError(f"unknown fixture state: {state!r}")
+    return info["repo"]
+
+
+def _run_cli(repo, *args):
+    return subprocess.run([sys.executable, str(_CLI), "--repo", str(repo), *args],
+                          capture_output=True, text=True)
+
+
+def test_cli_release_mode_fails_closed_in_pre_generation(tmp_path):
+    # TRUE pre-generation (BOTH derived inputs absent) -> release mode must fail closed (exit 1).
+    r = _run_cli(_fixture_repo(tmp_path, state="pre_generation"), "--require-present")
+    assert r.returncode == 1
+    assert "RELEASE PREFLIGHT FAILED" in r.stderr
+    assert "requires the generated active inputs" in r.stderr
+
+
+def test_cli_release_mode_passes_in_generated_state(tmp_path):
+    # Generated (BOTH derived inputs present, exact disjoint 6+24=30 partition) -> exit 0.
+    r = _run_cli(_fixture_repo(tmp_path, state="generated"), "--require-present")
+    assert r.returncode == 0, r.stderr
+    assert "release preflight OK [release]" in r.stdout
+
+
 def test_cli_dev_mode_on_real_repo():
-    # The real committed tree is a legitimate pre-generation state: dev mode must pass (exit 0).
+    # Dev mode is valid in BOTH legal states (pre_generation AND generated), so this real-tree smoke
+    # check is state-INDEPENDENT: it asserts only that the committed tree is in SOME legal state and
+    # that the CLI reports it. State-specific semantics are proven against isolated fixtures above.
     r = subprocess.run([sys.executable, str(_CLI), "--repo", str(_ROOT)],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "release preflight OK [dev]" in r.stdout
-
-
-def test_cli_release_mode_fails_closed_on_real_repo():
-    # The real tree has no generated active inputs yet -> release mode must fail closed (exit 1).
-    r = subprocess.run([sys.executable, str(_CLI), "--repo", str(_ROOT), "--require-present"],
-                       capture_output=True, text=True)
-    assert r.returncode == 1
-    assert "RELEASE PREFLIGHT FAILED" in r.stderr
