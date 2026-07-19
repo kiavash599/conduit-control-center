@@ -23,6 +23,8 @@ except Exception:  # noqa: BLE001 - allow running as a script from repo root
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from release import ccc_release as _R
 
+from release import reuse_authz as _reuse_authz  # noqa: E402 (release importable above)
+
 ReleaseError = _R.ReleaseError
 
 
@@ -62,12 +64,57 @@ def _parse_dpkg_status_lines(text: str) -> dict:
     return apt
 
 
+def _effective_build_backends(paths=None):
+    """Record each installed distribution's EFFECTIVE version -- the one the executing Python
+    environment actually resolves (finder / sys.path precedence) -- NOT a last-wins enumeration.
+
+    Returns (effective:{norm_name->version}, shadows:{norm_name->[all versions in search order]}).
+    Fails closed (ReleaseError) if a name's effective resolution cannot be established, or is
+    GENUINELY AMBIGUOUS (the canonical resolver `importlib.metadata.version` disagrees with the
+    finder search order). A lower-precedence, non-effective Ubuntu distribution existing under a
+    later sys.path entry is recorded only as an audit shadow and does NOT fail."""
+    import importlib.metadata as _md
+    import re as _re
+
+    def _norm(n):
+        return _re.sub(r"[-_.]+", "-", str(n)).strip("-").lower()
+
+    dists = _md.distributions() if paths is None else _md.distributions(path=list(paths))
+    order: dict = {}
+    for d in dists:
+        try:
+            nm = d.metadata["Name"]
+        except Exception:  # noqa: BLE001
+            nm = None
+        if not nm:
+            continue
+        order.setdefault(_norm(nm), []).append(d.version)
+    effective, shadows = {}, {}
+    for norm, versions in order.items():
+        first = versions[0]                         # earliest in finder/search order == effective
+        if paths is None:
+            # Testable correspondence to what the interpreter resolves: the canonical resolver API
+            # must agree with the search order; disagreement => ambiguous => fail closed.
+            try:
+                resolved = _md.version(norm)
+            except _md.PackageNotFoundError as exc:
+                raise ReleaseError(f"effective backend resolution failed for {norm!r}: {exc}") from exc
+            if resolved != first:
+                raise ReleaseError(f"ambiguous effective resolution for {norm!r}: "
+                                   f"resolver={resolved!r} search-order-first={first!r}")
+            first = resolved
+        effective[norm] = first
+        uniq = list(dict.fromkeys(versions))
+        if len(uniq) > 1:
+            shadows[norm] = uniq                    # audit only (non-effective lower-precedence dupes)
+    return effective, shadows
+
+
 def _default_env_probe() -> dict:
     """Capture the environment FROM THE EXECUTING image/runtime (ties the recorded
     environment to the image that actually runs the build). The Python interpreter is
     read IN-PROCESS (platform.python_version) -- it IS the interpreter executing this
     build, and is reliable across dev/test hosts (no external `python3` needed)."""
-    import importlib.metadata as _md
     import os as _os
     import platform as _pf
     import subprocess as _sp
@@ -95,6 +142,7 @@ def _default_env_probe() -> dict:
     apt = _parse_dpkg_status_lines(
         out(["dpkg-query", "-W",
              "-f=${db:Status-Status}\t${binary:Package}\t${Version}\n"]))
+    _eff_backends, _bb_shadows = _effective_build_backends()   # effective (not last-wins) + audit
     return {
         "os": osr.get("PRETTY_NAME", ""), "os_id": osr.get("ID", ""),
         "os_version_id": osr.get("VERSION_ID", ""), "arch": _pf.machine(),
@@ -103,7 +151,8 @@ def _default_env_probe() -> dict:
         "rustc": out(["rustc", "--version"]), "cargo": out(["cargo", "--version"]),
         "gcc": (out(["gcc", "--version"]).splitlines() or [""])[0], "glibc": glibc,
         "apt": apt,
-        "build_backends": {d.metadata["Name"].lower(): d.version for d in _md.distributions()},
+        "build_backends": _eff_backends,
+        "build_backends_shadows": _bb_shadows,
     }
 
 
@@ -112,6 +161,9 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                      rustup_sha_path: str, extractor_tools_lock_path: str,
                      build_backends_source_allowlist_path: str, builder_identity: str,
                      base_image_digest: str, image_manifest_path: str, runtime_image_id: str,
+                     reuse_authz_path: str = None, reuse_wheels_dir: str = None,
+                     target_tags=None, target_tags_sha256: str = None, requirements_text: str = None,
+                     enforce_partition_policy: bool = False,
                      env_probe=None, build_fn=None) -> dict:
     """Build the armv7 wheelhouse + STRICT builder provenance. Binds the committed
     recipe + committed build-backends lock (by sha256), the pinned base image, and the
@@ -210,59 +262,204 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         if sha not in bhashes:
             raise ReleaseError(f"sdist hash not authorized by build lock for {name!r}")
 
-    # Build each authorized sdist -> exactly one wheel of the same name+version.
-    os.makedirs(out_dir, exist_ok=True)
-    wheels: list = []
-    seen_wheel: set = set()
-    for name, (ver, sfn, spath, ssha) in sorted(sdists.items()):
-        wname, wbytes = build_fn(spath, sfn, name, ver)
-        if not isinstance(wname, str) or not wname.endswith(".whl") or not isinstance(wbytes, (bytes, bytearray)):
-            raise ReleaseError(f"invalid build output for {sfn!r}")
-        wn, wv = _R._parse_wheel_name(wname)
-        if wn != name or wv != ver:
-            raise ReleaseError(f"build output {wname!r} does not match {name}=={ver}")
-        if wname in seen_wheel:
-            raise ReleaseError(f"duplicate/ambiguous build output: {wname!r}")
-        seen_wheel.add(wname)
-        with open(os.path.join(out_dir, wname), "wb") as fh:
-            fh.write(wbytes)
-        wheels.append({"sdist_name": sfn, "sdist_sha256": ssha,
-                       "wheel_filename": wname, "wheel_sha256": _R.sha256_hex(bytes(wbytes))})
+    # --- Build the COMPLETE Phase-B bundle in a SIBLING STAGING dir, validate EVERYTHING, then
+    # publish with ONE atomic rename. The Python builder owns this transaction (no shell-side atomic
+    # logic). The final bundle must NOT pre-exist -- a valid prior result is never silently replaced;
+    # a failure removes staging and publishes nothing. Bundle layout:
+    #   <bundle>/wheelhouse-armhf/{*.whl, SHA256SUMS}  wheelhouse-armv7.json  requirements-armv7.lock
+    #   <bundle>/build-evidence.json
+    import shutil as _shutil
+    import tempfile as _tf
+    final_bundle = out_dir
+    if os.path.exists(final_bundle):
+        raise ReleaseError(f"output bundle must not pre-exist (no overwrite): {final_bundle!r}")
+    _parent = os.path.dirname(os.path.abspath(final_bundle)) or "."
+    os.makedirs(_parent, exist_ok=True)
+    staging = _tf.mkdtemp(prefix=".whb-", dir=_parent)
+    try:
+        wh_dir = os.path.join(staging, "wheelhouse-armhf")
+        os.makedirs(wh_dir)
 
-    wheels.sort(key=lambda w: w["wheel_filename"])
-    with open(os.path.join(out_dir, "SHA256SUMS"), "w", encoding="utf-8") as fh:
-        for w in wheels:
-            fh.write("%s  %s\n" % (w["wheel_sha256"], w["wheel_filename"]))
+        # ================= CHEAP PREFLIGHT (before the first expensive source build) =================
+        # In production mode every input is REQUIRED (not semantically optional). All reuse-store and
+        # partition-feasibility validation happens here so a bad store never costs six source builds.
+        if enforce_partition_policy:
+            _missing = [n for n, v in (("reuse-authz", reuse_authz_path), ("reuse-store", reuse_wheels_dir),
+                                       ("target-tags", target_tags), ("target-tags-sha256", target_tags_sha256),
+                                       ("requirements", requirements_text)) if not v]
+            if _missing:
+                raise ReleaseError(f"production partition policy requires inputs: {_missing}")
+            if set(sdists) != set(_R.V0317_SOURCE_BUILD_PACKAGES):
+                raise ReleaseError(f"source sdists != approved six {sorted(_R.V0317_SOURCE_BUILD_PACKAGES)}; "
+                                   f"got {sorted(sdists)}")
+        authz = None
+        reuse_authz_bytes = None
+        reused_records = []                                 # [(authz_wheel, bytes)] pre-verified offline
+        if reuse_authz_path is not None:
+            with open(reuse_authz_path, "rb") as fh:
+                reuse_authz_bytes = fh.read()
+            authz = _reuse_authz.load_and_validate(reuse_authz_bytes, target_tags=target_tags)
+            if enforce_partition_policy and len(authz["wheels"]) != _R.V0317_REUSED_COUNT:
+                raise ReleaseError(f"reuse authorization must have exactly {_R.V0317_REUSED_COUNT} wheels; "
+                                   f"got {len(authz['wheels'])}")
+            if reuse_wheels_dir is None or not os.path.isdir(reuse_wheels_dir):
+                raise ReleaseError(f"reuse wheels dir not found: {reuse_wheels_dir!r}")
+            # EXACT-SET store: entries == authz filenames; regular files ONLY (no dirs/symlinks/foreign).
+            authz_files = {a["filename"] for a in authz["wheels"]}
+            store_names = set()
+            for de in os.scandir(reuse_wheels_dir):
+                if de.is_symlink():
+                    raise ReleaseError(f"symlink in reuse store rejected: {de.name!r}")
+                if de.is_dir(follow_symlinks=False):
+                    raise ReleaseError(f"subdirectory in reuse store rejected: {de.name!r}")
+                if not de.is_file(follow_symlinks=False):
+                    raise ReleaseError(f"non-regular entry in reuse store rejected: {de.name!r}")
+                store_names.add(de.name)
+            if store_names != authz_files:
+                raise ReleaseError(f"reuse store != authorization (missing={sorted(authz_files - store_names)}, "
+                                   f"foreign={sorted(store_names - authz_files)})")
+            for a in authz["wheels"]:                       # re-verify all 24 hashes OFFLINE before building
+                with open(os.path.join(reuse_wheels_dir, a["filename"]), "rb") as fh:
+                    rbytes = fh.read()
+                if _R.sha256_hex(rbytes) != a["sha256"]:
+                    raise ReleaseError(f"reused wheel {a['filename']!r} sha256 mismatch (store vs authz)")
+                reused_records.append((a, rbytes))
+        # 6/24/30 partition feasibility (by name) BEFORE building.
+        _built_expected = set(sdists)
+        _reused_expected = {a["name"] for a, _ in reused_records}
+        if _built_expected & _reused_expected:
+            raise ReleaseError(f"built/reused overlap: {sorted(_built_expected & _reused_expected)}")
+        if enforce_partition_policy and (len(_built_expected) != _R.V0317_BUILT_COUNT
+                or len(_reused_expected) != _R.V0317_REUSED_COUNT
+                or len(_built_expected | _reused_expected) != _R.V0317_TOTAL_COUNT):
+            raise ReleaseError("6/24/30 partition not feasible before build")
 
-    members = _R._wheelhouse_members(out_dir)
-    bundle_sha = _R.sha256_hex(_R.pack_tree(members))
-    env = dict(environment)
-    builder = {
-        "identity": builder_identity,
-        "recipe_path": _R.CANONICAL_RECIPE_PATH,
-        "recipe_sha256": recipe_sha,
-        "build_backends_lock_sha256": bb_lock_sha,
-        "apt_packages_sha256": apt_pkgs_sha,
-        "rustup_init_file_sha256": rustup_file_sha,
-        "extractor_tools_lock_sha256": extractor_tools_lock_sha,
-        "build_backends_source_allowlist_sha256": build_backends_source_allowlist_sha,
-        "base_image_digest": base_image_digest,
-        "image_manifest_digest": image_manifest_digest,
-        "image_config_digest": image_config_digest,
-        "image_identity_mode": image_identity_mode,
-        "runtime_image_id": runtime_image_id,
-        "environment": env,
-        "environment_sha256": _R.sha256_hex(_R._canonical_env_bytes(env)),
-    }
-    provenance = {"builder": builder, "bundle": {"sha256": bundle_sha}, "wheels": wheels}
-    # Self-check: the emitted provenance MUST pass the strict producer-side validator,
-    # INCLUDING the independent manifest-digest recompute from the raw OCI manifest.
-    _R._validate_provenance(provenance, members, bundle_sha, build_lock_text, recipe_sha,
-                            bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
-                            apt_pkgs_text, extractor_tools_lock_sha,
-                            build_backends_source_allowlist_sha,
-                            image_manifest_bytes=manifest_bytes)
-    return {"provenance": provenance, "bundle_sha256": bundle_sha, "wheelhouse_dir": out_dir}
+        # ================= FIELD-PROVEN six-wheel build (UNCHANGED) -- only after preflight =========
+        wheels: list = []
+        seen_wheel: set = set()
+        built_names: set = set()
+        reused_names: set = set()
+        for name, (ver, sfn, spath, ssha) in sorted(sdists.items()):
+            wname, wbytes = build_fn(spath, sfn, name, ver)
+            if not isinstance(wname, str) or not wname.endswith(".whl") or not isinstance(wbytes, (bytes, bytearray)):
+                raise ReleaseError(f"invalid build output for {sfn!r}")
+            wn, wv = _R._parse_wheel_name(wname)
+            if wn != name or wv != ver:
+                raise ReleaseError(f"build output {wname!r} does not match {name}=={ver}")
+            if wname in seen_wheel:
+                raise ReleaseError(f"duplicate/ambiguous build output: {wname!r}")
+            seen_wheel.add(wname)
+            with open(os.path.join(wh_dir, wname), "wb") as fh:
+                fh.write(wbytes)
+            wheels.append({"origin": "built", "sdist_name": sfn, "sdist_sha256": ssha,
+                           "wheel_filename": wname, "wheel_sha256": _R.sha256_hex(bytes(wbytes))})
+            built_names.add(name)
+
+        # ---- ingest the PRE-VERIFIED reuse wheels (bytes already checked in preflight) ----
+        authorizers: dict = {}
+        if authz is not None:
+            authorizers["reuse_authz_sha256"] = _reuse_authz.sha256_hex(_reuse_authz.canonical_bytes(authz))
+            for a, rbytes in reused_records:
+                if a["filename"] in seen_wheel:
+                    raise ReleaseError(f"duplicate/ambiguous wheel across origins: {a['filename']!r}")
+                seen_wheel.add(a["filename"])
+                with open(os.path.join(wh_dir, a["filename"]), "wb") as fh:
+                    fh.write(rbytes)
+                wheels.append({"origin": "reused", "name": a["name"], "version": a["version"],
+                               "wheel_filename": a["filename"], "wheel_sha256": a["sha256"], "tags": a["tags"]})
+                reused_names.add(a["name"])
+        if target_tags_sha256 is not None:
+            authorizers["target_tags_sha256"] = target_tags_sha256
+
+        # ---- ALL 30 final wheels (built + reused) must be target-compatible against the committed set ----
+        if target_tags is not None:
+            _tt = set(target_tags)
+            for w in wheels:
+                _, _, _fntags = _reuse_authz.parse_wheel_filename(w["wheel_filename"])
+                if not (_fntags & _tt):
+                    raise ReleaseError(f"final wheel {w['wheel_filename']!r} has no target-compatible tag")
+
+        # PRODUCTION PARTITION POLICY (exact, before publication).
+        if enforce_partition_policy:
+            if built_names != set(_R.V0317_SOURCE_BUILD_PACKAGES):
+                raise ReleaseError(f"built packages != approved six {sorted(_R.V0317_SOURCE_BUILD_PACKAGES)}; "
+                                   f"got {sorted(built_names)}")
+            if built_names & reused_names:
+                raise ReleaseError(f"built/reused overlap: {sorted(built_names & reused_names)}")
+            if (len(built_names) != _R.V0317_BUILT_COUNT or len(reused_names) != _R.V0317_REUSED_COUNT
+                    or len(wheels) != _R.V0317_TOTAL_COUNT):
+                raise ReleaseError(f"partition counts must be {_R.V0317_BUILT_COUNT}/"
+                                   f"{_R.V0317_REUSED_COUNT}/{_R.V0317_TOTAL_COUNT}; got "
+                                   f"{len(built_names)}/{len(reused_names)}/{len(wheels)}")
+
+        wheels.sort(key=lambda w: w["wheel_filename"])
+        with open(os.path.join(wh_dir, "SHA256SUMS"), "w", encoding="utf-8", newline="\n") as fh:
+            for w in wheels:
+                fh.write("%s  %s\n" % (w["wheel_sha256"], w["wheel_filename"]))
+
+        members = _R._wheelhouse_members(wh_dir)
+        bundle_sha = _R.sha256_hex(_R.pack_tree(members))
+        env = dict(environment)
+        builder = {
+            "identity": builder_identity,
+            "recipe_path": _R.CANONICAL_RECIPE_PATH,
+            "recipe_sha256": recipe_sha,
+            "build_backends_lock_sha256": bb_lock_sha,
+            "apt_packages_sha256": apt_pkgs_sha,
+            "rustup_init_file_sha256": rustup_file_sha,
+            "extractor_tools_lock_sha256": extractor_tools_lock_sha,
+            "build_backends_source_allowlist_sha256": build_backends_source_allowlist_sha,
+            "base_image_digest": base_image_digest,
+            "image_manifest_digest": image_manifest_digest,
+            "image_config_digest": image_config_digest,
+            "image_identity_mode": image_identity_mode,
+            "runtime_image_id": runtime_image_id,
+            "environment": env,
+            "environment_sha256": _R.sha256_hex(_R._canonical_env_bytes(env)),
+        }
+        provenance = {"builder": builder, "bundle": {"sha256": bundle_sha}, "wheels": wheels,
+                      "authorizers": authorizers}
+        _reuse_text = reuse_authz_bytes if reuse_authz_path is not None else None
+        _R._validate_provenance(provenance, members, bundle_sha, build_lock_text, recipe_sha,
+                                bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
+                                apt_pkgs_text, extractor_tools_lock_sha,
+                                build_backends_source_allowlist_sha,
+                                image_manifest_bytes=manifest_bytes, reuse_authz_text=_reuse_text,
+                                target_tags=target_tags,
+                                expected_target_tags_sha256=(target_tags_sha256 if enforce_partition_policy else None))
+
+        # Runtime lock generated ONLY from the final validated wheelhouse, checked as an exact
+        # 30-way name/version/hash bijection with the embedded wheels. MANDATORY under production
+        # policy: the bundle cannot publish without it.
+        runtime_lock_text = None
+        if requirements_text is not None:
+            lines = ["# GENERATED from the final validated wheelhouse -- DO NOT hand-edit."]
+            for w in wheels:
+                _n, _v = _R._parse_wheel_name(w["wheel_filename"])
+                lines.append(f"{_n}=={_v} --hash=sha256:{w['wheel_sha256']}")
+            runtime_lock_text = "\n".join(lines) + "\n"
+            _R._validate_runtime_lock_against_wheelhouse(runtime_lock_text, members, requirements_text)
+            with open(os.path.join(staging, "requirements-armv7.lock"), "w",
+                      encoding="utf-8", newline="\n") as fh:
+                fh.write(runtime_lock_text)
+        if enforce_partition_policy and runtime_lock_text is None:
+            raise ReleaseError("runtime lock is mandatory under production policy (requirements required)")
+
+        with open(os.path.join(staging, "wheelhouse-armv7.json"), "w", encoding="utf-8") as fh:
+            json.dump(provenance, fh)
+        evidence = {"bundle_sha256": bundle_sha, "wheel_count": len(wheels),
+                    "built": sorted(built_names), "reused": sorted(reused_names),
+                    "authorizers": authorizers, "partition_policy_enforced": bool(enforce_partition_policy)}
+        with open(os.path.join(staging, "build-evidence.json"), "w", encoding="utf-8") as fh:
+            json.dump(evidence, fh, indent=2, sort_keys=True)
+
+        os.replace(staging, final_bundle)                    # ONE atomic publish of the complete bundle
+    except BaseException:
+        _shutil.rmtree(staging, ignore_errors=True)          # no partial/stale final on failure
+        raise
+    return {"provenance": provenance, "bundle_sha256": bundle_sha, "bundle_dir": final_bundle,
+            "wheelhouse_dir": os.path.join(final_bundle, "wheelhouse-armhf"),
+            "runtime_lock_text": runtime_lock_text}
 
 
 def main(argv=None) -> int:
@@ -284,18 +481,38 @@ def main(argv=None) -> int:
     ap.add_argument("--image-manifest", required=True,
                     help="raw OCI image manifest file (skopeo inspect --raw); its sha256 is the manifest digest")
     ap.add_argument("--runtime-image-id", required=True, help="docker inspect .Id (store-agnostic runtime id)")
-    ap.add_argument("--provenance-out", required=True)
+    ap.add_argument("--reuse-authz", default=None,
+                    help="committed reused-wheel authorization JSON (24 official wheels)")
+    ap.add_argument("--reuse-wheels-dir", default=None,
+                    help="read-only reuse store (acquisition bundle's wheels/; re-verified offline)")
+    ap.add_argument("--target-tags", default=None,
+                    help="committed release/builder/target-supported-tags.txt (mandatory target policy)")
+    ap.add_argument("--requirements", default=None,
+                    help="committed requirements.txt (runtime lock is generated + bijection-checked)")
+    ap.add_argument("--out-bundle", required=True, help="Phase-B bundle dir (must NOT pre-exist)")
+    ap.add_argument("--enforce-partition-policy", action="store_true",
+                    help="enforce the v0.3.17 6/24/30 approved-six policy before publication (production)")
     a = ap.parse_args(argv)
-    res = build_wheelhouse(build_lock_path=a.build_lock, sdist_dir=a.sdist_dir, out_dir=a.out_dir,
+    _tags = _reqs = None
+    _tags_sha = None
+    if a.target_tags:
+        _t, _tags, _tags_sha = _reuse_authz.load_target_tags(a.target_tags)
+    if a.requirements:
+        with open(a.requirements, encoding="utf-8") as fh:
+            _reqs = fh.read()
+    res = build_wheelhouse(build_lock_path=a.build_lock, sdist_dir=a.sdist_dir, out_dir=a.out_bundle,
                            recipe_path=a.recipe, build_backends_lock_path=a.build_backends_lock,
                            apt_packages_path=a.apt_packages, rustup_sha_path=a.rustup_sha,
                            extractor_tools_lock_path=a.extractor_tools_lock,
                            build_backends_source_allowlist_path=a.build_backends_source_allowlist,
                            builder_identity=a.builder_identity, base_image_digest=a.base_image_digest,
-                           image_manifest_path=a.image_manifest, runtime_image_id=a.runtime_image_id)
-    with open(a.provenance_out, "w", encoding="utf-8") as fh:
-        json.dump(res["provenance"], fh)
-    print(f"wheelhouse: {a.out_dir}  bundle_sha256={res['bundle_sha256']}  provenance={a.provenance_out}")
+                           image_manifest_path=a.image_manifest, runtime_image_id=a.runtime_image_id,
+                           reuse_authz_path=a.reuse_authz, reuse_wheels_dir=a.reuse_wheels_dir,
+                           target_tags=_tags, target_tags_sha256=_tags_sha, requirements_text=_reqs,
+                           enforce_partition_policy=a.enforce_partition_policy)
+    print(f"phase-b bundle: {res['bundle_dir']}  bundle_sha256={res['bundle_sha256']}")
+    print(f"  wheelhouse={res['wheelhouse_dir']}  provenance={res['bundle_dir']}/wheelhouse-armv7.json")
+    print(f"  runtime_lock={res['bundle_dir']}/requirements-armv7.lock")
     return 0
 
 

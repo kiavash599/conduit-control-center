@@ -20,6 +20,7 @@ REPO="$(cd "${HERE}/../.." && pwd)"
 SDIST_DIR=""; BUILD_LOCK="${REPO}/requirements-armv7-build.lock"; OUT_DIR=""; PROV_OUT=""
 INPUTS="${HERE}/evidence/builder-inputs.kv"
 RAM=""; SWAP=""; HOST_RESERVE=""; RES_EVIDENCE=""
+REUSE_AUTHZ=""; REUSE_STORE=""   # dual-origin: committed reuse authorization + read-only reuse store
 # Test/CI indirection ONLY (production defaults read the real host); tests point these at
 # fixtures so behavioral tests never mutate or depend on the real host.
 MEMINFO_PATH="${CCC_MEMINFO_PATH:-/proc/meminfo}"
@@ -82,6 +83,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --swap) SWAP="$2"; shift 2;;
   --host-reserve) HOST_RESERVE="$2"; shift 2;;
   --resource-evidence) RES_EVIDENCE="$2"; shift 2;;
+  --reuse-authz) REUSE_AUTHZ="$2"; shift 2;;
+  --reuse-store) REUSE_STORE="$2"; shift 2;;
   *) echo "unknown arg: $1" >&2; exit 2;; esac; done
 
 # --- Finding 8: explicit preflight-verified prerequisites; never auto-installed ---
@@ -140,7 +143,7 @@ fi
 # Guard against the external evidence path colliding with any input/output path (F7).
 _abs() { readlink -m "$1"; }
 EV_ABS="$(_abs "${RES_EVIDENCE}")"
-for _p in "${OUT_DIR}" "${PROV_OUT}" "${SDIST_DIR}" "${BUILD_LOCK}" "${INPUTS}"; do
+for _p in "${OUT_DIR}" "${PROV_OUT}" "${SDIST_DIR}" "${BUILD_LOCK}" "${INPUTS}" "${REUSE_AUTHZ}" "${REUSE_STORE}"; do
   [[ -n "${_p}" && "$(_abs "${_p}")" == "${EV_ABS}" ]] \
     && die "--resource-evidence path collides with ${_p}"
 done
@@ -199,7 +202,9 @@ CCC_IMAGE_MANIFEST_DIGEST="${CCC[CCC_IMAGE_MANIFEST_DIGEST]}"
 CCC_IMAGE_MANIFEST="${CCC[CCC_IMAGE_MANIFEST]}"
 CCC_BUILDER_IDENTITY="${CCC[CCC_BUILDER_IDENTITY]}"
 CCC_BASE_IMAGE_DIGEST="${CCC[CCC_BASE_IMAGE_DIGEST]}"
-: "${SDIST_DIR:?--sdist-dir required}"; : "${OUT_DIR:?--out-dir required}"; : "${PROV_OUT:?--provenance-out required}"
+: "${SDIST_DIR:?--sdist-dir required}"; : "${OUT_DIR:?--out-dir required}"
+# OUT_DIR is the writable mount + host-side recap scratch; the FINAL bundle (/out/bundle) is created
+# atomically by the Python builder and must NOT be pre-created here.
 mkdir -p "${OUT_DIR}"
 
 # --- re-verify the tag STILL maps to the captured image id (immutable execution target) ---
@@ -221,21 +226,36 @@ CUR_MANIFEST_DIGEST="$(sed -n 's/^MANIFEST_DIGEST=//p' <<<"${RECAP_OUT}")"
 [[ "${CUR_MANIFEST_DIGEST}" == "${CCC_IMAGE_MANIFEST_DIGEST}" ]] || {
   echo "ERROR: manifest digest drift (Phase A ${CCC_IMAGE_MANIFEST_DIGEST}, now ${CUR_MANIFEST_DIGEST})" >&2; exit 1; }
 
-# --- Run the build by IMMUTABLE image id (never the mutable tag), offline ---
+# --- Dual-origin: mount the pre-acquired reuse store + committed reuse authorization READ-ONLY
+# (re-verified OFFLINE inside the container against the authorization by exact filename + sha256).
+REUSE_MOUNTS=(); REUSE_ARGS=()
+if [[ -n "${REUSE_AUTHZ}" || -n "${REUSE_STORE}" ]]; then
+  [[ -f "${REUSE_AUTHZ}" ]] || die "reuse authorization not found: ${REUSE_AUTHZ}"
+  [[ -d "${REUSE_STORE}" ]] || die "reuse store dir not found: ${REUSE_STORE}"
+  REUSE_MOUNTS=(-v "${REUSE_AUTHZ}:/in/reuse-authz.json:ro" -v "${REUSE_STORE}:/in/reuse:ro")
+  REUSE_ARGS=(--reuse-authz /in/reuse-authz.json --reuse-wheels-dir /in/reuse)
+fi
+
+# --- Run the build by IMMUTABLE image id (never the mutable tag), offline. Executable scratch is
+# the FIELD-PROVEN `/tmp:rw,exec,...` (native .so import + native configure scripts require exec);
+# noexec is not a security boundary here because the authorized PEP 517 build code executes anyway,
+# and every other mount stays read-only/noexec. ---
 sudo docker run --rm \
   --network=none --cap-drop=ALL --security-opt=no-new-privileges \
-  --user 1000:1000 --read-only --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+  --user 1000:1000 --read-only --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m \
   --memory "${RAM}" --memory-swap "${MEMORY_SWAP}" --pids-limit 512 \
   -v "${REPO}/release:/repo/release:ro" \
+  -v "${REPO}/requirements.txt:/repo/requirements.txt:ro" \
   -v "${BUILD_LOCK}:/in/requirements-armv7-build.lock:ro" \
   -v "${SDIST_DIR}:/in/sdists:ro" \
   -v "${CCC_IMAGE_MANIFEST}:/in/image-manifest.json:ro" \
+  "${REUSE_MOUNTS[@]}" \
   -v "${OUT_DIR}:/out:rw" \
   "${CCC_RUNTIME_IMAGE_ID}" \
   python3 /repo/release/build_wheelhouse.py \
     --build-lock /in/requirements-armv7-build.lock \
     --sdist-dir /in/sdists \
-    --out-dir /out/wheelhouse-armhf \
+    --out-bundle /out/bundle \
     --recipe /repo/release/builder/Containerfile \
     --build-backends-lock /repo/release/builder/requirements-build-backends.lock \
     --apt-packages /repo/release/builder/apt-packages.list \
@@ -246,13 +266,21 @@ sudo docker run --rm \
     --base-image-digest "${CCC_BASE_IMAGE_DIGEST}" \
     --image-manifest /in/image-manifest.json \
     --runtime-image-id "${CCC_RUNTIME_IMAGE_ID}" \
-    --provenance-out /out/wheelhouse-armv7.json
+    --target-tags /repo/release/builder/target-supported-tags.txt \
+    --requirements /repo/requirements.txt \
+    "${REUSE_ARGS[@]}" \
+    --enforce-partition-policy
 
-# --- write + verify the provenance output; handle same-file; fail closed ---
-SRC="${OUT_DIR}/wheelhouse-armv7.json"
-if [[ "$(readlink -f "${SRC}")" != "$(readlink -f "${PROV_OUT}")" ]]; then
-  cp "${SRC}" "${PROV_OUT}"
+# The Python builder published the complete bundle atomically at /out/bundle:
+#   bundle/wheelhouse-armhf/{*.whl,SHA256SUMS}  bundle/wheelhouse-armv7.json
+#   bundle/requirements-armv7.lock  bundle/build-evidence.json
+# --- optionally surface the provenance to --provenance-out (bundle remains the source of truth) ---
+SRC="${OUT_DIR}/bundle/wheelhouse-armv7.json"
+[[ -s "${SRC}" ]] || { echo "ERROR: Phase-B bundle provenance missing/empty: ${SRC}" >&2; exit 1; }
+[[ -s "${OUT_DIR}/bundle/requirements-armv7.lock" ]] \
+  || { echo "ERROR: Phase-B bundle runtime lock missing/empty" >&2; exit 1; }
+if [[ -n "${PROV_OUT}" && "$(readlink -f "${SRC}")" != "$(readlink -f "${PROV_OUT}")" ]]; then
+  cp "${SRC}" "${PROV_OUT}"        # optional convenience copy; the bundle is the source of truth
 fi
-[[ -s "${PROV_OUT}" ]] || { echo "ERROR: provenance output missing/empty: ${PROV_OUT}" >&2; exit 1; }
-echo "Phase B complete. wheelhouse=${OUT_DIR}/wheelhouse-armhf provenance=${PROV_OUT}"
+echo "Phase B complete. bundle=${OUT_DIR}/bundle (wheelhouse-armhf + provenance + requirements-armv7.lock)"
 echo "limits: --memory ${RAM} --memory-swap ${MEMORY_SWAP} (swap=${SWAP}, reserve=${HOST_RESERVE}); evidence=${RES_EVIDENCE}"

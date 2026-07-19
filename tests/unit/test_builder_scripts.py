@@ -65,6 +65,20 @@ def test_phase_b_offline_and_hardening_flags():
         assert flag in _PHASE_B
 
 
+def test_phase_b_field_proven_exec_scratch_not_work():
+    # the FIELD-PROVEN executable scratch is /tmp:...,exec,...; no untested /work scratch exists.
+    assert "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m" in _PHASE_B
+    assert "/work" not in _PHASE_B
+
+
+def test_phase_b_dual_origin_reuse_mounts_are_readonly():
+    # the reuse authorization + store are mounted READ-ONLY and passed to the builder.
+    assert ':/in/reuse-authz.json:ro' in _PHASE_B
+    assert ':/in/reuse:ro' in _PHASE_B
+    assert '--reuse-authz /in/reuse-authz.json' in _PHASE_B
+    assert '--reuse-wheels-dir /in/reuse' in _PHASE_B
+
+
 def test_phase_b_binds_apt_and_rustup_inputs():
     # The offline build passes the committed apt list + rustup hash so build_wheelhouse
     # can bind their sha256 in provenance (findings 4/6).
@@ -96,7 +110,17 @@ def test_finding8_skopeo_is_explicit_preflight_not_autoinstalled():
 def test_finding9_provenance_copy_checked_no_suppression():
     assert "2>/dev/null || true" not in _PHASE_B
     assert 'readlink -f' in _PHASE_B
-    assert '[[ -s "${PROV_OUT}" ]] ||' in _PHASE_B
+    assert '[[ -s "${SRC}" ]] ||' in _PHASE_B          # bundle provenance is checked
+
+
+def test_phase_b_atomic_bundle_and_target_policy():
+    # Python owns the atomic bundle; shell no longer direct-writes the wheelhouse or provenance.
+    assert "--out-bundle /out/bundle" in _PHASE_B
+    assert "--target-tags /repo/release/builder/target-supported-tags.txt" in _PHASE_B
+    assert "--requirements /repo/requirements.txt" in _PHASE_B
+    assert "--enforce-partition-policy" in _PHASE_B
+    assert "--out-dir /out/wheelhouse-armhf" not in _PHASE_B
+    assert "--provenance-out /out/wheelhouse-armv7.json" not in _PHASE_B
 
 
 def test_recipe_pins_and_jammy():
@@ -242,8 +266,13 @@ _FAKE_DOCKER = (
     "      shift\n"
     "    done\n"
     "    if [[ -n \"$out\" && \"${FAKE_SKIP_OUTPUT:-0}\" != \"1\" ]]; then\n"
-    "      echo '{\"schemaVersion\":1}' > \"$out/wheelhouse-armhf-provenance\" 2>/dev/null || true\n"
-    "      echo '{\"ok\":true}' > \"$out/wheelhouse-armv7.json\"\n"
+    # The Python builder publishes ONE atomic bundle at /out/bundle; the shell validates that
+    # layout (provenance + runtime lock), so the mock must reproduce it, not the old flat files.
+    "      mkdir -p \"$out/bundle/wheelhouse-armhf\"\n"
+    "      echo '{\"ok\":true}' > \"$out/bundle/wheelhouse-armv7.json\"\n"
+    "      echo 'x==1 --hash=sha256:2222222222222222222222222222222222222222222222222222222222222222' \\\n"
+    "        > \"$out/bundle/requirements-armv7.lock\"\n"
+    "      echo '{\"wheel_count\":0}' > \"$out/bundle/build-evidence.json\"\n"
     "    fi;;\n"
     "  *) : ;;\n"
     "esac\n"

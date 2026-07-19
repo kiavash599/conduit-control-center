@@ -81,16 +81,118 @@ atomic evidence writes. Empirically confirmed on the RPi2 (Docker 29 containerd 
 The produced `provenance/wheelhouse-armv7.json` binds recipe/base/manifest/environment and is
 validated by the producer before signing.
 
-**5b. Commit the TWO build-independent locks PRE-TAG.** Generate with `release/gen_locks.py`:
+**5b. Commit the build-independent locks PRE-TAG.** Generate with `release/gen_locks.py`:
 `requirements-aarch64.lock` (PyPI aarch64 wheels: `pip download --only-binary=:all: -r requirements.txt`)
-and `requirements-armv7-build.lock` (PyPI sdists: `pip download --no-binary=:all: -r requirements.txt`).
-Commit both at the repo root. Also commit the **three active builder inputs** —
+and `requirements-armv7-solution.lock` (PyPI sdists: `pip download --no-binary=:all: -r requirements.txt`)
+— the **durable 30-pin armv7 solution**, which is the generator INPUT, not the build lock. Commit both
+at the repo root. Do NOT hand-write or `gen_locks`-generate `requirements-armv7-build.lock`: under the
+dual-origin model (5b-lifecycle below) it is a DERIVED six-entry output of `gen_active_inputs.py` and
+must not exist until that generator has been run. Also commit the **three active builder inputs** —
 `release/builder/{apt-packages.list,rustup-init.sha256,requirements-build-backends.lock}` — with
 real validated values (never the `.example` placeholders); `validate_builder_inputs` and CI must
 accept them. Also commit `release/builder/requirements-extractor-tools.{in,lock}` (the pinned tomli
 parser) before running extraction. Also commit `release/builder/requirements-build-backends.source-allowlist` (backends with no official target wheel, e.g. `cffi`); the generation gate must prove no compatible wheel exists (drift fails closed) and the image installs backends in two ordered `--require-hashes` passes. Let CI go green, THEN tag `vX.Y.Z` (two-commit sequence). The build-DEPENDENT `requirements-armv7.lock` (resulting wheel hashes) is NOT
 committed; it is produced with the wheelhouse and passed at build time via `--armv7-runtime-lock`
 (injected + digest-bound). Do NOT commit placeholder/0.0.0 locks (release-input gate).
+
+**5b-lifecycle (v0.3.17 reuse-first, ADR-0003 Amendment A5) — the THREE lock roles, in order.**
+The armv7 wheelhouse is DUAL-ORIGIN, and exactly three files carry distinct, non-interchangeable roles:
+
+| file | role | arity | origin |
+|---|---|---|---|
+| `requirements-armv7-solution.lock` | durable authoritative solution (generator INPUT) | 30 pins | committed by Owner (`gen_locks.py`) |
+| `requirements-armv7-build.lock` | DERIVED source-build partition | exactly 6 | output of `gen_active_inputs.py` |
+| `release/builder/armv7-reuse-authz.json` | DERIVED reuse partition | exactly 24 | output of `gen_active_inputs.py` |
+
+The two derived files are DISJOINT and their union must equal the 30-package runtime closure
+(partition invariant, enforced in `produce_release` and `release_preflight`). They are co-produced and
+committed ATOMICALLY, which yields exactly two legal repository states — enforced as a state machine:
+
+1. **pre-generation** — BOTH derived files ABSENT. The only valid state before the Owner runs the
+   generator. `python -m release.preflight` (dev mode) is green here; release mode is red.
+2. **generated** — BOTH present, validated as the exact disjoint 6+24=30 partition. Green in both modes.
+3. **half-state** — exactly one present. INVALID IN EVERY MODE; the preflight fails closed with
+   "derived active inputs are not atomic". This is what a partial commit looks like: commit both or neither.
+
+During the
+CONNECTED pre-tag phase, acquire the 24 wheels with `release/builder/acquire_reuse_wheels.py --reuse-authz
+release/builder/armv7-reuse-authz.json --target-tags release/builder/target-supported-tags.txt --bundle
+<off-tree-bundle>` (official PyPI only, cache-isolated, exactly-24, live `requires_python` re-checked,
+final-redirect origin re-checked; publishes ONE atomic bundle `<bundle>/{wheels/,acquisition-record.json}`,
+off-tree, never committed, never a standalone asset). Transfer the verified bundle to the RPi2; Phase B
+re-verifies it OFFLINE and merges 24 reused + 6 built into the exact 30-wheel wheelhouse
+(`build-wheelhouse-offline.sh --reuse-authz release/builder/armv7-reuse-authz.json --reuse-store
+<bundle>/wheels`).
+
+**5b-generate (co-producer, atomic Owner commit).** Do NOT hand-write the two active inputs. Generate
+them together with `release/builder/gen_active_inputs.py` from hash-gated evidence and commit both
+ATOMICALLY after reviewing `generation-record.json`:
+
+    python3 release/builder/gen_active_inputs.py \
+      --pypi-metadata <pypi-metadata.json>   --pypi-metadata-sha256 <sha> \
+      --target-tags   release/builder/target-supported-tags.txt --target-tags-sha256 <sha> \
+      --six-acquisition-record <six.json>    --six-acquisition-record-sha256 <sha> \
+      --solution-lock requirements-armv7-solution.lock --solution-lock-sha256 <sha> \
+      --out-bundle <staging-bundle>
+
+The committed sanitized `release/builder/target-supported-tags.txt` (exactly 495 ordered tags, no
+host header) is the single mandatory target-compat source at ALL boundaries; its sha256 is bound in
+provenance (`authorizers.target_tags_sha256`) and recomputed by the producer. The connected acquisition
+publishes ONE atomic bundle `<bundle>/{wheels/,acquisition-record.json}` (filename-addressed,
+hash-verified). Phase B publishes ONE atomic bundle `<out>/bundle/{wheelhouse-armhf/,wheelhouse-armv7.json,
+requirements-armv7.lock,build-evidence.json}`, enforcing the 6/24/30 approved-six policy and generating
+`requirements-armv7.lock` from the final validated wheelhouse (exact 30-way bijection) BEFORE publication.
+Pass the bundle's `wheelhouse-armhf/`, `wheelhouse-armv7.json`, and `requirements-armv7.lock` to
+`produce_release` on the Owner PC (signing occurs only there; never on the RPi2).
+
+**5b-solution (durable 30-pin solution — the generator input).** The authoritative dual-origin input
+is `requirements-armv7-solution.lock` at the repo root: the full **30-package** runtime closure pinned
+with hashes. It is DURABLE (changes only when the closure changes), and is the single source the
+co-producer partitions into the derived six-entry `requirements-armv7-build.lock` (source-built) and the
+24-entry `release/builder/armv7-reuse-authz.json` (reused). Do NOT confuse the two: the solution lock is
+an *input* (30 pins); the build lock is a *derived output* (6 pins). `validate_armv7_solution` (in
+`produce_release` and the preflight) proves the solution is a valid 30-pin closure and that it partitions
+exactly into the approved six source builds + the 24 reused wheels with agreeing versions.
+
+**5b-tags (target-tag derivation lifecycle).** The committed `release/builder/target-supported-tags.txt`
+(exactly 495 ordered tags) is DERIVED once from the raw RPi2 supported-tag evidence with
+`release/builder/sanitize_target_tags.py --raw-evidence <raw> --expected-raw-sha256 <sha> --out-bundle
+<off-tree>`. The trust-boundary order is strict: it first verifies `sha256(raw_bytes)` **byte-exactly**
+against `--expected-raw-sha256` — that digest identifies the EXACT acquired artifact, not an equivalence
+class, so a CRLF-mutated copy is a DIFFERENT artifact and fails even though its normalized content is
+identical — and only then parses the now-trusted content, validates the target identity (CPython 3.10.12 /
+armv7l / glibc 2.35), extracts ONLY the content between the `SUPPORTED_TAGS_BEGIN/END` markers, and records
+the three distinct identities in `derivation-record.json`: `raw_evidence_sha256` (exact bytes as acquired),
+`raw_evidence_lf_sha256` (audit reference), and `sanitized_sha256` (the derived artifact).
+This lifecycle is SEPARATE from the per-release co-producer (tags change only when the target ABI changes).
+Hashing of the COMMITTED artifact is **LF-canonical** (`reuse_authz.canonical_lf`) so a Windows CRLF
+checkout produces the identical digest as a Unix checkout; a narrow `.gitattributes` rule keeps it LF on
+disk. Note the deliberate asymmetry: off-tree raw evidence is byte-exact, the committed artifact is
+LF-canonical (git normalizes line endings on checkout, raw evidence is never in git).
+
+**5b-preflight (authoritative readiness gate — CI + pre-tag).** Before tagging, run
+`python -m release.preflight --repo . --require-present`. This is the SAME validation `produce_release`
+performs (builder inputs + durable solution + 495-tag artifact + six-entry build lock + 24-entry reuse
+authorization + full partition + authz-vs-target-tags), so CI cannot report ready while the producer
+would reject. Target tags go through the ONE canonical validator
+(`ccc_release.validate_target_tags` → `reuse_authz.parse_target_tags`) that `produce_release` also calls.
+
+**The authoritative PRE-TAG gate is the Owner's exact-commit local run**, because it is the only check
+that happens before the tag exists:
+
+    git checkout <candidate-sha> && git rev-parse HEAD      # confirm the exact candidate
+    python -m release.preflight --repo . --require-present  # must exit 0 BEFORE tagging
+
+Only after that is green does the Owner create the tag. CI plays three clearly-bounded roles:
+
+* `lint` job, every branch/PR — **dev mode** (`python -m release.preflight`), which permits the legitimate
+  pre-generation state and catches drift in the committed durable inputs early.
+* `release-preflight` job, `workflow_dispatch` **with `candidate_sha`** — the CI form of the pre-tag gate:
+  it checks out that exact commit, asserts `HEAD == candidate_sha`, and runs release mode. This is the
+  only CI run that constitutes evidence bound to a specific release candidate.
+* `release-preflight` job, version-tag push — **post-tag secondary defense only.** It runs after the tag
+  already exists and therefore CANNOT prevent an invalid tag from being created; it can only detect one so
+  the Owner can retract it. Do not treat a green tag-triggered run as the pre-tag gate.
 
 **5c. Build the two signed artifacts (one SRT ceremony).**
 ```

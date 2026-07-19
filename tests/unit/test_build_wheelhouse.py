@@ -7,6 +7,7 @@ through the strict producer validator. Portable (no ssh/Linux/Docker)."""
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import tempfile
@@ -15,6 +16,9 @@ import pytest
 
 from release import build_wheelhouse as B
 from release import ccc_release as R
+
+_TT = set((pathlib.Path(__file__).resolve().parents[2] / "release" / "builder"
+           / "target-supported-tags.txt").read_text(encoding="utf-8").split())
 
 _BB_LOCK = "maturin==1.5.1 --hash=sha256:%s\n" % ("7" * 64)
 _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 1.75.0",
@@ -106,7 +110,7 @@ def test_build_ok_and_round_trips(tmp_path):
     assert "image_id" not in b
     assert b["build_backends_lock_sha256"] == R.sha256_hex(_BB_LOCK.encode())
     assert b["environment"]["glibc"] == "2.35"
-    R._validate_provenance(res["provenance"], R._wheelhouse_members(str(d / "wh")), res["bundle_sha256"],
+    R._validate_provenance(res["provenance"], R._wheelhouse_members(res["wheelhouse_dir"]), res["bundle_sha256"],
                            open(d / "requirements-armv7-build.lock").read(),
                            R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()), _BB_LOCK,
                            _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
@@ -194,3 +198,253 @@ def test_build_wheelhouse_rejects_noncanonical_allowlist(tmp_path):
 def test_build_wheelhouse_rejects_empty_allowlist(tmp_path):
     with pytest.raises(R.ReleaseError):
         _run(tmp_path, allowlist="# only a comment\n")
+
+
+# --------------------------------------------------------------------------- #
+#  Effective backend recorder (shadowed/duplicate metadata)                   #
+# --------------------------------------------------------------------------- #
+def _mk_distinfo(root, name, version):
+    di = pathlib.Path(root) / f"{name}-{version}.dist-info"
+    di.mkdir(parents=True)
+    (di / "METADATA").write_text("Metadata-Version: 2.1\nName: %s\nVersion: %s\n" % (name, version))
+
+
+def test_effective_backend_prefers_search_order_not_last_wins(tmp_path):
+    early, late = tmp_path / "early", tmp_path / "late"
+    _mk_distinfo(early, "setuptools", "82.0.1")     # effective (earlier path entry)
+    _mk_distinfo(late, "setuptools", "59.6.0")      # shadow (later)
+    eff, shadows = B._effective_build_backends(paths=[str(early), str(late)])
+    assert eff["setuptools"] == "82.0.1"            # NOT the last-enumerated 59.6.0
+    assert shadows["setuptools"] == ["82.0.1", "59.6.0"]   # shadow retained as audit only
+    eff2, _ = B._effective_build_backends(paths=[str(late), str(early)])
+    assert eff2["setuptools"] == "59.6.0"           # resolution follows search order, not last-wins
+
+
+# --------------------------------------------------------------------------- #
+#  Dual-origin build: 1 source-built + 1 reused, one merged wheelhouse         #
+# --------------------------------------------------------------------------- #
+def _reused(tmp_path, filename, data):
+    # The reuse store mirrors the real acquisition bundle's `wheels/` dir: authorized wheels ONLY.
+    # The authorization file lives OUTSIDE the store (any foreign entry is rejected by the
+    # exact-set store validation), so these fixtures must not co-locate it with the wheels.
+    from release import reuse_authz as RA
+    rdir = pathlib.Path(tempfile.mkdtemp(dir=str(tmp_path)))
+    (rdir / filename).write_bytes(data)
+    authz = {"schema": RA.SCHEMA_ID, "origin": "pypi",
+             "target": {"python": "cp310", "platform": "armv7l", "glibc": "2.35"},
+             "wheels": [{"name": "bcrypt", "version": "4.3.0", "filename": filename,
+                         "sha256": hashlib.sha256(data).hexdigest(),
+                         "tags": ["cp39-abi3-manylinux_2_31_armv7l"], "requires_python": ">=3.8"}]}
+    ap = pathlib.Path(tempfile.mkdtemp(dir=str(tmp_path))) / "armv7-reuse-authz.json"
+    ap.write_text(json.dumps(authz))
+    return str(ap), str(rdir)
+
+
+def _run_dual(tmp_path, *, reuse_authz_path, reuse_wheels_dir):
+    d, sdir, sh = _setup(tmp_path)
+    return B.build_wheelhouse(
+        build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
+        out_dir=str(d / "wh"), recipe_path=str(d / "Containerfile"),
+        build_backends_lock_path=str(d / "requirements-build-backends.lock"),
+        apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
+        extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+        build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        builder_identity="ccc-builder", base_image_digest=_BASE,
+        image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
+        reuse_authz_path=reuse_authz_path, reuse_wheels_dir=reuse_wheels_dir, target_tags=_TT,
+        env_probe=_probe, build_fn=_good_build_fn), d
+
+
+def test_dual_origin_build_merges_and_self_validates(tmp_path):
+    from release import reuse_authz as RA
+    wfn = "bcrypt-4.3.0-cp39-abi3-manylinux_2_31_armv7l.whl"
+    ap, rdir = _reused(tmp_path, wfn, b"REUSED-BYTES")
+    res, d = _run_dual(tmp_path, reuse_authz_path=ap, reuse_wheels_dir=rdir)
+    prov = res["provenance"]
+    origins = {w["wheel_filename"]: w["origin"] for w in prov["wheels"]}
+    assert origins["fastapi-0.133.0-py3-none-any.whl"] == "built"
+    assert origins[wfn] == "reused"
+    by = {w["wheel_filename"]: w for w in prov["wheels"]}
+    assert by["fastapi-0.133.0-py3-none-any.whl"]["sdist_name"] == "fastapi-0.133.0.tar.gz"
+    assert "sdist_name" not in by[wfn]              # reused wheel carries no sdist fields
+    authz = RA.load_and_validate(pathlib.Path(ap).read_bytes(), target_tags=_TT)
+    assert prov["authorizers"]["reuse_authz_sha256"] == RA.sha256_hex(RA.canonical_bytes(authz))
+
+
+def test_dual_origin_rejects_tampered_reused_wheel(tmp_path):
+    # Must fail for the TAMPER reason specifically. (Regression: this previously passed for the wrong
+    # reason -- the fixture put the authz file inside the store, so it failed the foreign-entry check
+    # before ever hashing the wheel, masking whether tamper detection worked at all.)
+    wfn = "bcrypt-4.3.0-cp39-abi3-manylinux_2_31_armv7l.whl"
+    ap, rdir = _reused(tmp_path, wfn, b"REUSED-BYTES")
+    (pathlib.Path(rdir) / wfn).write_bytes(b"TAMPERED-DIFFERENT-BYTES")   # store != authz sha
+    with pytest.raises(R.ReleaseError, match="sha256"):
+        _run_dual(tmp_path, reuse_authz_path=ap, reuse_wheels_dir=rdir)
+
+
+def test_dual_origin_rejects_missing_reused_wheel(tmp_path):
+    # Must fail for the MISSING reason specifically (see the note above about the masked assertion).
+    wfn = "bcrypt-4.3.0-cp39-abi3-manylinux_2_31_armv7l.whl"
+    ap, rdir = _reused(tmp_path, wfn, b"REUSED-BYTES")
+    (pathlib.Path(rdir) / wfn).unlink()            # authorized wheel absent from the store
+    with pytest.raises(R.ReleaseError, match="missing"):
+        _run_dual(tmp_path, reuse_authz_path=ap, reuse_wheels_dir=rdir)
+
+
+# --------------------------------------------------------------------------- #
+#  Production 6/24/30 policy enforced by Phase B BEFORE publication            #
+# --------------------------------------------------------------------------- #
+def _policy_inputs(tmp_path, *, built_names):
+    from release import reuse_authz as RA
+    reused = ["reusepkg%02d" % i for i in range(1, 25)]
+    sd, lock_lines = {}, []
+    for n in built_names:
+        data = ("SD:" + n).encode()
+        sd["%s-1.0.tar.gz" % n] = data
+        lock_lines.append("%s==1.0 --hash=sha256:%s" % (n, hashlib.sha256(data).hexdigest()))
+    d, sdir, _sh = _setup(tmp_path, sdists=sd, lock="\n".join(lock_lines) + "\n")
+    rdir = pathlib.Path(tempfile.mkdtemp(dir=str(tmp_path)))
+    wheels = []
+    for n in reused:
+        wf = "%s-1.0-py3-none-any.whl" % n
+        wb = ("W:" + n).encode()
+        (rdir / wf).write_bytes(wb)
+        wheels.append({"name": n, "version": "1.0", "filename": wf,
+                       "sha256": hashlib.sha256(wb).hexdigest(),
+                       "tags": ["py3-none-any"], "requires_python": ">=3.9"})
+    authz = {"schema": RA.SCHEMA_ID, "origin": "pypi", "target": dict(RA.TARGET_PROFILE), "wheels": wheels}
+    ap = d / "reuse-authz.json"
+    ap.write_text(json.dumps(authz))
+    reqs = "".join("%s>=0\n" % n for n in list(built_names) + reused)
+    return d, sdir, rdir, ap, reqs
+
+
+def _bfn(sp, sf, n, v):
+    return ("%s-%s-py3-none-any.whl" % (n, v), ("BUILT:" + n).encode())
+
+
+def _run_policy(tmp_path, *, built_names):
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=built_names)
+    return B.build_wheelhouse(
+        build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
+        out_dir=str(d / "bundle"), recipe_path=str(d / "Containerfile"),
+        build_backends_lock_path=str(d / "requirements-build-backends.lock"),
+        apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
+        extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+        build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        builder_identity="ccc-builder", base_image_digest=_BASE,
+        image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
+        reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,
+        target_tags_sha256="ab" * 32, requirements_text=reqs, enforce_partition_policy=True,
+        env_probe=_probe, build_fn=_bfn)
+
+
+def test_phase_b_6_24_30_policy_success_and_bundle(tmp_path):
+    res = _run_policy(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    bundle = pathlib.Path(res["bundle_dir"])
+    whl = [p.name for p in (bundle / "wheelhouse-armhf").iterdir() if p.name.endswith(".whl")]
+    assert len(whl) == 30
+    assert (bundle / "requirements-armv7.lock").is_file()
+    assert (bundle / "wheelhouse-armv7.json").is_file()
+    ev = json.loads((bundle / "build-evidence.json").read_text())
+    assert ev["wheel_count"] == 30 and len(ev["built"]) == 6 and len(ev["reused"]) == 24
+    assert res["provenance"]["authorizers"]["target_tags_sha256"] == "ab" * 32
+
+
+def test_phase_b_policy_rejects_wrong_built_member(tmp_path):
+    # a non-approved built package (7-set) fails the approved-six/count gate BEFORE publication
+    wrong = sorted(set(R.V0317_SOURCE_BUILD_PACKAGES) - {"uvloop"} | {"notapproved"})
+    with pytest.raises(R.ReleaseError):
+        _run_policy(tmp_path, built_names=wrong)
+
+
+def test_phase_b_refuses_preexisting_bundle(tmp_path):
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    (d / "bundle").mkdir()
+    with pytest.raises(R.ReleaseError):
+        B.build_wheelhouse(
+            build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
+            out_dir=str(d / "bundle"), recipe_path=str(d / "Containerfile"),
+            build_backends_lock_path=str(d / "requirements-build-backends.lock"),
+            apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
+            extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+            build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+            builder_identity="ccc-builder", base_image_digest=_BASE,
+            image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
+            reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,
+            requirements_text=reqs, enforce_partition_policy=True, env_probe=_probe, build_fn=_bfn)
+
+
+# --------------------------------------------------------------------------- #
+#  FAIL-FAST Phase B: the whole reuse preflight runs BEFORE the first source   #
+#  build, so no expensive RPi2 compilation starts against a bad reuse input.   #
+# --------------------------------------------------------------------------- #
+def _counting_bfn(bad_tag_for=None):
+    """A build_fn that counts invocations; optionally emits an incompatible tag for one package."""
+    calls = {"n": 0}
+
+    def fn(sp, sf, n, v):
+        calls["n"] += 1
+        if bad_tag_for is not None and n == bad_tag_for:
+            return ("%s-%s-cp310-cp310-manylinux_2_31_x86_64.whl" % (n, v), ("BUILT:" + n).encode())
+        return ("%s-%s-py3-none-any.whl" % (n, v), ("BUILT:" + n).encode())
+    return fn, calls
+
+
+def _call_policy(d, sdir, rdir, ap, *, build_fn, requirements_text, target_tags_sha256="ab" * 32):
+    return B.build_wheelhouse(
+        build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
+        out_dir=str(d / "bundle"), recipe_path=str(d / "Containerfile"),
+        build_backends_lock_path=str(d / "requirements-build-backends.lock"),
+        apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
+        extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+        build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        builder_identity="ccc-builder", base_image_digest=_BASE,
+        image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
+        reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,
+        target_tags_sha256=target_tags_sha256, requirements_text=requirements_text,
+        enforce_partition_policy=True, env_probe=_probe, build_fn=build_fn)
+
+
+def test_phase_b_fail_fast_foreign_store_starts_no_build(tmp_path):
+    # A foreign subdirectory in the reuse store must be rejected in the CHEAP preflight, BEFORE any
+    # source build is attempted (0 build_fn calls) -- the core fail-fast guarantee.
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    (pathlib.Path(rdir) / "foreign_sub").mkdir()
+    fn, calls = _counting_bfn()
+    with pytest.raises(R.ReleaseError) as ei:
+        _call_policy(d, sdir, rdir, ap, build_fn=fn, requirements_text=reqs)
+    assert "reuse store" in str(ei.value)
+    assert calls["n"] == 0                       # NO source build started after the preflight failure
+
+
+def test_phase_b_fail_fast_missing_required_input_starts_no_build(tmp_path):
+    # Under the production policy, a missing mandatory input (requirements text) fails in the cheap
+    # preflight before any build starts.
+    d, sdir, rdir, ap, _reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    fn, calls = _counting_bfn()
+    with pytest.raises(R.ReleaseError):
+        _call_policy(d, sdir, rdir, ap, build_fn=fn, requirements_text=None)
+    assert calls["n"] == 0
+
+
+def test_phase_b_all_30_target_tag_check_rejects_incompatible_built_wheel(tmp_path):
+    # Every one of the final 30 wheels (built AND reused) must carry a tag in the committed 495-set;
+    # a source-built wheel emitted with an x86_64 tag fails the all-30 compatibility gate.
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    built0 = sorted(R.V0317_SOURCE_BUILD_PACKAGES)[0]
+    fn, _calls = _counting_bfn(bad_tag_for=built0)
+    with pytest.raises(R.ReleaseError) as ei:
+        _call_policy(d, sdir, rdir, ap, build_fn=fn, requirements_text=reqs)
+    assert "final wheel" in str(ei.value) or "target" in str(ei.value)
+
+
+def test_phase_b_success_generates_mandatory_runtime_lock(tmp_path):
+    # The runtime lock is MANDATORY under policy: the successful bundle contains an exact 30-line
+    # runtime lock (one hashed pin per final wheel), generated before publication.
+    res = _run_policy(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    bundle = pathlib.Path(res["bundle_dir"])
+    lock = (bundle / "requirements-armv7.lock").read_text().splitlines()
+    pins = [ln for ln in lock if ln and not ln.startswith("#")]
+    assert len(pins) == 30
+    assert all("--hash=sha256:" in ln for ln in pins)

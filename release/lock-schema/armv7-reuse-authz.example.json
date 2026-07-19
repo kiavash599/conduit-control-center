@@ -1,0 +1,23 @@
+{
+  "schema": "ccc-armv7-reuse-authz/1",
+  "origin": "pypi",
+  "target": {"python": "cp310", "platform": "armv7l", "glibc": "2.35"},
+  "wheels": [
+    {
+      "name": "idna",
+      "version": "3.18",
+      "filename": "idna-3.18-py3-none-any.whl",
+      "sha256": "7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2",
+      "tags": ["py3-none-any"],
+      "requires_python": ">=3.9"
+    },
+    {
+      "name": "bcrypt",
+      "version": "4.3.0",
+      "filename": "bcrypt-4.3.0-cp39-abi3-manylinux_2_28_armv7l.manylinux_2_31_armv7l.whl",
+      "sha256": "d9af79d322e735b1fc33404b5765108ae0ff232d4b54666d46730f8ac1a43676",
+      "tags": ["cp39-abi3-manylinux_2_28_armv7l", "cp39-abi3-manylinux_2_31_armv7l"],
+      "requires_python": ">=3.8"
+    }
+  ]
+}

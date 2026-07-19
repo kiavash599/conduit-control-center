@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 
@@ -18,6 +17,7 @@ import pytest
 
 from backend import update_verify as V
 from release import ccc_release as R
+from tests.unit import _hybrid_release_fixture as _HF
 
 _HAS_SSH = shutil.which("ssh-keygen") is not None
 _HAS_GIT = shutil.which("git") is not None
@@ -90,53 +90,12 @@ def _make_release(tmp_path, version="0.3.16", trusted=True):
         _gen_key(store_key)
     store = base / "allowed_signers"
     store.write_text(R.public_allowed_signers_line(str(store_key), V.PUBLISHER_IDENTITY) + "\n")
-    repo = base / "repo"
-    repo.mkdir()
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-
-    def g(*a):
-        subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, env=env)
-    g("init", "-q")
-    (repo / "backend").mkdir()
-    (repo / "backend" / "_version.py").write_text(f'APP_VERSION = "{version}"\n')
-    (repo / "update.sh").write_text("#!/usr/bin/env bash\n")
-    (repo / "requirements.txt").write_text("fastapi>=0.133.0,<1.0.0\n")
-    (repo / "requirements-aarch64.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % ("a" * 64))
-    (repo / "requirements-armv7-build.lock").write_text("fastapi==0.133.0 --hash=sha256:%s\n" % _SDH)
-    (repo / "release" / "builder").mkdir(parents=True)
-    (repo / "release" / "builder" / "Containerfile").write_text(_RECIPE)
-    (repo / "release" / "builder" / "requirements-build-backends.lock").write_text(_BB_LOCK)
-    (repo / "release" / "builder" / "apt-packages.list").write_text(_APT)
-    (repo / "release" / "builder" / "rustup-init.sha256").write_text(_RUSTUP)
-    (repo / "release" / "builder" / "requirements-extractor-tools.in").write_text(_EXT_IN)
-    (repo / "release" / "builder" / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
-    (repo / "release" / "builder" / "requirements-build-backends.source-allowlist").write_text(_ALLOWLIST)
-    g("add", "-A")
-    g("commit", "-q", "-m", "c")
-    g("tag", f"v{version}")
-    wh = base / "wh"
-    wh.mkdir()
-    wname = "fastapi-0.133.0-py3-none-any.whl"
-    wheel = b"WHEELBYTES"
-    (wh / wname).write_bytes(wheel)
-    wsha = hashlib.sha256(wheel).hexdigest()
-    (wh / "SHA256SUMS").write_text("%s  %s\n" % (wsha, wname))
-    bundle = R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))
-    prov = base / "prov.json"
-    prov.write_text(json.dumps({"builder": _builder(),
-                                "bundle": {"sha256": bundle},
-                                "wheels": [{"sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
-                                            "wheel_filename": wname, "wheel_sha256": wsha}]}))
-    runtime = base / "requirements-armv7.lock"
-    runtime.write_text("fastapi==0.133.0 --hash=sha256:%s\n" % wsha)
-    manifest = base / "image-manifest.json"
-    manifest.write_bytes(_MANIFEST)
+    r = _HF.make_release(base, version=version)                        # full 6+24=30 dual-origin repo
     res = R.produce_release(version=version, out_dir=str(base / "dist"), key_path=str(key),
-                            wheelhouse_armv7_dir=str(wh), provenance_armv7_path=str(prov),
-                            armv7_runtime_lock_path=str(runtime),
-                            image_manifest_path=str(manifest),
-                            git_ref=f"v{version}", repo_dir=str(repo),
+                            wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
+                            armv7_runtime_lock_path=r["runtime_lock_path"],
+                            image_manifest_path=r["image_manifest_path"],
+                            git_ref=f"v{version}", repo_dir=r["repo"],
                             recommended_conduit_core="2.0.0")
     return {"manifest": res["manifest"], "signature": res["signature"],
             "aarch64": res["artifacts"]["aarch64"], "armv7l": res["artifacts"]["armv7l"],

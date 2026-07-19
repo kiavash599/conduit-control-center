@@ -50,6 +50,7 @@ except Exception:  # noqa: BLE001 - allow `python release/ccc_release.py` (scrip
     from release import lock_validate as _lockval
 
 from release import oci_manifest as _ocim  # release/ is importable (path patched above if needed)
+from release import reuse_authz as _reuse_authz  # strict reused-wheel authorization (dual-origin)
 
 # --- Normative constants (ADR-0003) ---------------------------------------- #
 
@@ -348,6 +349,19 @@ RUSTUP_SHA_PATH = "release/builder/rustup-init.sha256"
 EXTRACTOR_TOOLS_IN_PATH = "release/builder/requirements-extractor-tools.in"
 EXTRACTOR_TOOLS_LOCK_PATH = "release/builder/requirements-extractor-tools.lock"
 BACKEND_SOURCE_ALLOWLIST_PATH = "release/builder/requirements-build-backends.source-allowlist"
+REUSE_AUTHZ_PATH = "release/builder/armv7-reuse-authz.json"   # committed reused-wheel authorization (24)
+TARGET_TAGS_PATH = "release/builder/target-supported-tags.txt"  # committed sanitized RPi2 495-tag evidence
+SOLUTION_LOCK_PATH = "requirements-armv7-solution.lock"        # durable 30-pin solution (generator input)
+BUILD_LOCK_PATH = "requirements-armv7-build.lock"              # DERIVED six-entry source-build partition
+
+# --- v0.3.17 approved partition policy: the SINGLE authoritative source (consumed by the
+# active-input generator, the producer, and the tests). These six packages publish no acceptable
+# official armv7 wheel, so they are source-built; everyone else is reused. Versions come from the
+# authoritative solution/build lock; exact sdist hashes are authorized ONLY by the six-entry lock. ---
+V0317_SOURCE_BUILD_PACKAGES = frozenset({"cffi", "httptools", "markupsafe", "psutil", "pyyaml", "uvloop"})
+V0317_BUILT_COUNT = 6
+V0317_REUSED_COUNT = 24
+V0317_TOTAL_COUNT = 30
 TARGET_GLIBC = "2.35"                # Ubuntu 22.04 (Jammy) armhf baseline
 TARGET_OS_ID = "ubuntu"
 TARGET_OS_VERSION = "22.04"
@@ -372,6 +386,65 @@ BUILDER_INPUT_FILES = ("apt-packages.list", "rustup-init.sha256",
                        "requirements-build-backends.source-allowlist")
 _PLACEHOLDER_TOKENS = ("example", "placeholder", "replace-me", "replaceme",
                        "changeme", "todo", "your-", "<")
+
+
+def validate_armv7_solution(solution_text: str, requirements_text: str, *,
+                            reuse_names=None, reuse_versions=None, build_pins=None) -> dict:
+    """Validate the durable 30-pin armv7 solution lock (fail closed). Returns its pins
+    {name:(version,{hashes})}. Enforces: exactly 30 unique closed-grammar hash-pins; a valid solution
+    of requirements.txt; the approved six are a subset; and (when supplied) it partitions EXACTLY into
+    the approved-six build set + the 24 reuse records with agreeing versions."""
+    pins = _parse_lock_pins(solution_text)                      # closed grammar + no duplicate names
+    if len(pins) != V0317_TOTAL_COUNT:
+        raise ReleaseError(f"{SOLUTION_LOCK_PATH} must have exactly {V0317_TOTAL_COUNT} pins; got {len(pins)}")
+    _require_valid_lock(requirements_text, solution_text, SOLUTION_LOCK_PATH)   # valid solution of requirements.txt
+    approved = set(V0317_SOURCE_BUILD_PACKAGES)
+    if not approved <= set(pins):
+        raise ReleaseError(f"solution missing approved source-build packages: {sorted(approved - set(pins))}")
+    reuse_expected = set(pins) - approved
+    if len(reuse_expected) != V0317_REUSED_COUNT:
+        raise ReleaseError(f"solution reuse partition must be {V0317_REUSED_COUNT}; got {len(reuse_expected)}")
+    if build_pins is not None:
+        if set(build_pins) != approved:
+            raise ReleaseError(f"build lock packages != approved six; got {sorted(set(build_pins))}")
+        for name in approved:
+            if build_pins[name][0] != pins[name][0]:
+                raise ReleaseError(f"build-lock version for {name!r} != solution ({build_pins[name][0]} != {pins[name][0]})")
+    if reuse_names is not None:
+        if set(reuse_names) != reuse_expected:
+            raise ReleaseError("reuse authorization package set != solution reuse partition")
+        if reuse_versions is not None:
+            for name, ver in reuse_versions.items():
+                if pins[name][0] != ver:
+                    raise ReleaseError(f"reuse version for {name!r} != solution ({ver} != {pins[name][0]})")
+    return pins
+
+
+def validate_build_partition_lock(build_lock_text: str) -> dict:
+    """THE role-appropriate validator for the DERIVED six-entry armv7 build lock.
+
+    This lock is the SOURCE-BUILD PARTITION, not a complete solution of requirements.txt: it
+    deliberately omits the 24 reused packages, so `lock_validate.validate()` (the complete-solution
+    validator, correct for requirements-aarch64.lock / requirements-armv7.lock / the durable
+    requirements-armv7-solution.lock) must NEVER be applied to it -- doing so would reject the legal
+    generated state for "missing" packages that belong to the reuse partition by design.
+
+    Enforces, reusing the existing authoritative primitives so no second set of rules can drift:
+      * the closed pin/hash grammar via _parse_lock_pins (pinned `==`, sha256 hashes, no duplicate
+        names, no directives) -- the SAME parser produce_release and the preflight use;
+      * exactly the approved six source-built packages (V0317_SOURCE_BUILD_PACKAGES).
+    Version agreement against the durable 30-pin solution is enforced separately by
+    validate_armv7_solution(build_pins=...), which owns the cross-artifact relationship.
+
+    Returns the parsed pins {name: (version, {hashes})}. Fails closed."""
+    pins = _parse_lock_pins(build_lock_text)                 # closed grammar + hashes + no duplicates
+    approved = set(V0317_SOURCE_BUILD_PACKAGES)
+    if set(pins) != approved:
+        missing = sorted(approved - set(pins))
+        extra = sorted(set(pins) - approved)
+        raise ReleaseError(f"{BUILD_LOCK_PATH} must contain EXACTLY the approved six source-built "
+                           f"packages {sorted(approved)} (missing={missing}, extra={extra})")
+    return pins
 
 
 def _reject_placeholder(text: str, label: str) -> None:
@@ -535,6 +608,108 @@ def validate_builder_inputs(builder_dir: str, *, require_present: bool) -> dict:
         else:
             _INPUT_VALIDATORS[name](text)
         status[name] = "present"
+    return status
+
+
+TARGET_TAG_COUNT = 495          # the committed RPi2 target-tag artifact is exactly this many tags
+
+
+def validate_target_tags(raw: bytes):
+    """THE canonical target-tag validator for the release path: delegates the grammar / ordering /
+    uniqueness / LF-canonical-digest semantics to reuse_authz.parse_target_tags (one implementation)
+    and adds the fixed release count rule. Called by BOTH release_preflight and produce_release so the
+    gate and the producer cannot disagree about which target-tag artifacts are acceptable.
+    Returns (ordered_tags, tag_set, sha256_of_lf_canonical_bytes)."""
+    try:
+        tags, tset, sha = _reuse_authz.parse_target_tags(raw)
+    except _reuse_authz.AuthzError as exc:
+        raise ReleaseError(f"{TARGET_TAGS_PATH}: {exc}") from exc
+    if len(tags) != TARGET_TAG_COUNT:
+        raise ReleaseError(f"{TARGET_TAGS_PATH} must contain exactly {TARGET_TAG_COUNT} tags; "
+                           f"got {len(tags)}")
+    return tags, tset, sha
+
+
+def release_preflight(repo_dir: str, *, require_present: bool) -> dict:
+    """AUTHORITATIVE release-readiness gate (invoked by CI + the Owner pre-tag), using the SAME
+    validators produce_release uses -- so CI cannot report ready while the producer would reject.
+    Validates the committed builder inputs, the durable 30-pin solution, the target-tag artifact, and
+    (when generated) the six-entry build lock + 24-entry reuse authorization incl. the exact
+    solution/partition/authz-vs-target-tags binding. ``require_present=False`` allows legitimate
+    pre-generation dev state (absent generated active inputs); ``require_present=True`` requires the
+    release-ready set. Returns a status dict; raises ReleaseError on any violation."""
+    builder_dir = os.path.join(repo_dir, "release", "builder")
+    req_path = os.path.join(repo_dir, "requirements.txt")
+    if not os.path.isfile(req_path):
+        raise ReleaseError("requirements.txt not found")
+    with open(req_path, encoding="utf-8") as fh:
+        requirements_text = fh.read()
+    status = {"builder_inputs": validate_builder_inputs(builder_dir, require_present=require_present)}
+
+    def _read(rel):
+        p = os.path.join(repo_dir, rel)
+        if not os.path.isfile(p):
+            return None
+        with open(p, "rb") as fh:
+            return fh.read()
+
+    tags_bytes = _read(TARGET_TAGS_PATH)                    # durable stable target-tag artifact
+    tset = None
+    if tags_bytes is None:
+        if require_present:
+            raise ReleaseError(f"required target-tag artifact absent: {TARGET_TAGS_PATH}")
+        status["target_tags"] = "absent"
+    else:
+        _tags, tset, _tt_sha = validate_target_tags(tags_bytes)   # THE canonical validator
+        status["target_tags"] = "present"
+
+    sol_bytes = _read(SOLUTION_LOCK_PATH)                   # durable 30-pin solution
+    if sol_bytes is None:
+        if require_present:
+            raise ReleaseError(f"required durable solution absent: {SOLUTION_LOCK_PATH}")
+        status["solution"] = "absent"
+    else:
+        validate_armv7_solution(sol_bytes.decode("utf-8", "replace"), requirements_text)
+        status["solution"] = "present"
+
+    # ---- DERIVED ACTIVE INPUTS: strict three-state machine ------------------------------------ #
+    # The six-entry build lock and the 24-entry reuse authorization are co-produced by
+    # gen_active_inputs.py and committed ATOMICALLY. Therefore exactly two states are legal:
+    #   pre_generation : BOTH absent  -> dev mode only (the generator has not been run yet)
+    #   generated      : BOTH present -> validated as the exact disjoint 6+24=30 partition; both modes
+    # Any HALF-STATE (exactly one present) is a broken atomic commit and is INVALID IN EVERY MODE --
+    # it is precisely the state a partial commit would leave behind, so it must never be reported OK.
+    authz_bytes = _read(REUSE_AUTHZ_PATH)                   # derived active input (24)
+    build_bytes = _read(BUILD_LOCK_PATH)                    # derived active input (6)
+    status["build_lock"] = "absent" if build_bytes is None else "present"
+    status["reuse_authz"] = "absent" if authz_bytes is None else "present"
+    if (build_bytes is None) != (authz_bytes is None):
+        present, missing = ((BUILD_LOCK_PATH, REUSE_AUTHZ_PATH) if authz_bytes is None
+                            else (REUSE_AUTHZ_PATH, BUILD_LOCK_PATH))
+        raise ReleaseError(
+            "derived active inputs are not atomic: the two co-produced inputs must be BOTH absent "
+            f"(pre-generation) or BOTH present (generated); {present!r} is present but {missing!r} "
+            "is absent. Commit both together (gen_active_inputs.py) or neither.")
+    if build_bytes is None:                                 # -> pre_generation
+        if require_present:
+            raise ReleaseError("release mode requires the generated active inputs, but both are "
+                               f"absent: {BUILD_LOCK_PATH}, {REUSE_AUTHZ_PATH}")
+        status["derived_state"] = "pre_generation"
+        return status
+    # -> generated: BOTH present. The full partition is MANDATORY here, in dev mode as well as
+    # release mode: once generated, an inconsistent partition is a defect, never a tolerable state.
+    status["derived_state"] = "generated"
+    if tset is None:
+        raise ReleaseError("generated active inputs present but the target-tag artifact is absent")
+    if sol_bytes is None:
+        raise ReleaseError("generated active inputs present but the durable solution is absent: "
+                           f"{SOLUTION_LOCK_PATH}")
+    authz = _reuse_authz.load_and_validate(authz_bytes, target_tags=tset)
+    reuse_versions = {w["name"]: w["version"] for w in authz["wheels"]}
+    validate_armv7_solution(sol_bytes.decode("utf-8", "replace"), requirements_text,
+                            reuse_names=set(reuse_versions), reuse_versions=reuse_versions,
+                            build_pins=_parse_lock_pins(build_bytes.decode("utf-8", "replace")))
+    status["partition"] = "validated"
     return status
 
 
@@ -738,7 +913,8 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                          apt_packages_sha256: str, rustup_init_file_sha256: str,
                          apt_packages_text: str, extractor_tools_lock_sha256: str,
                          build_backends_source_allowlist_sha256: str,
-                         image_manifest_bytes=None) -> None:
+                         image_manifest_bytes=None, reuse_authz_text=None, target_tags=None,
+                         expected_target_tags_sha256=None) -> None:
     """Strict, fail-closed provenance schema + cross-check against the ACTUAL
     embedded wheelhouse and its SHA256SUMS.
 
@@ -796,18 +972,39 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
         if sums.get(fn) != h:
             raise ReleaseError(f"SHA256SUMS mismatch for {fn!r}")
 
-    recorded: dict = {}
+    # DUAL-ORIGIN: every wheel declares exactly one origin (built|reused). Built wheels carry the
+    # authorized sdist; reused wheels must NOT carry sdist fields. No package under both/neither.
+    recorded: dict = {}          # wheel_filename -> wheel_sha256 (all wheels)
+    built_names: dict = {}       # norm name -> version (origin=built)
+    reused_names: dict = {}      # norm name -> version (origin=reused)
+    reused_files: dict = {}      # wheel_filename -> sha256 (origin=reused)
     for w in wheels:
         if not isinstance(w, dict):
             raise ReleaseError("each provenance wheel record must be an object")
+        origin = w.get("origin")
+        if origin not in ("built", "reused"):
+            raise ReleaseError(f"provenance wheel record must declare origin built|reused: {w!r}")
         wf, wh = w.get("wheel_filename"), w.get("wheel_sha256")
-        sn, ss = w.get("sdist_name"), w.get("sdist_sha256")
-        if not isinstance(wf, str) or not wf or not _is_hex64(wh) \
-           or not isinstance(sn, str) or not sn or not _is_hex64(ss):
-            raise ReleaseError(f"provenance wheel record missing/invalid fields: {w!r}")
+        if not isinstance(wf, str) or not wf or not _is_hex64(wh):
+            raise ReleaseError(f"provenance wheel record missing/invalid wheel identity: {w!r}")
         if wf in recorded:
             raise ReleaseError(f"duplicate provenance wheel record: {wf!r}")
         recorded[wf] = wh
+        wn, wv = _parse_wheel_name(wf)
+        if wn is None:
+            raise ReleaseError(f"unparseable wheel_filename: {wf!r}")
+        if wn in built_names or wn in reused_names:
+            raise ReleaseError(f"package {wn!r} recorded under more than one wheel/origin")
+        if origin == "built":
+            sn, ss = w.get("sdist_name"), w.get("sdist_sha256")
+            if not isinstance(sn, str) or not sn or not _is_hex64(ss):
+                raise ReleaseError(f"built wheel record needs sdist_name+sdist_sha256: {w!r}")
+            built_names[wn] = wv
+        else:  # reused
+            if w.get("sdist_name") is not None or w.get("sdist_sha256") is not None:
+                raise ReleaseError(f"reused wheel record must NOT carry sdist fields: {w!r}")
+            reused_names[wn] = wv
+            reused_files[wf] = wh
     if set(recorded) != set(actual):
         missing = sorted(set(actual) - set(recorded))
         extra = sorted(set(recorded) - set(actual))
@@ -816,15 +1013,17 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
         if actual[wf] != wh:
             raise ReleaseError(f"provenance wheel_sha256 mismatch for {wf!r}")
 
-    # Build-input authorization (finding #1): every recorded SOURCE (sdist) must be
-    # authorized by the canonical requirements-armv7-build.lock -- an unapproved sdist
-    # cannot be built and then legitimized by writing its hash into provenance.
+    # BUILT authorization: every built sdist must be authorized by the (six-entry) build lock,
+    # and the set of built packages must EQUAL the build-lock package set (no missing/extra). An
+    # unapproved sdist cannot be built and then legitimized by writing its hash into provenance.
     build_pins = _parse_lock_pins(build_lock_text)
     if not build_pins:
         raise ReleaseError("empty/invalid armv7 build-input lock")
     src_pkgs: dict = {}
     for w in wheels:
-        sd, ss = w.get("sdist_name"), w.get("sdist_sha256")
+        if w.get("origin") != "built":
+            continue
+        sd, ss = w["sdist_name"], w["sdist_sha256"]
         name, ver = _parse_sdist_name(sd) if isinstance(sd, str) else (None, None)
         if name is None:
             raise ReleaseError(f"unparseable sdist_name: {sd!r}")
@@ -841,7 +1040,41 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
     if set(src_pkgs) != set(build_pins):
         missing = sorted(set(build_pins) - set(src_pkgs))
         extra = sorted(set(src_pkgs) - set(build_pins))
-        raise ReleaseError(f"provenance sources != build lock (missing={missing}, extra={extra})")
+        raise ReleaseError(f"built wheels != build lock (missing={missing}, extra={extra})")
+
+    # REUSED authorization: every reused wheel must match the committed reuse authorization by
+    # EXACT filename + sha256; the reused package/version set must EQUAL the authorization; and
+    # provenance.authorizers.reuse_authz_sha256 must bind the exact canonical authorization bytes.
+    if reused_files or reused_names:
+        if reuse_authz_text is None:
+            raise ReleaseError("reused wheels present but no reuse authorization supplied")
+        _raw = reuse_authz_text.encode("utf-8") if isinstance(reuse_authz_text, str) else reuse_authz_text
+        authz = _reuse_authz.load_and_validate(_raw, target_tags=target_tags)
+        authz_by_file = {w["filename"]: w for w in authz["wheels"]}
+        authz_names = {w["name"]: w["version"] for w in authz["wheels"]}
+        if set(reused_files) != set(authz_by_file):
+            missing = sorted(set(authz_by_file) - set(reused_files))
+            extra = sorted(set(reused_files) - set(authz_by_file))
+            raise ReleaseError(f"reused wheels != reuse authorization (missing={missing}, extra={extra})")
+        for wf, wh in reused_files.items():
+            if authz_by_file[wf]["sha256"] != wh:
+                raise ReleaseError(f"reused wheel {wf!r} sha256 not authorized by reuse authorization")
+        if reused_names != authz_names:
+            raise ReleaseError("reused package/version set != reuse authorization")
+        authorizers = obj.get("authorizers")
+        expected = _reuse_authz.sha256_hex(_reuse_authz.canonical_bytes(authz))
+        if not isinstance(authorizers, dict) or authorizers.get("reuse_authz_sha256") != expected:
+            raise ReleaseError("provenance.authorizers.reuse_authz_sha256 must bind the exact "
+                               "canonical reuse authorization bytes")
+        if expected_target_tags_sha256 is not None and \
+           authorizers.get("target_tags_sha256") != expected_target_tags_sha256:
+            raise ReleaseError("provenance.authorizers.target_tags_sha256 must equal the committed "
+                               "target-tag artifact sha256 (recomputed from canonical source bytes)")
+    # PARTITION: built and reused are disjoint (enforced above) and together cover EXACTLY the
+    # embedded wheelhouse packages -- no missing, extra, duplicate, or foreign-origin package.
+    wheel_pkgs = {_parse_wheel_name(fn)[0] for fn in actual}
+    if (set(built_names) | set(reused_names)) != wheel_pkgs:
+        raise ReleaseError("built|reused packages do not partition the wheelhouse exactly")
 
 
 def _secret_scan(tree: dict) -> None:
@@ -1214,6 +1447,21 @@ def produce_release(
     aarch64_lock_sha = _canon_sha("requirements-aarch64.lock")
     armv7_build_lock_sha = _canon_sha("requirements-armv7-build.lock")
     build_lock_text = canon["requirements-armv7-build.lock"].decode("utf-8", "replace")
+    # The committed reused-wheel authorization (dual-origin): strictly validated here; its exact
+    # canonical bytes are bound into provenance (authorizers.reuse_authz_sha256) and its package
+    # set forms the reuse half of the 30-package partition (below).
+    reuse_authz_bytes = canon.get(REUSE_AUTHZ_PATH)
+    if reuse_authz_bytes is None:
+        raise ReleaseError(f"committed reused-wheel authorization missing from source: {REUSE_AUTHZ_PATH}")
+    # The committed target-tag artifact is bound by recomputing its sha256 from the CANONICAL source
+    # bytes (not "it is in Git") and requiring an exact provenance match downstream.
+    _target_tags_bytes = canon.get(TARGET_TAGS_PATH)
+    if _target_tags_bytes is None:
+        raise ReleaseError(f"committed target-tag artifact missing from source: {TARGET_TAGS_PATH}")
+    # THE canonical target-tag validator -- the SAME call release_preflight makes, so the gate and
+    # the producer cannot disagree (grammar, ordering, uniqueness, count, LF-canonical digest).
+    _tt_ordered, _target_tags, _target_tags_sha = validate_target_tags(_target_tags_bytes)
+    _reuse_validated = _reuse_authz.load_and_validate(reuse_authz_bytes, target_tags=_target_tags)
     recipe_bytes = canon.get(CANONICAL_RECIPE_PATH)
     if recipe_bytes is None:
         raise ReleaseError(f"canonical builder recipe missing from source: {CANONICAL_RECIPE_PATH}")
@@ -1282,7 +1530,9 @@ def produce_release(
                          bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
                          apt_pkgs_bytes.decode("utf-8", "replace"), extractor_tools_lock_sha,
                          backend_source_allowlist_sha,
-                         image_manifest_bytes=image_manifest_bytes)
+                         image_manifest_bytes=image_manifest_bytes,
+                         reuse_authz_text=reuse_authz_bytes.decode("utf-8", "replace"),
+                         target_tags=_target_tags, expected_target_tags_sha256=_target_tags_sha)
     provenance_sha = sha256_hex(prov_bytes)
     if not armv7_runtime_lock_path or not os.path.isfile(armv7_runtime_lock_path):
         raise ReleaseError(f"armv7 runtime lock not found: {armv7_runtime_lock_path!r}")
@@ -1290,16 +1540,54 @@ def produce_release(
         armv7_lock_bytes = _to_lf(fh.read())
     armv7_lock_sha = sha256_hex(armv7_lock_bytes)
 
-    # Semantic lock validation at the PRODUCER boundary (not only in CI):
-    #   * aarch64 + armv7-build locks are valid solutions of canonical requirements.txt;
+    # Semantic lock validation at the PRODUCER boundary (not only in CI), BY ROLE:
+    #   * the aarch64 lock is a valid COMPLETE SOLUTION of canonical requirements.txt (as is the
+    #     durable armv7 solution lock, checked via validate_armv7_solution below);
+    #   * the six-entry armv7 BUILD lock is the source-build PARTITION, validated by
+    #     validate_build_partition_lock -- NOT as a complete solution (see the note below);
     #   * the injected armv7 runtime lock is valid AND a bijection with the embedded wheels.
     requirements_text = canon["requirements.txt"].decode("utf-8", "replace")
     _require_valid_lock(requirements_text,
                         canon["requirements-aarch64.lock"].decode("utf-8", "replace"),
                         "requirements-aarch64.lock")
-    _require_valid_lock(requirements_text, build_lock_text, "requirements-armv7-build.lock")
+    # NOTE: the six-entry armv7 build lock is the SOURCE-BUILD partition, NOT a full solution of
+    # requirements.txt. The complete-solution property is enforced on the runtime lock (below),
+    # which is a bijection with the embedded wheelhouse. The build lock still parses under the
+    # closed grammar via _parse_lock_pins.
     _validate_runtime_lock_against_wheelhouse(
         armv7_lock_bytes.decode("utf-8", "replace"), wh_members, requirements_text)
+    # DURABLE SOLUTION: the committed 30-pin solution is the authoritative closure; the six-entry
+    # build lock + 24-entry reuse authorization must partition it EXACTLY with agreeing versions.
+    _solution_bytes = canon.get(SOLUTION_LOCK_PATH)
+    if _solution_bytes is None:
+        raise ReleaseError(f"durable 30-pin solution missing from source: {SOLUTION_LOCK_PATH}")
+    _reuse_versions = {w["name"]: w["version"] for w in _reuse_validated["wheels"]}
+    # Role-appropriate validation of the six-entry build lock (grammar + exactly the approved six),
+    # via the SAME shared helper the lock-schema fixtures and the drift test use.
+    _build_pins = validate_build_partition_lock(build_lock_text)
+    validate_armv7_solution(_solution_bytes.decode("utf-8", "replace"), requirements_text,
+                            reuse_names=set(_reuse_versions), reuse_versions=_reuse_versions,
+                            build_pins=_build_pins)
+    # PARTITION invariant (dual-origin): the build lock (source-built) and the reuse authorization
+    # (official wheels) are DISJOINT and together cover EXACTLY the runtime-lock package closure.
+    _build_names = set(_build_pins)
+    _reuse_names = {w["name"] for w in _reuse_validated["wheels"]}
+    _runtime_names = set(_parse_lock_pins(armv7_lock_bytes.decode("utf-8", "replace")))
+    if _build_names & _reuse_names:
+        raise ReleaseError(f"build/reuse origin overlap: {sorted(_build_names & _reuse_names)}")
+    if (_build_names | _reuse_names) != _runtime_names:
+        _miss = sorted(_runtime_names - (_build_names | _reuse_names))
+        _extra = sorted((_build_names | _reuse_names) - _runtime_names)
+        raise ReleaseError("build lock + reuse authorization do not partition the runtime lock "
+                           f"(missing={_miss}, extra={_extra})")
+    # v0.3.17 approved-partition policy (single source): exactly the approved six built, 24 reused, 30 total.
+    if _build_names != set(V0317_SOURCE_BUILD_PACKAGES):
+        raise ReleaseError(f"build lock packages != approved six {sorted(V0317_SOURCE_BUILD_PACKAGES)}; "
+                           f"got {sorted(_build_names)}")
+    if (len(_build_names) != V0317_BUILT_COUNT or len(_reuse_names) != V0317_REUSED_COUNT
+            or len(_runtime_names) != V0317_TOTAL_COUNT):
+        raise ReleaseError(f"partition counts must be {V0317_BUILT_COUNT}/{V0317_REUSED_COUNT}/"
+                           f"{V0317_TOTAL_COUNT}; got {len(_build_names)}/{len(_reuse_names)}/{len(_runtime_names)}")
 
     for _label, _computed, _expected in (
             ("requirements_sha256", requirements_sha, expected_requirements_sha256),

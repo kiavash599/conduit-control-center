@@ -70,6 +70,29 @@ hash-verified sdists + `requirements-armv7-build.lock` mounted **read-only**, a 
 bounded **writable** output, and no network. `pip wheel --no-deps --no-build-isolation
 --no-index` cannot fetch anything; every build backend must already be in the image.
 
+**Dual-origin wheelhouse (v0.3.17, ADR-0003 Amendment A5).** The armv7 wheelhouse is the exact
+30-package closure from two release-time origins: **24 reused** official PyPI wheels + **6
+source-built** wheels (`cffi, httptools, markupsafe, psutil, pyyaml, uvloop`). The six sdists are
+authorized by the (six-entry) `requirements-armv7-build.lock`; the 24 wheels by
+`armv7-reuse-authz.json` (exact identity: name/version/filename/sha256/tags/official origin —
+kept out of pip grammar). The two active inputs (six-entry build lock + 24-entry `armv7-reuse-authz.json`) are generated
+together by the controlled co-producer `gen_active_inputs.py` from hash-gated evidence and committed
+atomically. Target compatibility is mandatory and independent at every boundary via the committed
+sanitized 495-tag artifact `target-supported-tags.txt` (bound in provenance by
+`authorizers.target_tags_sha256`). The reuse store is acquired in a connected pre-tag phase
+(`acquire_reuse_wheels.py`, strict HTTPS official origins only, cache-isolated) and published as ONE
+atomic **filename-addressed, hash-verified** bundle (`wheels/` + `acquisition-record.json`),
+transferred, and re-verified **offline** (`--reuse-authz`/`--reuse-store`, mounted read-only,
+exact-set) before merge. Phase B (the Python builder) enforces the 6/24/30 approved-six policy and
+publishes ONE atomic bundle (`wheelhouse-armhf/` + provenance + generated `requirements-armv7.lock`
++ evidence) before returning. Provenance
+records per-wheel `origin` and binds the reuse authorization; the partition (built ⊎ reused == the
+30 runtime pins) is enforced fail-closed. The executable build scratch is the field-proven
+`/tmp:rw,exec,...` (native `.so` import + native configure scripts need exec; noexec is not a
+security boundary once the authorized build code runs). The environment recorder binds the
+**effective** resolved backend version (not last-wins), recording shadows for audit. The device
+install path is origin-agnostic and unchanged.
+
 ## Cybersecurity controls (Phase B container)
 
 Non-root (`--user 1000:1000`); `--cap-drop=ALL`; `--security-opt=no-new-privileges`;

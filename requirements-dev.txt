@@ -26,3 +26,11 @@ ruff>=0.4.0,<1.0.0
 # Security audit — checks dependencies against known vulnerabilities
 # SRS: SEC-DEP-01, Issue #2 (CI pipeline)
 pip-audit>=2.7.0,<3.0.0
+
+# Release-tooling dependency (ADR-0003 A5): standard PEP 440 semantics for Requires-Python at
+# active-input generation, reuse-authz validation, and connected acquisition. Declared DIRECTLY
+# here (not transitively) so the release/generation tooling on the Owner PC + CI + WSL always has
+# it; the builder image gets it from requirements-build-backends.lock (packaging==26.2). It is
+# deliberately NOT in the runtime requirements.txt, so the 30-package runtime closure is unchanged.
+# If unavailable, release/reuse_authz import fails at startup (fail closed; no hand-written fallback).
+packaging>=24,<27

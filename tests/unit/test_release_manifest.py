@@ -10,12 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 
 import pytest
 
 from release import ccc_release as R
+from tests.unit import _hybrid_release_fixture as _HF
 
 _HAS_SSH = shutil.which("ssh-keygen") is not None
 _HAS_GIT = shutil.which("git") is not None
@@ -59,6 +61,17 @@ _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 
         "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
         "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
         "apt": {"build-essential": "12.9ubuntu3"}, "build_backends": {"maturin": "1.5.1"}}
+
+
+# Dual-origin (Amendment A5) fixture: one REUSED official wheel authorized alongside the BUILT one.
+_REUSE_WHEEL = "idna-3.18-py3-none-any.whl"
+_REUSE_BYTES = b"IDNA-REUSED-BYTES"
+_REUSE_SHA = hashlib.sha256(_REUSE_BYTES).hexdigest()
+_REUSE_AUTHZ_JSON = json.dumps({
+    "schema": "ccc-armv7-reuse-authz/1", "origin": "pypi",
+    "target": {"python": "cp310", "platform": "armv7l", "glibc": "2.35"},
+    "wheels": [{"name": "idna", "version": "3.18", "filename": _REUSE_WHEEL,
+                "sha256": _REUSE_SHA, "tags": ["py3-none-any"], "requires_python": ">=3.9"}]})
 
 
 def _builder(recipe_sha=_RECIPE_SHA, **over):
@@ -181,7 +194,9 @@ def _prov_case(*, wname="fastapi-0.133.0-py3-none-any.whl", sname="fastapi-0.133
     members = {f"wheelhouse-armhf/{wname}": wheel,
                "wheelhouse-armhf/SHA256SUMS": ("%s  %s\n" % (wsha, wname)).encode()}
     bundle = R.sha256_hex(R.pack_tree(members))
-    wheels = [{"sdist_name": sname, "sdist_sha256": sdh, "wheel_filename": wname, "wheel_sha256": wsha}]
+    # Dual-origin (A5): every provenance wheel record MUST declare its origin.
+    wheels = [{"origin": "built", "sdist_name": sname, "sdist_sha256": sdh,
+               "wheel_filename": wname, "wheel_sha256": wsha}]
     if dup:
         wheels.append(dict(wheels[0]))
     prov = {"builder": builder if builder is not None else _builder(),
@@ -261,6 +276,7 @@ def _release_repo(tmp, version="0.3.16", aarch64_lock=None, build_lock=None, wit
     (r / "requirements-aarch64.lock").write_text(aarch64_lock or "fastapi==0.133.0 --hash=sha256:%s\n" % ("a" * 64))
     (r / "requirements-armv7-build.lock").write_text(build_lock or "fastapi==0.133.0 --hash=sha256:%s\n" % _SDH)
     (r / "release" / "builder").mkdir(parents=True)
+    (r / "release" / "builder" / "armv7-reuse-authz.json").write_text(_REUSE_AUTHZ_JSON)
     (r / "release" / "builder" / "Containerfile").write_text(_RECIPE_CONTENT)
     (r / "release" / "builder" / "requirements-build-backends.lock").write_text(_BB_LOCK)
     (r / "release" / "builder" / "apt-packages.list").write_text(_APT)
@@ -276,64 +292,109 @@ def _release_repo(tmp, version="0.3.16", aarch64_lock=None, build_lock=None, wit
 
 
 def _wheelhouse_prov_lock(tmp):
+    from release import reuse_authz as _RA
     wh = tmp / "wh"
     wh.mkdir()
     wname = "fastapi-0.133.0-py3-none-any.whl"
     wheel = b"WHEELBYTES"
     (wh / wname).write_bytes(wheel)
     wsha = hashlib.sha256(wheel).hexdigest()
-    (wh / "SHA256SUMS").write_text("%s  %s\n" % (wsha, wname))
+    (wh / _REUSE_WHEEL).write_bytes(_REUSE_BYTES)                        # dual-origin: reused wheel
+    (wh / "SHA256SUMS").write_text("%s  %s\n%s  %s\n" % (wsha, wname, _REUSE_SHA, _REUSE_WHEEL))
     bundle = R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))
+    # target_tags is MANDATORY: the committed 495-tag artifact is the single target-compat source.
+    authz_sha = _RA.sha256_hex(_RA.canonical_bytes(_RA.load_and_validate(
+        _REUSE_AUTHZ_JSON.encode(), target_tags=set(_HF.TARGET_TAGS_TEXT.split()))))
     prov = tmp / "prov.json"
-    prov.write_text(json.dumps({"builder": _builder(),
-                                "bundle": {"sha256": bundle},
-                                "wheels": [{"sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
-                                            "wheel_filename": wname, "wheel_sha256": wsha}]}))
+    prov.write_text(json.dumps({
+        "builder": _builder(), "bundle": {"sha256": bundle},
+        "authorizers": {"reuse_authz_sha256": authz_sha},
+        "wheels": [
+            {"origin": "built", "sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
+             "wheel_filename": wname, "wheel_sha256": wsha},
+            {"origin": "reused", "name": "idna", "version": "3.18",
+             "wheel_filename": _REUSE_WHEEL, "wheel_sha256": _REUSE_SHA, "tags": ["py3-none-any"]},
+        ]}))
     runtime = tmp / "requirements-armv7.lock"
-    runtime.write_text("fastapi==0.133.0 --hash=sha256:%s\n" % wsha)
+    runtime.write_text("fastapi==0.133.0 --hash=sha256:%s\nidna==3.18 --hash=sha256:%s\n" % (wsha, _REUSE_SHA))
     (tmp / "image-manifest.json").write_bytes(_MANIFEST)
     return str(wh), str(prov), str(runtime)
 
 
 @_git
 def test_produce_release_rejects_caller_asserted_source(tmp_path):
-    _release_repo(tmp_path)
-    wh, prov, runtime = _wheelhouse_prov_lock(tmp_path)
+    r = _HF.make_release(tmp_path)
     key = tmp_path / "k"
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):                 # --source path removed (I4)
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=str(tmp_path / "image-manifest.json"),
-                          wheelhouse_armv7_dir=wh, provenance_armv7_path=prov, armv7_runtime_lock_path=runtime,
+                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
                           source_dir=str(tmp_path), source_commit=_COMMIT, source_tag="v0.3.16")
 
 
 @_git
 def test_produce_release_requires_runtime_lock(tmp_path):
-    repo = _release_repo(tmp_path)
-    wh, prov, _ = _wheelhouse_prov_lock(tmp_path)
+    r = _HF.make_release(tmp_path)
     key = tmp_path / "k"
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=str(tmp_path / "image-manifest.json"),
-                          wheelhouse_armv7_dir=wh, provenance_armv7_path=prov,
+                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          provenance_armv7_path=r["provenance_path"],
                           armv7_runtime_lock_path=str(tmp_path / "missing.lock"),
-                          git_ref="v0.3.16", repo_dir=repo)
+                          git_ref="v0.3.16", repo_dir=r["repo"])
 
 
 @_git
 def test_produce_release_rejects_malformed_committed_lock(tmp_path):
+    r = _HF.make_release(tmp_path)
     bad = "--index-url https://evil.invalid/simple\nfastapi==0.133.0 --hash=sha256:%s\n" % ("a" * 64)
-    repo = _release_repo(tmp_path, aarch64_lock=bad)
-    wh, prov, runtime = _wheelhouse_prov_lock(tmp_path)
+    (pathlib.Path(r["repo"]) / "requirements-aarch64.lock").write_text(bad)
+    _HF.recommit(r["repo"])
     key = tmp_path / "k"
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=str(tmp_path / "image-manifest.json"),
-                          wheelhouse_armv7_dir=wh, provenance_armv7_path=prov, armv7_runtime_lock_path=runtime,
-                          git_ref="v0.3.16", repo_dir=repo)
+                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
+                          git_ref="v0.3.16", repo_dir=r["repo"])
+
+
+@_git
+def test_produce_release_full_dual_origin_6_24_30(tmp_path):
+    # production-policy round trip: exactly six built + 24 reused = 30, one manifest + one signature.
+    r = _HF.make_release(tmp_path)
+    key = tmp_path / "k"
+    if not _HAS_SSH:
+        pytest.skip("ssh-keygen required")
+    _gen_key(key)
+    res = R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
+                            image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                            provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
+                            git_ref="v0.3.16", repo_dir=r["repo"])
+    assert os.path.isfile(res["manifest"]) and os.path.isfile(res["signature"])
+    assert os.path.isfile(res["artifacts"]["aarch64"]) and os.path.isfile(res["artifacts"]["armv7l"])
+
+
+@_git
+def test_produce_release_rejects_target_tags_sha_mismatch(tmp_path):
+    # the committed target-tag artifact is recomputed from canonical source bytes and must match
+    # provenance.authorizers.target_tags_sha256 exactly ("in Git" is not sufficient).
+    r = _HF.make_release(tmp_path)
+    if not _HAS_SSH:
+        pytest.skip("ssh-keygen required")
+    key = tmp_path / "k"
+    _gen_key(key)
+    prov = pathlib.Path(r["provenance_path"])
+    obj = json.loads(prov.read_text())
+    obj["authorizers"]["target_tags_sha256"] = "0" * 64
+    prov.write_text(json.dumps(obj))
+    with pytest.raises(R.ReleaseError):
+        R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
+                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
+                          git_ref="v0.3.16", repo_dir=r["repo"])
 
 
 @_git
@@ -361,14 +422,17 @@ def test_resolve_source_lightweight_and_annotated_tag_peel(tmp_path):
 @_git
 @_ssh
 def test_produce_release_v2_end_to_end(tmp_path):
+    # Uses the FULL 6+24=30 fixture: produce_release enforces the approved-partition policy, so a
+    # reduced 1+1 demo repo is no longer a producible release by design.
     from backend import update_verify as V
     key = tmp_path / "pub_key"
     _gen_key(key)
-    repo = _release_repo(tmp_path)
-    wh, prov, runtime = _wheelhouse_prov_lock(tmp_path)
+    r = _HF.make_release(tmp_path)
+    repo = r["repo"]
     res = R.produce_release(version="0.3.16", out_dir=str(tmp_path / "dist"), key_path=str(key),
-                          image_manifest_path=str(tmp_path / "image-manifest.json"),
-                            wheelhouse_armv7_dir=wh, provenance_armv7_path=prov, armv7_runtime_lock_path=runtime,
+                            image_manifest_path=r["image_manifest_path"],
+                            wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
+                            armv7_runtime_lock_path=r["runtime_lock_path"],
                             git_ref="v0.3.16", repo_dir=repo, recommended_conduit_core="2.0.0")
     manifest = json.loads(open(res["manifest"], "rb").read())
     req_bytes = open(os.path.join(repo, "requirements.txt"), "rb").read().replace(b"\r\n", b"\n")
@@ -389,13 +453,19 @@ def test_produce_release_v2_end_to_end(tmp_path):
 @_git
 @_ssh
 def test_producer_requires_extractor_tools_lock(tmp_path):
-    # F1: the release/tag producer gate must REJECT an absent .in/.lock pair.
-    repo = _release_repo(tmp_path, with_extractor=False)
-    wh, prov, runtime = _wheelhouse_prov_lock(tmp_path)
+    # F1: the release/tag producer gate must REJECT an absent .in/.lock pair. Built on the full
+    # 6+24=30 fixture (otherwise the partition policy, not the extractor gate, would be the rejecter),
+    # with the extractor pair removed and re-committed so the ONLY defect is the missing lock.
+    r = _HF.make_release(tmp_path)
+    repo = r["repo"]
+    os.remove(os.path.join(repo, "release", "builder", "requirements-extractor-tools.lock"))
+    os.remove(os.path.join(repo, "release", "builder", "requirements-extractor-tools.in"))
+    _HF.recommit(repo)
     key = tmp_path / "k"
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=str(tmp_path / "image-manifest.json"),
-                          wheelhouse_armv7_dir=wh, provenance_armv7_path=prov, armv7_runtime_lock_path=runtime,
+                          image_manifest_path=r["image_manifest_path"],
+                          wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
+                          armv7_runtime_lock_path=r["runtime_lock_path"],
                           git_ref="v0.3.16", repo_dir=repo)

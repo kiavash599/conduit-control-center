@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main, develop]
+    tags: ["v*"]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "PRE-TAG gate: full 40-hex commit SHA of the release candidate to validate"
+        required: false
+        default: ""
 
 jobs:
   lint:
@@ -24,6 +31,14 @@ jobs:
 
       - name: Run ruff
         run: ruff check .
+
+      - name: Release preflight (dev mode)
+        # Authoritative release-readiness gate in dev mode: validates the committed builder inputs,
+        # the durable 30-pin solution, and the 495-tag target artifact with the SAME validators
+        # produce_release uses, while allowing the legitimate pre-generation state (the derived
+        # six-entry build lock and 24-entry reuse authorization are generated later, pre-tag). Runs on
+        # every branch/PR so drift in a committed release input fails CI early.
+        run: python -m release.preflight --repo .
 
       - name: Compile privileged helpers (extension-less)
         # deployment/bin/* helpers have no .py extension, so ruff/pytest skip
@@ -103,6 +118,68 @@ jobs:
 
       - name: Run pip-audit
         run: pip-audit -r requirements.txt
+
+  release-preflight:
+    name: Release Preflight (release mode)
+    runs-on: ubuntu-22.04
+    needs: lint
+    # Runs in two DISTINCT roles. Note carefully what each can and cannot guarantee:
+    #
+    #  1. PRE-TAG gate (workflow_dispatch WITH `candidate_sha`): checks out that EXACT commit,
+    #     asserts HEAD == candidate_sha, and runs the release-mode preflight against it. This is the
+    #     only CI role that produces evidence bound to a specific release candidate BEFORE a tag
+    #     exists. The Owner runs it (or the equivalent local exact-commit preflight) and only tags
+    #     after it is green.
+    #  2. POST-TAG secondary defense (version-tag push): runs AFTER the tag has already been created
+    #     and pushed. It CANNOT prevent an invalid tag from being created -- it can only detect one
+    #     that already exists, so the Owner can delete/retract it. It is a backstop, not the gate.
+    #
+    # A dispatch WITHOUT `candidate_sha` validates whatever ref was selected and is therefore NOT
+    # release evidence; it is treated as an exploratory run and says so in its output.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For the pre-tag role, check out the explicit candidate commit (empty -> default ref).
+          ref: ${{ github.event.inputs.candidate_sha || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Bind this run to the explicit release candidate (pre-tag role)
+        id: bind
+        run: |
+          set -euo pipefail
+          CAND="${{ github.event.inputs.candidate_sha }}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ -n "${CAND}" ]; then
+            case "${CAND}" in
+              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) : ;;
+              *) echo "ERROR: candidate_sha must be a full 40-hex commit SHA" >&2; exit 1;;
+            esac
+            if [ "${#CAND}" -ne 40 ]; then
+              echo "ERROR: candidate_sha must be exactly 40 hex chars (got ${#CAND})" >&2; exit 1
+            fi
+            if [ "${HEAD_SHA}" != "${CAND}" ]; then
+              echo "ERROR: HEAD ${HEAD_SHA} != candidate_sha ${CAND}" >&2; exit 1
+            fi
+            echo "role=pre-tag gate; evidence bound to commit ${HEAD_SHA}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "role=EXPLORATORY (no candidate_sha supplied); NOT release evidence. HEAD=${HEAD_SHA}"
+          else
+            echo "role=POST-TAG secondary defense for ${{ github.ref }}; this CANNOT prevent tag"
+            echo "creation -- it only detects an already-created invalid tag. HEAD=${HEAD_SHA}"
+          fi
+
+      - name: Release preflight (require full release-ready input set)
+        run: python -m release.preflight --repo . --require-present
 
   shellcheck:
     name: Shell Script Lint

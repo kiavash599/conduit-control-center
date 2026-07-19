@@ -9,3 +9,13 @@ deployment/bin/* text eol=lf
 # which anchors on `^Environment=CCC_MAX_PERSONAL_CLIENTS=0$`). A CRLF checkout
 # would break those exact-line matches, so pin them to LF everywhere.
 deployment/* text eol=lf
+
+# Dual-origin armv7 release-security artifacts. Their sha256 is bound into
+# provenance / authorizations and recomputed at every trust boundary. The
+# hashing is LF-canonical in code (reuse_authz.canonical_lf) so a CRLF checkout
+# still produces the correct digest, but we ALSO pin them LF on disk so the
+# working tree matches the committed bytes exactly (no accidental CRLF drift).
+requirements-armv7-solution.lock text eol=lf
+requirements-armv7-build.lock text eol=lf
+release/builder/target-supported-tags.txt text eol=lf
+release/builder/armv7-reuse-authz.json text eol=lf

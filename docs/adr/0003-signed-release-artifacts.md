@@ -207,3 +207,44 @@ base image ONLY under `allow_index`, bound to its index digest; the single-image
 built builder image. Phase A records `image_identity_mode`; Phase B reuses the recorded transport +
 mode and executes by `runtime_image_id`. The signed-manifest schema, verifier, updater, SRT, and V2
 model are unchanged; v0.3.17 was not yet produced, so there is no provenance migration.
+
+**Amendment A5 (reuse-first hybrid: dual-origin armv7 wheelhouse).** The armv7 wheelhouse is the
+exact 30-package runtime closure populated from TWO release-time origins: **reused** official PyPI
+wheels (24), and **source-built** wheels (6) whose packages publish no acceptable armv7 wheel
+(`cffi, httptools, markupsafe, psutil, pyyaml, uvloop`). Reuse-vs-build is a release-time population
+concern only — the device installs hash-pinned wheels offline (`--no-index --require-hashes
+--only-binary=:all:` against `requirements-armv7.lock`) and is **origin-agnostic**; the signed V2
+manifest, verifier, updater, and privileged helper are unchanged. Two separate authorization inputs
+are committed pre-tag: the six-entry `requirements-armv7-build.lock` (source-build authorization,
+which is the SOURCE partition — NOT a full solution of `requirements.txt`) and a rich
+`armv7-reuse-authz.json` (reuse authorization binding exact artifact identity: normalized name,
+version, filename, sha256, tags, official-PyPI origin — kept OUT of pip grammar). The 24 official
+wheels are acquired in a controlled connected pre-tag phase (`acquire_reuse_wheels.py`; official
+origins only, cache-isolated, atomic **filename-addressed, hash-verified** bundle), preserved off-tree, and re-verified
+OFFLINE before merge. `_validate_provenance` records per-wheel `origin`, authorizes built wheels
+against the build lock and reused wheels against the reuse authorization (binding its canonical
+sha256 in `authorizers.reuse_authz_sha256`), and enforces the PARTITION invariant: built(6) and
+reused(24) are disjoint and together cover EXACTLY the runtime-lock closure (a bijection with the
+wheelhouse). The environment recorder binds the EFFECTIVE resolved backend version (not a last-wins
+enumeration; shadowed metadata is recorded for audit and genuine ambiguity fails closed). Phase B's
+executable scratch is the field-proven `/tmp:rw,exec,...`; no built-wheel reuse ledger is
+introduced; pure-Python PyYAML is accepted. No signing key or signing action exists on the RPi2.
+
+**Amendment A5 closure (co-producer, target binding, atomic bundles).** (1) The two active inputs
+are generated together by a controlled co-producer, `release/builder/gen_active_inputs.py`, from
+hash-gated evidence (official PyPI metadata + the ordered RPi2 495-tag evidence + the six-sdist
+acquisition record + the current 30-package solution lock); it derives exactly the approved six
+built packages and the 24 reused, selects each reused wheel deterministically by lowest index in the
+ordered 495-tag list, checks Requires-Python/yanked/origin, proves disjoint/union/6-24-30, and stages
+both files plus a generation record for ONE atomic Owner commit — nothing is hand-edited or
+fabricated. (2) Target compatibility is MANDATORY and independent at every boundary (acquisition,
+offline build, provenance, produce_release): the committed sanitized 495-tag artifact
+`release/builder/target-supported-tags.txt` is the single compat source (no invented tag
+semantics), the fixed profile is CPython 3.10 / armv7l / glibc 2.35, and its sha256 is recomputed
+from canonical committed bytes and bound in provenance (`authorizers.target_tags_sha256`). (3) Both
+the acquisition store and the Phase-B wheelhouse are published as ONE atomic bundle (sibling staging
+→ validate everything → single rename; refuse-existing; cleanup on failure); Phase B (the Python
+builder, not the shell) enforces the 6/24/30 approved-six policy and generates `requirements-armv7.lock`
+from the final validated wheelhouse (exact 30-way bijection) before publication. The reuse store is
+**filename-addressed, hash-verified** (not a digest-CAS layout). The `V0317_SOURCE_BUILD_PACKAGES`
+constant in `ccc_release` is the single policy source for generator, producer, and tests.
