@@ -33,6 +33,7 @@ _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _EXT_LOCK_SHA = R.sha256_hex(_EXT_LOCK.encode())
 _ALLOWLIST = "maturin\n"
+_PARTITION_BACKENDS = "# synthetic partition_backends.py stand-in (image-context entry)\n"
 _ALLOWLIST_SHA = R.sha256_hex(_ALLOWLIST.encode())
 _BASE = "sha256:" + "b" * 64
 _CONFIG_DIGEST = "sha256:" + "c" * 64
@@ -75,7 +76,15 @@ def _setup(tmp_path, *, lock=None, sdists=None, bb_lock=_BB_LOCK, manifest=_MANI
     (base / "rustup-init.sha256").write_text(_RUSTUP)
     (base / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
     (base / "requirements-build-backends.source-allowlist").write_text(allowlist)
+    (base / "partition_backends.py").write_text(_PARTITION_BACKENDS)
     (base / "image-manifest.json").write_bytes(manifest)
+    # Synthetic stand-in for the image's /opt/ccc: the five build-context files COPYed into the
+    # real builder image. `image_context_root` is the narrow test seam; production is /opt/ccc.
+    optccc = base / "optccc"
+    optccc.mkdir()
+    for _n in ("apt-packages.list", "rustup-init.sha256", "requirements-build-backends.lock",
+               "requirements-build-backends.source-allowlist", "partition_backends.py"):
+        (optccc / _n).write_bytes((base / _n).read_bytes())
     sh = {}
     for nm, data in (sdists or {"fastapi-0.133.0.tar.gz": b"SDIST"}).items():
         sh[nm] = _sdist(str(sdir), nm, data)
@@ -94,6 +103,8 @@ def _run(tmp_path, *, build_fn=_good_build_fn, identity="ccc-builder", base=_BAS
         apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
         build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        partition_backends_path=str(d / "partition_backends.py"),
+        image_context_root=str(d / "optccc"),
         builder_identity=identity, base_image_digest=base,
         image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=runtime_image_id,
         env_probe=env_probe or _probe, build_fn=build_fn)
@@ -115,6 +126,153 @@ def test_build_ok_and_round_trips(tmp_path):
                            R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()), _BB_LOCK,
                            _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
                            image_manifest_bytes=_MANIFEST_BYTES)
+
+
+# --------------------------------------------------------------------------- #
+#  IMAGE-CONTEXT BINDING: byte-level proof that the executing image was built   #
+#  from the committed build context (five in-image copies + the recipe hash).   #
+# --------------------------------------------------------------------------- #
+_IN_IMAGE = sorted(set(R.IMAGE_CONTEXT_FILES) - {"release/builder/Containerfile"})
+
+
+def test_image_context_digest_is_order_independent_and_exact_six():
+    m = {p: "%064x" % i for i, p in enumerate(R.IMAGE_CONTEXT_FILES)}
+    shuffled = dict(reversed(list(m.items())))
+    assert R.image_context_digest(m) == R.image_context_digest(shuffled)
+    with pytest.raises(R.ReleaseError, match="EXACTLY the six"):      # missing key
+        R.image_context_digest({k: v for k, v in list(m.items())[:5]})
+    with pytest.raises(R.ReleaseError, match="EXACTLY the six"):      # unknown key
+        R.image_context_digest(dict(m, **{"release/builder/EXTRA": "a" * 64}))
+    with pytest.raises(R.ReleaseError, match="64-hex"):               # malformed hash
+        R.image_context_digest(dict(m, **{"release/builder/Containerfile": "nothex"}))
+
+
+def test_image_context_recorded_in_provenance(tmp_path):
+    res, _d, _sh = _run(tmp_path)
+    b = res["provenance"]["builder"]
+    assert set(b["image_context"]) == set(R.IMAGE_CONTEXT_FILES)
+    assert b["image_context_sha256"] == R.image_context_digest(b["image_context"])
+
+
+@pytest.mark.parametrize("canonical", _IN_IMAGE)
+def test_image_context_rejects_each_tampered_in_image_file(tmp_path, canonical):
+    # The in-image copy differing from the committed bytes must fail closed and NAME the file.
+    d, sdir, _sh = _setup(tmp_path)
+    tgt = d / "optccc" / os.path.basename(canonical)
+    tgt.write_bytes(tgt.read_bytes() + b"\n# tampered\n")
+    with pytest.raises(R.ReleaseError) as ei:
+        _run_with(d, sdir)
+    assert canonical in str(ei.value) and "different bytes" in str(ei.value)
+
+
+def test_image_context_rejects_missing_in_image_file(tmp_path):
+    d, sdir, _sh = _setup(tmp_path)
+    (d / "optccc" / "partition_backends.py").unlink()
+    with pytest.raises(R.ReleaseError, match="missing or is a symlink"):
+        _run_with(d, sdir)
+
+
+def test_image_context_rejects_symlinked_in_image_file(tmp_path):
+    # Production symlink rejection is NOT weakened. Only the test's ability to CREATE a symlink is
+    # environment-dependent: Windows needs Developer Mode / SeCreateSymbolicLinkPrivilege. On POSIX
+    # a symlink failure is a real error and is never skipped.
+    d, sdir, _sh = _setup(tmp_path)
+    tgt = d / "optccc" / "apt-packages.list"
+    tgt.unlink()
+    try:
+        tgt.symlink_to(d / "apt-packages.list")
+    except (OSError, NotImplementedError) as exc:
+        if os.name == "nt":
+            pytest.skip("cannot create a symlink on this Windows host (requires Developer Mode or "
+                        f"SeCreateSymbolicLinkPrivilege); POSIX/WSL covers this case: {exc}")
+        raise
+    with pytest.raises(R.ReleaseError, match="symlink"):
+        _run_with(d, sdir)
+
+
+def test_image_context_verified_before_env_probe_and_build(tmp_path):
+    # Ordering guarantee: the proof runs BEFORE environment probing and before any build starts.
+    d, sdir, _sh = _setup(tmp_path)
+    (d / "optccc" / "rustup-init.sha256").write_text("deadbeef\n")
+    calls = {"env": 0, "build": 0}
+
+    def _probe_counting():
+        calls["env"] += 1
+        return dict(_ENV)
+
+    def _bfn_counting(sp, sf, n, v):
+        calls["build"] += 1
+        return _good_build_fn(sp, sf, n, v)
+
+    with pytest.raises(R.ReleaseError, match="image-context proof FAILED"):
+        _run_with(d, sdir, env_probe=_probe_counting, build_fn=_bfn_counting)
+    assert calls == {"env": 0, "build": 0}
+
+
+def _run_with(d, sdir, *, env_probe=None, build_fn=_good_build_fn):
+    return B.build_wheelhouse(
+        build_lock_path=str(d / "requirements-armv7-build.lock"), sdist_dir=str(sdir),
+        out_dir=str(d / "wh"), recipe_path=str(d / "Containerfile"),
+        build_backends_lock_path=str(d / "requirements-build-backends.lock"),
+        apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
+        extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
+        build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        partition_backends_path=str(d / "partition_backends.py"),
+        image_context_root=str(d / "optccc"),
+        builder_identity="ccc-builder", base_image_digest=_BASE,
+        image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
+        env_probe=env_probe or _probe, build_fn=build_fn)
+
+
+def _expected_ctx(d):
+    ctx = {"release/builder/Containerfile": R.canonical_file_sha256((d / "Containerfile").read_bytes())}
+    for canonical in _IN_IMAGE:
+        ctx[canonical] = R.canonical_file_sha256((d / os.path.basename(canonical)).read_bytes())
+    return ctx
+
+
+def _validate_prov(res, d, *, expected):
+    R._validate_provenance(res["provenance"], R._wheelhouse_members(res["wheelhouse_dir"]),
+                           res["bundle_sha256"], (d / "requirements-armv7-build.lock").read_text(),
+                           R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()),
+                           _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
+                           image_manifest_bytes=_MANIFEST_BYTES, image_context_expected=expected)
+
+
+def test_producer_accepts_matching_image_context(tmp_path):
+    res, d, _sh = _run(tmp_path)
+    _validate_prov(res, d, expected=_expected_ctx(d))
+
+
+def test_producer_rejects_absent_context_map(tmp_path):
+    res, d, _sh = _run(tmp_path)
+    del res["provenance"]["builder"]["image_context"]
+    with pytest.raises(R.ReleaseError, match="image_context is required"):
+        _validate_prov(res, d, expected=_expected_ctx(d))
+
+
+def test_producer_rejects_absent_aggregate_digest(tmp_path):
+    res, d, _sh = _run(tmp_path)
+    del res["provenance"]["builder"]["image_context_sha256"]
+    with pytest.raises(R.ReleaseError, match="image_context_sha256 is required"):
+        _validate_prov(res, d, expected=_expected_ctx(d))
+
+
+@pytest.mark.parametrize("canonical", list(R.IMAGE_CONTEXT_FILES))
+def test_producer_rejects_each_wrong_per_file_hash(tmp_path, canonical):
+    res, d, _sh = _run(tmp_path)
+    b = res["provenance"]["builder"]
+    b["image_context"][canonical] = "e" * 64                 # disagrees with the committed bytes
+    b["image_context_sha256"] = R.image_context_digest(b["image_context"])   # self-consistent!
+    with pytest.raises(R.ReleaseError, match="does not match the committed bytes"):
+        _validate_prov(res, d, expected=_expected_ctx(d))
+
+
+def test_producer_rejects_aggregate_digest_mismatch(tmp_path):
+    res, d, _sh = _run(tmp_path)
+    res["provenance"]["builder"]["image_context_sha256"] = "d" * 64
+    with pytest.raises(R.ReleaseError, match="image_context_sha256 mismatch"):
+        _validate_prov(res, d, expected=_expected_ctx(d))
 
 
 def test_default_env_probe_shape():
@@ -249,6 +407,8 @@ def _run_dual(tmp_path, *, reuse_authz_path, reuse_wheels_dir):
         apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
         build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        partition_backends_path=str(d / "partition_backends.py"),
+        image_context_root=str(d / "optccc"),
         builder_identity="ccc-builder", base_image_digest=_BASE,
         image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
         reuse_authz_path=reuse_authz_path, reuse_wheels_dir=reuse_wheels_dir, target_tags=_TT,
@@ -332,6 +492,8 @@ def _run_policy(tmp_path, *, built_names):
         apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
         build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        partition_backends_path=str(d / "partition_backends.py"),
+        image_context_root=str(d / "optccc"),
         builder_identity="ccc-builder", base_image_digest=_BASE,
         image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
         reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,
@@ -369,6 +531,8 @@ def test_phase_b_refuses_preexisting_bundle(tmp_path):
             apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
             extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
             build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+            partition_backends_path=str(d / "partition_backends.py"),
+            image_context_root=str(d / "optccc"),
             builder_identity="ccc-builder", base_image_digest=_BASE,
             image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
             reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,
@@ -399,6 +563,8 @@ def _call_policy(d, sdir, rdir, ap, *, build_fn, requirements_text, target_tags_
         apt_packages_path=str(d / "apt-packages.list"), rustup_sha_path=str(d / "rustup-init.sha256"),
         extractor_tools_lock_path=str(d / "requirements-extractor-tools.lock"),
         build_backends_source_allowlist_path=str(d / "requirements-build-backends.source-allowlist"),
+        partition_backends_path=str(d / "partition_backends.py"),
+        image_context_root=str(d / "optccc"),
         builder_identity="ccc-builder", base_image_digest=_BASE,
         image_manifest_path=str(d / "image-manifest.json"), runtime_image_id=_RUNTIME_ID,
         reuse_authz_path=str(ap), reuse_wheels_dir=str(rdir), target_tags=_TT,

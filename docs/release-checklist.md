@@ -81,6 +81,34 @@ atomic evidence writes. Empirically confirmed on the RPi2 (Docker 29 containerd 
 The produced `provenance/wheelhouse-armv7.json` binds recipe/base/manifest/environment and is
 validated by the producer before signing.
 
+**5a-context (image-context binding — Phase A → Phase B byte-level proof).** Exactly six committed
+files construct the builder image: `Containerfile`, `apt-packages.list`, `rustup-init.sha256`,
+`requirements-build-backends.lock`, `requirements-build-backends.source-allowlist`,
+`partition_backends.py`. The Containerfile `COPY`s the latter five into the image at `/opt/ccc`, so
+Phase B re-reads them **from inside the executing image** and compares them byte-for-byte
+(LF-canonical) with the committed files; the recipe — the one file not copied in — is bound by
+comparing Phase A's recorded `CCC_RECIPE_SHA256` against the committed `Containerfile` *before*
+Docker runs. The six `path → sha256` entries and their aggregate `image_context_sha256` are recorded
+in `provenance.builder`, and `produce_release` recomputes every one of them from the canonical
+committed bytes at the release commit and requires exact agreement.
+
+Distinguish two different kinds of check: the installed-APT and effective-backend-version checks are
+**semantic** checks of the resulting installed state — different source bytes can produce the same
+effective state, so they do NOT prove source-byte identity. The image-context proof is the **exact
+byte-level binding**. Without it, an old image could execute while provenance recorded the current
+checkout's bytes (false provenance).
+
+**A Phase A re-run is required only when this proof fails** — i.e. when a build-context file changed
+since the image was built. An unchanged context means the existing attested image stays valid and is
+reused as-is; nothing about this binding forces a rebuild.
+
+*Host contract:* the recipe comparison runs on the RPi2 **host**, before Docker, via
+`PYTHONPATH=<repo> python3 -m release.canonical_bytes sha256-file <Containerfile>` — the single
+authoritative normalisation/digest implementation, in a **stdlib-only** module. The Phase-B host path
+therefore adds NO third-party dependency (matching `read_builder_inputs.py`, which imports only
+`oci_manifest`). `release.ccc_release` re-exports `_to_lf`/`canonical_file_sha256` from that same
+module, so producer, builder, shell and tests cannot disagree.
+
 **5b. Commit the build-independent locks PRE-TAG.** Generate with `release/gen_locks.py`:
 `requirements-aarch64.lock` (PyPI aarch64 wheels: `pip download --only-binary=:all: -r requirements.txt`)
 and `requirements-armv7-solution.lock` (PyPI sdists: `pip download --no-binary=:all: -r requirements.txt`)

@@ -24,6 +24,18 @@ _RUSTUP = "f" * 64 + "  rustup-init\n"
 _EXT_IN = "tomli==2.0.1\n"
 _EXT_LOCK = "tomli==2.0.1 --hash=sha256:%s\n" % ("7" * 64)
 _ALLOWLIST = "maturin\n"
+_PARTITION_BACKENDS = "# synthetic partition_backends.py (image-context entry)\n"
+_RECIPE = "FROM base\nRUN true\n"
+# The six-entry image context, computed from the SAME bytes this fixture commits, so provenance
+# describes exactly the committed build context (what produce_release recomputes and requires).
+IMAGE_CONTEXT = {
+    "release/builder/Containerfile": R.canonical_file_sha256(_RECIPE.encode()),
+    "release/builder/apt-packages.list": R.canonical_file_sha256(_APT.encode()),
+    "release/builder/rustup-init.sha256": R.canonical_file_sha256(_RUSTUP.encode()),
+    "release/builder/requirements-build-backends.lock": R.canonical_file_sha256(_BB_LOCK.encode()),
+    "release/builder/requirements-build-backends.source-allowlist": R.canonical_file_sha256(_ALLOWLIST.encode()),
+    "release/builder/partition_backends.py": R.canonical_file_sha256(_PARTITION_BACKENDS.encode()),
+}
 _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 1.75.0",
         "cargo": "cargo 1.75.0", "gcc": "gcc 11.4.0", "glibc": "2.35",
         "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
@@ -54,6 +66,8 @@ def _builder(recipe_sha):
             "rustup_init_file_sha256": R.sha256_hex(_RUSTUP.encode()),
             "extractor_tools_lock_sha256": R.sha256_hex(_EXT_LOCK.encode()),
             "build_backends_source_allowlist_sha256": R.sha256_hex(_ALLOWLIST.encode()),
+            "image_context": dict(IMAGE_CONTEXT),
+            "image_context_sha256": R.image_context_digest(IMAGE_CONTEXT),
             "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": RUNTIME_ID,
             "image_config_digest": CONFIG_DIGEST, "image_identity_mode": "containerd",
             "runtime_image_id": RUNTIME_ID, "environment": dict(_ENV),
@@ -106,13 +120,14 @@ def make_release(base: pathlib.Path, *, version="0.3.16"):
     b.mkdir(parents=True)
     (b / "armv7-reuse-authz.json").write_bytes(authz_bytes)
     (b / "target-supported-tags.txt").write_text(TARGET_TAGS_TEXT)
-    (b / "Containerfile").write_text("FROM base\nRUN true\n")
+    (b / "Containerfile").write_text(_RECIPE)
     (b / "requirements-build-backends.lock").write_text(_BB_LOCK)
     (b / "apt-packages.list").write_text(_APT)
     (b / "rustup-init.sha256").write_text(_RUSTUP)
     (b / "requirements-extractor-tools.in").write_text(_EXT_IN)
     (b / "requirements-extractor-tools.lock").write_text(_EXT_LOCK)
     (b / "requirements-build-backends.source-allowlist").write_text(_ALLOWLIST)
+    (b / "partition_backends.py").write_text(_PARTITION_BACKENDS)
     g("init", "-q")
     g("add", "-A")
     g("commit", "-q", "-m", "c")
@@ -140,7 +155,7 @@ def make_release(base: pathlib.Path, *, version="0.3.16"):
     validated = RA.load_and_validate(authz_bytes, target_tags=set(TARGET_TAGS_TEXT.split()))
     prov = base / "prov.json"
     prov.write_text(json.dumps({
-        "builder": _builder(R.sha256_hex(b"FROM base\nRUN true\n")),
+        "builder": _builder(R.sha256_hex(_RECIPE.encode())),
         "bundle": {"sha256": R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))},
         "authorizers": {"reuse_authz_sha256": RA.sha256_hex(RA.canonical_bytes(validated)),
                         "target_tags_sha256": TARGET_TAGS_SHA},

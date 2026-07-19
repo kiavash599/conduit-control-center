@@ -74,6 +74,11 @@ _REUSE_AUTHZ_JSON = json.dumps({
                 "sha256": _REUSE_SHA, "tags": ["py3-none-any"], "requires_python": ">=3.9"}]})
 
 
+# Structurally-valid six-entry image context for direct _validate_provenance fixtures (these
+# callers do not supply committed bytes, so only the structure + aggregate are enforced).
+_IMAGE_CTX = {p: "%064x" % (0xA11CE + i) for i, p in enumerate(R.IMAGE_CONTEXT_FILES)}
+
+
 def _builder(recipe_sha=_RECIPE_SHA, **over):
     b = {"identity": "ccc-armv7-builder", "recipe_path": R.CANONICAL_RECIPE_PATH,
          "recipe_sha256": recipe_sha, "build_backends_lock_sha256": _BB_SHA,
@@ -83,7 +88,10 @@ def _builder(recipe_sha=_RECIPE_SHA, **over):
          "base_image_digest": "sha256:" + "b" * 64, "image_manifest_digest": _MANIFEST_DIGEST,
          "image_config_digest": _CONFIG_DIGEST, "image_identity_mode": "containerd",
          "runtime_image_id": _RUNTIME_ID, "environment": dict(_ENV),
-         "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
+         "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV)),
+         # MANDATORY image-context binding (no legacy provenance mode without these two fields).
+         "image_context": dict(_IMAGE_CTX),
+         "image_context_sha256": R.image_context_digest(_IMAGE_CTX)}
     b.update(over)
     return b
 

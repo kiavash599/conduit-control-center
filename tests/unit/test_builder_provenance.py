@@ -4,7 +4,14 @@ Proves missing/forged/unbound builder evidence fails closed, that image_id is
 REQUIRED and distinct from image_manifest_digest, that the manifest digest is
 independently recomputed from the raw OCI manifest bytes (a local id cannot
 masquerade), that the environment is bound to the authorized backend lock and to a
-target-compatible glibc baseline, and that apt is required."""
+target-compatible glibc baseline, and that apt is required.
+
+The schema also REQUIRES the image-context binding: an `image_context` map with
+EXACTLY the six `R.IMAGE_CONTEXT_FILES` canonical paths mapped to their LF-canonical
+sha256, plus the `image_context_sha256` aggregate over that map. Both fields are
+mandatory -- there is no legacy provenance mode without them. `_validate_builder`
+always enforces their structure; the additional comparison against canonical
+committed bytes runs when the caller supplies `image_context_expected`."""
 from __future__ import annotations
 
 import pytest
@@ -46,6 +53,13 @@ def _kw(**over):
     return d
 
 
+# Structurally valid exact-six image context. These tests exercise _validate_builder WITHOUT
+# supplying image_context_expected, so only structure + aggregate self-consistency are enforced;
+# the values are therefore illustrative, but the KEY SET and the aggregate are real.
+_IMAGE_CTX = {path: "%064x" % (0xC0FFEE + i) for i, path in enumerate(R.IMAGE_CONTEXT_FILES)}
+_IMAGE_CTX_SHA = R.image_context_digest(_IMAGE_CTX)      # the real shared aggregate function
+
+
 def _builder(**over):
     b = {"identity": "ccc-armv7-builder", "recipe_path": R.CANONICAL_RECIPE_PATH, "recipe_sha256": _RS,
          "build_backends_lock_sha256": _BB_SHA, "apt_packages_sha256": _APT_SHA,
@@ -54,13 +68,45 @@ def _builder(**over):
          "base_image_digest": "sha256:" + "b" * 64,
          "image_manifest_digest": "sha256:" + "d" * 64, "image_config_digest": "sha256:" + "c" * 64,
          "image_identity_mode": "containerd", "runtime_image_id": "sha256:" + "d" * 64,
-         "environment": dict(_ENV), "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV))}
+         "environment": dict(_ENV), "environment_sha256": R.sha256_hex(R._canonical_env_bytes(_ENV)),
+         "image_context": dict(_IMAGE_CTX), "image_context_sha256": _IMAGE_CTX_SHA}
     b.update(over)
     return b
 
 
 def test_valid():
     R._validate_builder(_builder(), **_kw())
+
+
+def test_image_context_map_required():
+    b = _builder()
+    del b["image_context"]
+    with pytest.raises(R.ReleaseError, match="image_context is required"):
+        R._validate_builder(b, **_kw())
+
+
+def test_image_context_aggregate_required():
+    b = _builder()
+    del b["image_context_sha256"]
+    with pytest.raises(R.ReleaseError, match="image_context_sha256 is required"):
+        R._validate_builder(b, **_kw())
+
+
+def test_image_context_must_have_exactly_the_six_canonical_keys():
+    b = _builder()
+    b["image_context"] = {k: v for k, v in list(_IMAGE_CTX.items())[:5]}     # missing one
+    with pytest.raises(R.ReleaseError, match="EXACTLY the six"):
+        R._validate_builder(b, **_kw())
+    b = _builder()
+    b["image_context"] = dict(_IMAGE_CTX, **{"release/builder/EXTRA": "a" * 64})
+    with pytest.raises(R.ReleaseError, match="EXACTLY the six"):
+        R._validate_builder(b, **_kw())
+
+
+def test_image_context_aggregate_must_match_the_map():
+    b = _builder(image_context_sha256="f" * 64)
+    with pytest.raises(R.ReleaseError, match="image_context_sha256 mismatch"):
+        R._validate_builder(b, **_kw())
 
 
 def test_identity_required():

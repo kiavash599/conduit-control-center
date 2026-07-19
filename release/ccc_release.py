@@ -49,8 +49,15 @@ except Exception:  # noqa: BLE001 - allow `python release/ccc_release.py` (scrip
     _sys_boot.path.insert(0, _os_boot.path.dirname(_os_boot.path.dirname(_os_boot.path.abspath(__file__))))
     from release import lock_validate as _lockval
 
+from release import canonical_bytes as _canon  # THE canonical text-byte rule (stdlib-only module)
 from release import oci_manifest as _ocim  # release/ is importable (path patched above if needed)
 from release import reuse_authz as _reuse_authz  # strict reused-wheel authorization (dual-origin)
+
+# Re-export (NOT re-implement): exactly one normalisation/digest implementation exists, in
+# release.canonical_bytes. The Phase-B host shell calls that module directly so it stays
+# stdlib-only, while these names keep every existing call site and test coherent.
+_to_lf = _canon.to_lf
+canonical_file_sha256 = _canon.canonical_file_sha256
 
 # --- Normative constants (ADR-0003) ---------------------------------------- #
 
@@ -447,6 +454,91 @@ def validate_build_partition_lock(build_lock_text: str) -> dict:
     return pins
 
 
+# --- IMAGE CONTEXT (Phase-A -> Phase-B byte-level binding) ------------------------------------- #
+# The EXACT set of content-bearing files that construct the builder image. Five are COPYed into the
+# image by the Containerfile (lines 33/44/61/62/63) and therefore remain readable inside the running
+# image at /opt/ccc; the recipe itself is bound via the Phase-A-recorded CCC_RECIPE_SHA256. Together
+# these six are the complete build context: nothing else contributes bytes to the image.
+#
+# NOTE ON SCOPE: the existing environment checks (installed APT state, effective backend versions)
+# are SEMANTIC checks of the resulting installed state. They do NOT prove byte equality of the
+# source inputs -- different bytes (comments, ordering, whitespace, duplicate entries) can describe
+# the same effective installed state. All five copied files therefore require byte-level proof.
+IMAGE_CONTEXT_FILES = (
+    "release/builder/Containerfile",
+    "release/builder/apt-packages.list",
+    "release/builder/rustup-init.sha256",
+    "release/builder/requirements-build-backends.lock",
+    "release/builder/requirements-build-backends.source-allowlist",
+    "release/builder/partition_backends.py",
+)
+
+
+def image_context_digest(per_file: dict) -> str:
+    """Aggregate digest over EXACTLY the six canonical image-context entries.
+
+    Deterministic and ORDER-INDEPENDENT at the API boundary: the mapping is serialised canonically
+    as the entries sorted by canonical path, each rendered ``<path>\\x00<sha256>\\n`` and encoded
+    UTF-8; the aggregate is the sha256 of that concatenation. The NUL separator makes the encoding
+    unambiguous (no path or hash can contain it), so distinct mappings cannot collide.
+
+    Rejects a non-mapping, any missing key, and any unknown key -- the six are exact."""
+    if not isinstance(per_file, dict):
+        raise ReleaseError("image context map must be an object")
+    expected, got = set(IMAGE_CONTEXT_FILES), set(per_file)
+    if got != expected:
+        raise ReleaseError("image context map must contain EXACTLY the six canonical entries "
+                           f"(missing={sorted(expected - got)}, unknown={sorted(got - expected)})")
+    parts = []
+    for path in sorted(IMAGE_CONTEXT_FILES):
+        value = per_file[path]
+        if not _is_hex64(value):
+            raise ReleaseError(f"image context hash for {path!r} is not a 64-hex sha256")
+        parts.append(f"{path}\x00{value}\n")
+    return sha256_hex("".join(parts).encode("utf-8"))
+
+
+def expected_image_context(canon: dict) -> dict:
+    """Recompute the authoritative six-entry map from the CANONICAL COMMITTED bytes at the release
+    commit. Fails closed if any image-context file is absent from the committed source."""
+    out = {}
+    for path in IMAGE_CONTEXT_FILES:
+        data = canon.get(path)
+        if data is None:
+            raise ReleaseError(f"image-context file missing from committed source: {path}")
+        out[path] = canonical_file_sha256(data)
+    return out
+
+
+def validate_image_context(image_context: object, aggregate: object, *, expected: dict = None) -> None:
+    """Validation of the image-context binding (fail closed).
+
+    STRUCTURE IS ALWAYS MANDATORY -- there is no legacy provenance mode without these fields: the
+    per-file map and the aggregate digest must both be present, the map must have EXACTLY the six
+    canonical keys with well-formed hashes, and the aggregate must be self-consistent with the map.
+
+    When ``expected`` is supplied (the producer, and the builder's own in-container self-check), the
+    map is ADDITIONALLY required to equal the canonical committed bytes, so provenance can never
+    describe a build context other than the one committed at the release commit."""
+    if image_context is None:
+        raise ReleaseError("provenance.builder.image_context is required (six-entry per-file map)")
+    if aggregate is None:
+        raise ReleaseError("provenance.builder.image_context_sha256 is required")
+    digest = image_context_digest(image_context)          # exact-six + hash-shape enforced here
+    if not _is_hex64(aggregate) or aggregate != digest:
+        raise ReleaseError(f"provenance.builder.image_context_sha256 mismatch "
+                           f"(recorded {aggregate!r}, recomputed {digest})")
+    if expected is None:
+        return
+    for path in sorted(IMAGE_CONTEXT_FILES):
+        if image_context[path] != expected[path]:
+            raise ReleaseError(
+                f"provenance image-context hash for {path!r} does not match the committed bytes "
+                f"(provenance {image_context[path]}, committed {expected[path]})")
+    if digest != image_context_digest(expected):          # defence in depth: aggregate vs committed
+        raise ReleaseError("image-context aggregate digest disagrees with the committed bytes")
+
+
 def _reject_placeholder(text: str, label: str) -> None:
     low = text.lower()
     for tok in _PLACEHOLDER_TOKENS:
@@ -801,7 +893,8 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
                       build_backends_lock_text: str, apt_packages_sha256: str,
                       rustup_init_file_sha256: str, apt_packages_text: str,
                       extractor_tools_lock_sha256: str,
-                      build_backends_source_allowlist_sha256: str, manifest_bytes=None) -> None:
+                      build_backends_source_allowlist_sha256: str, manifest_bytes=None,
+                      image_context_expected: dict = None) -> None:
     """Fail-closed validation of the builder provenance block. Binds the builder to
     the COMMITTED recipe and the COMMITTED build-backends lock (by sha256), the pinned
     base image, and the STORE-AGNOSTIC runtime identity (runtime_image_id +
@@ -814,6 +907,13 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
         raise ReleaseError("provenance.builder must be an object")
     if not isinstance(builder.get("identity"), str) or not builder["identity"]:
         raise ReleaseError("provenance.builder.identity is required")
+    # IMAGE-CONTEXT BINDING: the six committed files that construct the image, proven byte-for-byte
+    # (five read back from inside the executing image, the recipe via Phase-A CCC_RECIPE_SHA256).
+    # ALWAYS enforced structurally -- there is no legacy provenance without these fields; the
+    # committed-byte comparison additionally runs whenever the caller supplies them (produce_release
+    # and the builder's in-container self-check both do).
+    validate_image_context(builder.get("image_context"), builder.get("image_context_sha256"),
+                           expected=image_context_expected)
     if "image_digest" in builder:
         raise ReleaseError("provenance.builder.image_digest is ambiguous; use base_image_digest + "
                            "image_manifest_digest + runtime_image_id + image_config_digest")
@@ -914,14 +1014,19 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                          apt_packages_text: str, extractor_tools_lock_sha256: str,
                          build_backends_source_allowlist_sha256: str,
                          image_manifest_bytes=None, reuse_authz_text=None, target_tags=None,
-                         expected_target_tags_sha256=None) -> None:
+                         expected_target_tags_sha256=None, image_context_expected=None) -> None:
     """Strict, fail-closed provenance schema + cross-check against the ACTUAL
     embedded wheelhouse and its SHA256SUMS.
 
     Schema:
       builder: {identity, recipe_path, recipe_sha256, base_image_digest,
                 image_manifest_digest, runtime_image_id, image_config_digest,
-                image_identity_mode, environment{...}, environment_sha256}
+                image_identity_mode, environment{...}, environment_sha256,
+                image_context{<exactly the six IMAGE_CONTEXT_FILES>: sha256},
+                image_context_sha256}
+      NOTE: image_context + image_context_sha256 are MANDATORY (no legacy mode). Their
+      structure is always validated; when image_context_expected is supplied they must also
+      equal the canonical committed bytes.
       bundle:  {sha256: <bundle_sha256>}
       wheels:  [{sdist_name:str, sdist_sha256:hex64,
                  wheel_filename:str, wheel_sha256:hex64}, ...]
@@ -940,7 +1045,8 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                       apt_packages_text=apt_packages_text,
                       extractor_tools_lock_sha256=extractor_tools_lock_sha256,
                       build_backends_source_allowlist_sha256=build_backends_source_allowlist_sha256,
-                      manifest_bytes=image_manifest_bytes)
+                      manifest_bytes=image_manifest_bytes,
+                      image_context_expected=image_context_expected)
     bundle = obj.get("bundle")
     if not isinstance(bundle, dict) or bundle.get("sha256") != bundle_sha256:
         raise ReleaseError("provenance.bundle.sha256 must equal the embedded bundle digest")
@@ -1179,9 +1285,8 @@ def _looks_binary(data: bytes) -> bool:
     return b"\x00" in data[:8192]
 
 
-def _to_lf(data: bytes) -> bytes:
-    """Normalise CRLF and lone CR to LF."""
-    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+# NOTE: _to_lf and canonical_file_sha256 are re-exported near the imports from the stdlib-only
+# release.canonical_bytes module -- there is exactly ONE implementation and it is not here.
 
 
 def is_text(path_rel: str, data: bytes, rules: list[tuple[str, dict]]) -> bool:
@@ -1532,7 +1637,10 @@ def produce_release(
                          backend_source_allowlist_sha,
                          image_manifest_bytes=image_manifest_bytes,
                          reuse_authz_text=reuse_authz_bytes.decode("utf-8", "replace"),
-                         target_tags=_target_tags, expected_target_tags_sha256=_target_tags_sha)
+                         target_tags=_target_tags, expected_target_tags_sha256=_target_tags_sha,
+                         # Recomputed from the CANONICAL COMMITTED bytes at the release commit:
+                         # provenance may not describe a build context other than the committed one.
+                         image_context_expected=expected_image_context(canon))
     provenance_sha = sha256_hex(prov_bytes)
     if not armv7_runtime_lock_path or not os.path.isfile(armv7_runtime_lock_path):
         raise ReleaseError(f"armv7 runtime lock not found: {armv7_runtime_lock_path!r}")

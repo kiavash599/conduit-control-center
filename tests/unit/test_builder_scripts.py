@@ -280,6 +280,9 @@ _FAKE_DOCKER = (
 
 
 _READER = _B / "read_builder_inputs.py"
+# The real committed Containerfile's canonical sha256, via THE shared implementation (never a local
+# re-implementation): Phase B compares CCC_RECIPE_SHA256 against it before Docker runs.
+_REAL_RECIPE_SHA = R.canonical_file_sha256((_B / "Containerfile").read_bytes())
 _py = shutil.which("python3") or sys.executable
 
 
@@ -290,7 +293,9 @@ def _valid_kv(base, manifest_path, **over):
     d = {
         "CCC_BUILDER_IDENTITY": "conduit-control-center-armv7-wheelhouse-builder",
         "CCC_RECIPE": str(base / "Containerfile"),
-        "CCC_RECIPE_SHA256": "a" * 64,
+        # Phase B now BINDS this to the real committed Containerfile (image-context recipe check),
+        # so the fixture must carry that file's true LF-canonical hash, not a placeholder.
+        "CCC_RECIPE_SHA256": _REAL_RECIPE_SHA,
         "CCC_BUILD_BACKENDS_LOCK": str(base / "requirements-build-backends.lock"),
         "CCC_APT_PACKAGES": str(base / "apt-packages.list"),
         "CCC_RUSTUP_SHA": str(base / "rustup-init.sha256"),
@@ -388,6 +393,39 @@ def _run_phase_b(env, inputs, sdist, outd, prov_out, *extra):
 def _no_docker_run(log):
     return not log.exists() or not any(
         ln.startswith("docker run") for ln in log.read_text().splitlines())
+
+
+@_needs_bash
+def test_phase_b_rejects_wrong_recipe_hash_before_docker(tmp_path):
+    """IMAGE-CONTEXT recipe binding: a syntactically VALID but WRONG CCC_RECIPE_SHA256 (i.e. the
+    executing image was built from a different Containerfile) must fail closed BEFORE the expensive
+    Docker path, naming expected vs actual and the Phase-A-rerun instruction."""
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    wrong = "0123456789abcdef" * 4                       # valid lowercase 64-hex, != real recipe
+    assert len(wrong) == 64 and wrong != _REAL_RECIPE_SHA
+    inputs.write_bytes(_valid_kv(tmp_path, tmp_path / "image-manifest.json",
+                                 CCC_RECIPE_SHA256=wrong))
+    r = _run_phase_b(env, inputs, sdist, outd, tmp_path / "prov.json", *_res_args(tmp_path))
+    assert r.returncode != 0, r.stdout
+    assert "recipe mismatch" in r.stderr
+    assert wrong in r.stderr and _REAL_RECIPE_SHA in r.stderr      # expected AND actual reported
+    assert "Phase A must be re-run" in r.stderr
+    assert _no_docker_run(log)                                     # never reached the build
+    assert not (outd / "bundle").exists()                          # nothing published
+
+
+def test_phase_b_uses_shared_canonical_module_not_a_local_reimplementation():
+    """WIRING PROOF: the shell must delegate the recipe digest to the stdlib-only shared module and
+    must not carry its own normalisation. A local `.replace(b"\\r\\n", ...)` would silently handle
+    only CRLF and diverge from the shared rule (which also folds lone CR), so its ABSENCE is
+    asserted here -- the equivalence tests alone would stay green if it were reintroduced."""
+    src = (_B / "build-wheelhouse-offline.sh").read_text(encoding="utf-8")
+    assert "python3 -m release.canonical_bytes" in src
+    assert "sha256-file" in src
+    assert 'PYTHONPATH="${REPO}"' in src
+    assert "release.ccc_release" not in src          # host path stays stdlib-only (no `packaging`)
+    assert ".replace(" not in src                    # no local normalisation implementation
+    assert "hashlib" not in src                      # no local digest implementation
 
 
 @_needs_bash

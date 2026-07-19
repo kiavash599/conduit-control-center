@@ -37,7 +37,16 @@
       },
       "apt_architecture": "armhf"
     },
-    "environment_sha256": "e87bf6796e86b0ddcd42ad82467855d9c68229830313bf9b943c73eade03f49c"
+    "environment_sha256": "e87bf6796e86b0ddcd42ad82467855d9c68229830313bf9b943c73eade03f49c",
+    "image_context": {
+      "release/builder/Containerfile": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "release/builder/apt-packages.list": "0000000000000000000000000000000000000000000000000000000000c0ffef",
+      "release/builder/rustup-init.sha256": "0000000000000000000000000000000000000000000000000000000000c0fff0",
+      "release/builder/requirements-build-backends.lock": "0000000000000000000000000000000000000000000000000000000000c0fff1",
+      "release/builder/requirements-build-backends.source-allowlist": "0000000000000000000000000000000000000000000000000000000000c0fff2",
+      "release/builder/partition_backends.py": "0000000000000000000000000000000000000000000000000000000000c0fff3"
+    },
+    "image_context_sha256": "050317424ba863ae7755ddcb8e25263c8158ad7c8f5787cfdaf867af1118c0d2"
   },
   "bundle": {
     "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"

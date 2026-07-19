@@ -202,6 +202,30 @@ CCC_IMAGE_MANIFEST_DIGEST="${CCC[CCC_IMAGE_MANIFEST_DIGEST]}"
 CCC_IMAGE_MANIFEST="${CCC[CCC_IMAGE_MANIFEST]}"
 CCC_BUILDER_IDENTITY="${CCC[CCC_BUILDER_IDENTITY]}"
 CCC_BASE_IMAGE_DIGEST="${CCC[CCC_BASE_IMAGE_DIGEST]}"
+# --- PHASE-A -> PHASE-B RECIPE BINDING (before the expensive container build) ------------------
+# Phase A recorded the LF-canonical sha256 of the Containerfile that BUILT the image. The recipe is
+# the one build-context file not copied into the image, so this comparison is what binds it. Without
+# it, an old image could execute while provenance recorded the current checkout's recipe bytes.
+CCC_RECIPE_SHA256="${CCC[CCC_RECIPE_SHA256]}"
+# Use THE shared canonical implementation via the STDLIB-ONLY release.canonical_bytes module --
+# never a re-implementation here. The rule normalises CRLF *and lone CR*; a shell-local
+# approximation handling only CRLF would make Phase A and Phase B disagree on lone-CR input.
+# This host path deliberately stays stdlib-only (no third-party import on the RPi2 host).
+CUR_RECIPE_SHA="$(PYTHONPATH="${REPO}" python3 -m release.canonical_bytes \
+  sha256-file "${REPO}/release/builder/Containerfile")" || {
+    echo "ERROR: could not compute the canonical recipe hash (repo=${REPO})" >&2
+    exit 1; }
+[[ "${CUR_RECIPE_SHA}" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "ERROR: canonical recipe hash malformed: ${CUR_RECIPE_SHA}" >&2; exit 1; }
+if [[ "${CUR_RECIPE_SHA}" != "${CCC_RECIPE_SHA256}" ]]; then
+  echo "ERROR: image-context recipe mismatch -- the executing image was NOT built from the" >&2
+  echo "       currently committed Containerfile. Phase A must be re-run for this commit." >&2
+  echo "       expected (Phase-A CCC_RECIPE_SHA256): ${CCC_RECIPE_SHA256}" >&2
+  echo "       actual   (committed Containerfile):   ${CUR_RECIPE_SHA}" >&2
+  exit 1
+fi
+echo "image-context: recipe binding OK (${CUR_RECIPE_SHA})"
+
 : "${SDIST_DIR:?--sdist-dir required}"; : "${OUT_DIR:?--out-dir required}"
 # OUT_DIR is the writable mount + host-side recap scratch; the FINAL bundle (/out/bundle) is created
 # atomically by the Python builder and must NOT be pre-created here.
@@ -262,6 +286,7 @@ sudo docker run --rm \
     --rustup-sha /repo/release/builder/rustup-init.sha256 \
     --extractor-tools-lock /repo/release/builder/requirements-extractor-tools.lock \
     --build-backends-source-allowlist /repo/release/builder/requirements-build-backends.source-allowlist \
+    --partition-backends /repo/release/builder/partition_backends.py \
     --builder-identity "${CCC_BUILDER_IDENTITY}" \
     --base-image-digest "${CCC_BASE_IMAGE_DIGEST}" \
     --image-manifest /in/image-manifest.json \

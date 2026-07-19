@@ -152,8 +152,27 @@ declared/pinned) and the provenance binds the environment fail-closed:
 `recipe_sha256` (== the committed recipe, covered by `source.commit`), `base_image_digest`,
 and the STORE-AGNOSTIC runtime identity — `runtime_image_id`, `image_manifest_digest`,
 `image_config_digest`, `image_identity_mode` (see Amendment A4) — plus an `environment`
-manifest + `environment_sha256`. The legacy single `image_digest`/`image_id` fields are
-rejected. The build runs in two phases with a hard boundary: connected, pinned image
+manifest + `environment_sha256`, and the IMAGE-CONTEXT binding `image_context` (an exact
+six-entry `path → sha256` map) + `image_context_sha256` (its order-independent aggregate).
+The legacy single `image_digest`/`image_id` fields are rejected.
+
+**Image-context binding (byte-level).** Exactly six committed files construct the builder
+image: `Containerfile`, `apt-packages.list`, `rustup-init.sha256`,
+`requirements-build-backends.lock`, `requirements-build-backends.source-allowlist`,
+`partition_backends.py`. Five are `COPY`ed into the image and are re-read from inside the
+executing image at `/opt/ccc` and compared byte-for-byte (LF-canonical) with the committed
+files; the recipe is bound by comparing Phase A's recorded `CCC_RECIPE_SHA256` against the
+committed `Containerfile` before Docker runs. `produce_release` recomputes all six hashes
+and the aggregate from the canonical committed bytes and requires exact agreement.
+
+This is deliberately distinct from the installed-APT and effective-backend-version checks,
+which are **semantic** checks of the resulting installed state: different source bytes can
+yield the same effective state, so those checks cannot establish source-byte identity. Only
+the image-context proof does. Without it, provenance could describe bytes that did not
+construct the executing image — a false-provenance possibility, not merely a missing
+redundant layer. The binding requires no new Phase-A evidence key: it reuses the existing
+16-key `builder-inputs.kv` schema, so an unchanged build context keeps an already-attested
+image valid without a rebuild. The build runs in two phases with a hard boundary: connected, pinned image
 construction, then an offline (`--network=none`) wheel build consuming only authorized,
 hash-verified sdists/locks as read-only inputs; Phase B selects the image by its immutable
 `runtime_image_id` after re-verifying the recorded transport, identity mode, and manifest

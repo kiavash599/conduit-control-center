@@ -70,6 +70,24 @@ hash-verified sdists + `requirements-armv7-build.lock` mounted **read-only**, a 
 bounded **writable** output, and no network. `pip wheel --no-deps --no-build-isolation
 --no-index` cannot fetch anything; every build backend must already be in the image.
 
+**Image-context proof (Phase A → Phase B, byte-level).** Exactly six committed files construct the
+image. The `Containerfile` `COPY`s five of them to `/opt/ccc` (lines 33/44/61/62/63):
+`apt-packages.list`, `rustup-init.sha256`, `requirements-build-backends.lock`,
+`requirements-build-backends.source-allowlist`, `partition_backends.py`. Because those copies remain
+inside the image, `build_wheelhouse.py` re-reads them from `/opt/ccc` **before** environment probing,
+reuse ingestion, or any source build, and requires each to hash identically (LF-canonical) to the
+committed file — a missing, unreadable, non-regular, symlinked, or differing entry fails closed and
+names the exact canonical path. The sixth file, the recipe, is not copied in; the shell binds it by
+comparing Phase A's recorded `CCC_RECIPE_SHA256` with the committed `Containerfile` before Docker
+runs. All six hashes plus their aggregate are recorded in `provenance.builder` and recomputed by the
+producer from the committed bytes.
+
+Note the distinction: the installed-APT and effective-backend-version checks are **semantic** checks
+of the resulting installed state (different source bytes can give the same effective state); the
+image-context proof is the **exact byte-level** binding. `builder-inputs.kv` keeps its existing exact
+16-key schema — the proof adds no evidence key, so an unchanged build context lets an already-attested
+image be reused without rebuilding. A Phase A re-run is required only if the proof fails.
+
 **Dual-origin wheelhouse (v0.3.17, ADR-0003 Amendment A5).** The armv7 wheelhouse is the exact
 30-package closure from two release-time origins: **24 reused** official PyPI wheels + **6
 source-built** wheels (`cffi, httptools, markupsafe, psutil, pyyaml, uvloop`). The six sdists are

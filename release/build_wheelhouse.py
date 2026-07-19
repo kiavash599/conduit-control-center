@@ -156,14 +156,59 @@ def _default_env_probe() -> dict:
     }
 
 
+IMAGE_CONTEXT_ROOT = "/opt/ccc"      # PRODUCTION location of the in-image build-context copies
+
+
+def _verify_image_context(*, recipe_sha: str, partition_backends_path: str, committed: dict,
+                          image_context_root: str = IMAGE_CONTEXT_ROOT) -> dict:
+    """Prove the executing image was built from the committed build context, then return the exact
+    six-entry {canonical_path: sha256} map.
+
+    For each of the five files COPYed into the image, the in-image copy under ``image_context_root``
+    must exist, be a REGULAR file (no symlink/device/directory), be readable, and hash identically
+    (LF-canonical) to the corresponding committed file. Any missing, unreadable, non-regular, or
+    mismatching entry fails closed and names the exact canonical path. ``image_context_root`` is a
+    narrow seam for unit tests only; production is fixed to ``/opt/ccc``."""
+    ctx = {"release/builder/Containerfile": recipe_sha}
+    pairs = dict(committed)
+    pairs["release/builder/partition_backends.py"] = partition_backends_path
+    for canonical_path, committed_path in sorted(pairs.items()):
+        if not committed_path or not os.path.isfile(committed_path):
+            raise ReleaseError(f"committed image-context file not found: {canonical_path} "
+                               f"({committed_path!r})")
+        with open(committed_path, "rb") as fh:
+            committed_sha = _R.canonical_file_sha256(fh.read())
+        in_image = os.path.join(image_context_root, os.path.basename(canonical_path))
+        if os.path.islink(in_image) or not os.path.exists(in_image):
+            raise ReleaseError(f"image-context proof failed for {canonical_path}: in-image copy "
+                               f"missing or is a symlink: {in_image!r}")
+        if not os.path.isfile(in_image):
+            raise ReleaseError(f"image-context proof failed for {canonical_path}: in-image path is "
+                               f"not a regular file: {in_image!r}")
+        try:
+            with open(in_image, "rb") as fh:
+                in_image_sha = _R.canonical_file_sha256(fh.read())
+        except OSError as exc:
+            raise ReleaseError(f"image-context proof failed for {canonical_path}: cannot read "
+                               f"{in_image!r}: {exc}") from exc
+        if in_image_sha != committed_sha:
+            raise ReleaseError(
+                f"image-context proof FAILED for {canonical_path}: the executing image was built "
+                f"from different bytes (in-image {in_image_sha}, committed {committed_sha})")
+        ctx[canonical_path] = committed_sha
+    return ctx
+
+
 def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                      recipe_path: str, build_backends_lock_path: str, apt_packages_path: str,
                      rustup_sha_path: str, extractor_tools_lock_path: str,
-                     build_backends_source_allowlist_path: str, builder_identity: str,
+                     build_backends_source_allowlist_path: str, partition_backends_path: str,
+                     builder_identity: str,
                      base_image_digest: str, image_manifest_path: str, runtime_image_id: str,
                      reuse_authz_path: str = None, reuse_wheels_dir: str = None,
                      target_tags=None, target_tags_sha256: str = None, requirements_text: str = None,
                      enforce_partition_policy: bool = False,
+                     image_context_root: str = IMAGE_CONTEXT_ROOT,
                      env_probe=None, build_fn=None) -> dict:
     """Build the armv7 wheelhouse + STRICT builder provenance. Binds the committed
     recipe + committed build-backends lock (by sha256), the pinned base image, and the
@@ -229,6 +274,24 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
     image_manifest_digest = _idr["manifest_digest"]
     image_config_digest = _idr["config_digest"]
     image_identity_mode = _idr["identity_mode"]
+    # --- IMAGE-CONTEXT PROOF (before env probing, reuse ingestion, or ANY source build) ---------
+    # Five of the six context files were COPYed into this image by the Containerfile and are still
+    # present at /opt/ccc. Reading them back from INSIDE the executing image and comparing them
+    # byte-for-byte (LF-canonical) with the committed files proves the running image was built from
+    # exactly these committed bytes -- something the environment checks cannot do, since identical
+    # installed state can arise from different source bytes. The recipe is the sixth entry; it is
+    # not copied into the image and is bound by Phase A's recorded CCC_RECIPE_SHA256, which
+    # build-wheelhouse-offline.sh compares against this same committed file before Docker runs.
+    image_context = _verify_image_context(
+        recipe_sha=recipe_sha, partition_backends_path=partition_backends_path,
+        committed={"release/builder/apt-packages.list": apt_packages_path,
+                   "release/builder/rustup-init.sha256": rustup_sha_path,
+                   "release/builder/requirements-build-backends.lock": build_backends_lock_path,
+                   "release/builder/requirements-build-backends.source-allowlist":
+                       build_backends_source_allowlist_path},
+        image_context_root=image_context_root)
+    image_context_sha = _R.image_context_digest(image_context)
+
     environment = (env_probe or _default_env_probe)()
     build_fn = build_fn or _default_build_fn
     with open(build_lock_path, encoding="utf-8") as fh:
@@ -416,6 +479,9 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
             "runtime_image_id": runtime_image_id,
             "environment": env,
             "environment_sha256": _R.sha256_hex(_R._canonical_env_bytes(env)),
+            # Byte-level proof of the build context (five in-image copies + the recipe hash).
+            "image_context": dict(image_context),
+            "image_context_sha256": image_context_sha,
         }
         provenance = {"builder": builder, "bundle": {"sha256": bundle_sha}, "wheels": wheels,
                       "authorizers": authorizers}
@@ -426,7 +492,9 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                                 build_backends_source_allowlist_sha,
                                 image_manifest_bytes=manifest_bytes, reuse_authz_text=_reuse_text,
                                 target_tags=target_tags,
-                                expected_target_tags_sha256=(target_tags_sha256 if enforce_partition_policy else None))
+                                expected_target_tags_sha256=(target_tags_sha256 if enforce_partition_policy else None),
+                                # Self-check against the SAME committed bytes just proven in-image.
+                                image_context_expected=image_context)
 
         # Runtime lock generated ONLY from the final validated wheelhouse, checked as an exact
         # 30-way name/version/hash bijection with the embedded wheels. MANDATORY under production
@@ -474,6 +542,9 @@ def main(argv=None) -> int:
     ap.add_argument("--rustup-sha", required=True, help="committed release/builder/rustup-init.sha256")
     ap.add_argument("--extractor-tools-lock", required=True,
                     help="committed release/builder/requirements-extractor-tools.lock")
+    ap.add_argument("--partition-backends", required=True,
+                    help="committed release/builder/partition_backends.py (image-context entry; "
+                         "MANDATORY -- never inferred from a mutable path)")
     ap.add_argument("--build-backends-source-allowlist", required=True,
                     help="committed release/builder/requirements-build-backends.source-allowlist")
     ap.add_argument("--builder-identity", required=True)
@@ -505,6 +576,7 @@ def main(argv=None) -> int:
                            apt_packages_path=a.apt_packages, rustup_sha_path=a.rustup_sha,
                            extractor_tools_lock_path=a.extractor_tools_lock,
                            build_backends_source_allowlist_path=a.build_backends_source_allowlist,
+                           partition_backends_path=a.partition_backends,
                            builder_identity=a.builder_identity, base_image_digest=a.base_image_digest,
                            image_manifest_path=a.image_manifest, runtime_image_id=a.runtime_image_id,
                            reuse_authz_path=a.reuse_authz, reuse_wheels_dir=a.reuse_wheels_dir,
