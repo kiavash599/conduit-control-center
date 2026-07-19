@@ -534,7 +534,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="build_wheelhouse.py")
     ap.add_argument("--build-lock", required=True)
     ap.add_argument("--sdist-dir", required=True)
-    ap.add_argument("--out-dir", required=True)
+    # NOTE: there is deliberately no --out-dir. `--out-bundle` is the SINGLE atomic publication
+    # boundary and is what build-wheelhouse-offline.sh passes; it is bound to the internal
+    # build_wheelhouse(out_dir=...) parameter below. A stale required --out-dir made argparse exit 2
+    # before the builder ever ran.
     ap.add_argument("--recipe", required=True, help="path to the committed release/builder/Containerfile")
     ap.add_argument("--build-backends-lock", required=True,
                     help="path to the committed release/builder/requirements-build-backends.lock")

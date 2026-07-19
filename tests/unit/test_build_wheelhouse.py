@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import tempfile
 
 import pytest
@@ -273,6 +274,140 @@ def test_producer_rejects_aggregate_digest_mismatch(tmp_path):
     res["provenance"]["builder"]["image_context_sha256"] = "d" * 64
     with pytest.raises(R.ReleaseError, match="image_context_sha256 mismatch"):
         _validate_prov(res, d, expected=_expected_ctx(d))
+
+
+# --------------------------------------------------------------------------- #
+#  CLI CONTRACT: the real argparse entry point must accept the EXACT argument    #
+#  shape build-wheelhouse-offline.sh produces.                                   #
+#                                                                                #
+#  INTEGRATION-TEST ESCAPE this closes: unit tests exercised build_wheelhouse()  #
+#  directly, and separate tests inspected the shell as TEXT, but nothing fed the #
+#  shell's actual argument contract to the real argparse parser. A stale         #
+#  required --out-dir therefore survived to hardware, where Phase B exited 2     #
+#  before any wheel was built.                                                   #
+# --------------------------------------------------------------------------- #
+_PHASE_B_SH = (pathlib.Path(__file__).resolve().parents[2]
+               / "release" / "builder" / "build-wheelhouse-offline.sh").read_text(encoding="utf-8")
+
+
+def _shell_reuse_flags():
+    """The long options the shell splices in DYNAMICALLY via "${REUSE_ARGS[@]}".
+
+    Derived from the committed REUSE_ARGS definition itself, so shell drift cannot stay invisible:
+    merely observing that the array is spliced (the previous behaviour) would leave the contract
+    test green even if --reuse-authz or --reuse-wheels-dir vanished from the parser."""
+    defs = re.findall(r"REUSE_ARGS=\(([^)]*)\)", _PHASE_B_SH)
+    assert defs, "could not locate any REUSE_ARGS definition in the committed shell"
+    flags = []
+    for body in defs:                                     # REUSE_ARGS=() is the empty init
+        for tok in body.split():
+            if tok.startswith("--") and tok not in flags:
+                flags.append(tok)
+    assert flags, "REUSE_ARGS defines no long options; the hybrid reuse path would be untested"
+    return flags
+
+
+def _shell_producer_flags():
+    """Every long option the committed shell passes to build_wheelhouse.py -- the statically
+    written ones AND the two expanded through REUSE_ARGS."""
+    body = _PHASE_B_SH.split("python3 /repo/release/build_wheelhouse.py", 1)[1]
+    flags, spliced = [], False
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("--"):
+            flags.append(line.split()[0])
+        if "REUSE_ARGS" in line:
+            spliced = True
+        if line and not line.startswith(("--", '"', "\\")) and flags and not line.endswith("\\"):
+            break
+    assert spliced, "expected the shell to splice REUSE_ARGS into the producer invocation"
+    return flags + [f for f in _shell_reuse_flags() if f not in flags]
+
+
+def test_shell_producer_flags_are_all_accepted_by_the_real_parser():
+    # Every flag the shell emits must exist in the production parser -- and --out-dir must not be
+    # among them. Derived from the committed shell text so it cannot drift out of sync.
+    flags = _shell_producer_flags()
+    assert "--out-bundle" in flags
+    assert "--out-dir" not in flags
+    # The dynamically spliced hybrid-reuse flags are part of the contract, not incidental.
+    assert "--reuse-authz" in flags and "--reuse-wheels-dir" in flags
+    parser_flags = {a for line in open(B.__file__, encoding="utf-8").read().splitlines()
+                    if 'add_argument("--' in line
+                    for a in [line.split('add_argument("')[1].split('"')[0]]}
+    unknown = [f for f in flags if f not in parser_flags]
+    assert not unknown, f"shell passes flags the parser does not define: {unknown}"
+
+
+def _reuse_paths(d):
+    """Fixture-local values for the two dynamically spliced reuse flags."""
+    return str(d / "armv7-reuse-authz.json"), str(d / "reuse-store")
+
+
+def _production_argv(d, sdir, out_bundle):
+    """EXACTLY the shell's producer argument shape -- the v0.3.17 hybrid path, INCLUDING the two
+    flags the shell expands through "${REUSE_ARGS[@]}" (6 built + 24 reused), whose names are taken
+    from the committed REUSE_ARGS definition rather than hard-coded here."""
+    reuse_authz, reuse_store = _reuse_paths(d)
+    reuse_flags = _shell_reuse_flags()
+    assert reuse_flags == ["--reuse-authz", "--reuse-wheels-dir"], reuse_flags
+    reuse_argv = [reuse_flags[0], reuse_authz, reuse_flags[1], reuse_store]
+    b = str(d)
+    return reuse_argv + ["--build-lock", str(d / "requirements-armv7-build.lock"),
+            "--sdist-dir", str(sdir),
+            "--out-bundle", out_bundle,
+            "--recipe", b + "/Containerfile",
+            "--build-backends-lock", b + "/requirements-build-backends.lock",
+            "--apt-packages", b + "/apt-packages.list",
+            "--rustup-sha", b + "/rustup-init.sha256",
+            "--extractor-tools-lock", b + "/requirements-extractor-tools.lock",
+            "--build-backends-source-allowlist", b + "/requirements-build-backends.source-allowlist",
+            "--partition-backends", b + "/partition_backends.py",
+            "--builder-identity", "ccc-builder",
+            "--base-image-digest", _BASE,
+            "--image-manifest", b + "/image-manifest.json",
+            "--runtime-image-id", _RUNTIME_ID,
+            "--target-tags", str(pathlib.Path(__file__).resolve().parents[2]
+                                 / "release" / "builder" / "target-supported-tags.txt"),
+            "--requirements", b + "/requirements.txt",
+            "--enforce-partition-policy"]
+
+
+def test_cli_main_accepts_production_argv_and_binds_out_dir_to_out_bundle(tmp_path, monkeypatch):
+    # Drives the REAL main()/argparse path. On the defective HEAD this raised SystemExit(2)
+    # ("the following arguments are required: --out-dir") before build_wheelhouse was reached --
+    # exactly the hardware failure.
+    d, sdir, _sh = _setup(tmp_path)
+    (d / "requirements.txt").write_text("fastapi>=0\n")
+    out_bundle = str(d / "bundle")
+    reuse_authz, reuse_store = _reuse_paths(d)
+    captured = {}
+
+    def _fake_build_wheelhouse(**kw):
+        captured.update(kw)
+        return {"provenance": {}, "bundle_sha256": "0" * 64, "bundle_dir": kw["out_dir"],
+                "wheelhouse_dir": kw["out_dir"] + "/wheelhouse-armhf", "runtime_lock_text": "x\n"}
+
+    monkeypatch.setattr(B, "build_wheelhouse", _fake_build_wheelhouse)
+    rc = B.main(_production_argv(d, sdir, out_bundle))
+    assert rc == 0
+    assert captured, "argparse must reach build_wheelhouse with the production argument shape"
+    assert captured["out_dir"] == out_bundle          # --out-bundle binds the internal out_dir
+    assert captured["enforce_partition_policy"] is True
+    # The dynamically spliced hybrid-reuse paths must reach build_wheelhouse UNCHANGED, otherwise
+    # the 6-built + 24-reused production path is not what this test exercises.
+    assert captured["reuse_authz_path"] == reuse_authz
+    assert captured["reuse_wheels_dir"] == reuse_store
+
+
+def test_cli_main_rejects_the_obsolete_out_dir_flag(tmp_path):
+    # --out-dir is gone from the producer CLI; passing it is an unrecognised argument.
+    d, sdir, _sh = _setup(tmp_path)
+    (d / "requirements.txt").write_text("fastapi>=0\n")
+    argv = _production_argv(d, sdir, str(d / "bundle")) + ["--out-dir", str(d / "wh")]
+    with pytest.raises(SystemExit) as ei:
+        B.main(argv)
+    assert ei.value.code == 2
 
 
 def test_default_env_probe_shape():
