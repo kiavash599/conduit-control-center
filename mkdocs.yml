@@ -90,6 +90,9 @@ exclude_docs: |
   # Internal operator runbooks. These are release/field procedures, not public
   # end-user documentation, so keep them out of the published site and nav.
   runbooks/
+  # Internal incident records: release/audit evidence (e.g. the v0.3.17 tag-without-release
+  # record), not end-user documentation. Excluded like adr/ and runbooks/.
+  incidents/
 
 # Pages that ARE published (reachable via links from the user guide) but are not
 # top-level nav entries. Listing them here keeps those links valid while satisfying
