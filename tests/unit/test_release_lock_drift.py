@@ -39,8 +39,8 @@ def _build_example() -> str:
 def test_build_lock_example_is_the_approved_six_partition():
     # Role-appropriate validation: exactly the approved six, valid pin/hash grammar.
     pins = R.validate_build_partition_lock(_build_example())
-    assert set(pins) == set(R.V0317_SOURCE_BUILD_PACKAGES)
-    assert len(pins) == R.V0317_BUILT_COUNT == 6
+    assert set(pins) == set(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)
+    assert len(pins) == R.WHEELHOUSE_BUILT_COUNT == 6
     for name, (version, hashes) in pins.items():
         assert version and hashes, name
         assert all(len(h) == 64 and all(c in "0123456789abcdef" for c in h) for h in hashes), name
@@ -133,7 +133,7 @@ def test_release_input_gate_active_build_lock_uses_partition_role():
     path = _ROOT / R.BUILD_LOCK_PATH
     if path.exists():
         pins = R.validate_build_partition_lock(path.read_text(encoding="utf-8"))
-        assert set(pins) == set(R.V0317_SOURCE_BUILD_PACKAGES)
+        assert set(pins) == set(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)
 
 
 def test_real_repo_derived_state_machine_is_coherent():

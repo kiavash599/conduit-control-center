@@ -49,7 +49,11 @@
     "image_context_sha256": "050317424ba863ae7755ddcb8e25263c8158ad7c8f5787cfdaf867af1118c0d2"
   },
   "bundle": {
-    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    "tree_digest": {
+      "scheme": "ccc-logical-tree-v1",
+      "sha256": "000000000000000000000000000000000000000000000000000000000000b00c"
+    },
+    "member_count": 31
   },
   "wheels": [
     {

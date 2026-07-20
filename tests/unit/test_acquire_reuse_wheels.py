@@ -24,7 +24,7 @@ ACQ = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ACQ)
 _TT = set((_ROOT / "release" / "builder" / "target-supported-tags.txt").read_text(encoding="utf-8").split())
 
-_N = R.V0317_REUSED_COUNT   # exactly 24 authorized reuse wheels
+_N = R.WHEELHOUSE_REUSED_COUNT   # exactly 24 authorized reuse wheels
 _RP = ">=3.9"
 
 

@@ -95,6 +95,7 @@ def _make_release(tmp_path, version="0.3.16", trusted=True):
                             wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
                             armv7_runtime_lock_path=r["runtime_lock_path"],
                             image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"],
                             git_ref=f"v{version}", repo_dir=r["repo"],
                             recommended_conduit_core="2.0.0")
     return {"manifest": res["manifest"], "signature": res["signature"],
@@ -104,7 +105,7 @@ def _make_release(tmp_path, version="0.3.16", trusted=True):
 
 def _good_manifest():
     return {
-        "format_version": 2, "product": V.PRODUCT, "version": "0.3.16",
+        "format_version": 3, "product": V.PRODUCT, "version": "0.3.16",
         "source": {"vcs": "git", "commit": _COMMIT, "tag": "v0.3.16"},
         "artifacts": [
             {"platform": "aarch64", "name": "ccc-0.3.16-aarch64.tar.gz",
@@ -113,7 +114,8 @@ def _good_manifest():
             {"platform": "armv7l", "name": "ccc-0.3.16-armv7l.tar.gz",
              "top_level": ["backend", "wheelhouse-armhf", "provenance", "requirements-armv7.lock"],
              "digest": {"algorithm": "sha256", "value": "b" * 64},
-             "wheelhouse": {"path": "wheelhouse-armhf/", "bundle_sha256": "c" * 64,
+             "wheelhouse": {"path": "wheelhouse-armhf/",
+                            "tree_digest": {"scheme": "ccc-logical-tree-v1", "sha256": "c" * 64},
                             "requirements_sha256": _REQ, "lock_sha256": _VLOCK,
                             "build_lock_sha256": _BLOCK,
                             "provenance": "provenance/wheelhouse-armv7.json",
@@ -148,7 +150,7 @@ def test_parse_rejects_malformed():
 
     bads = [
         b"not json",
-        mut(lambda m: m.update(format_version=1)),
+        mut(lambda m: m.update(format_version=2)),
         mut(lambda m: m.update(product="other")),
         mut(lambda m: m["source"].update(commit="xyz")),
         mut(lambda m: m["source"].update(tag="0.3.16")),       # tag must be v{version}
@@ -159,7 +161,9 @@ def test_parse_rejects_malformed():
         mut(lambda m: m["dependency_locks"].__delitem__("armv7_build_lock_sha256")),  # 4th lock required
         mut(lambda m: m["dependency_locks"].__setitem__("requirements_sha256", "x")),
         mut(lambda m: m["artifacts"][1]["wheelhouse"].__delitem__("build_lock_sha256")),  # strict wheelhouse
-        mut(lambda m: m["artifacts"][1]["wheelhouse"].__setitem__("bundle_sha256", "x")),
+        mut(lambda m: m["artifacts"][1]["wheelhouse"]["tree_digest"].__setitem__("sha256", "x")),
+        mut(lambda m: m["artifacts"][1]["wheelhouse"]["tree_digest"].__setitem__("scheme", "nope")),
+        mut(lambda m: m["artifacts"][1]["wheelhouse"].__setitem__("bundle_sha256", "c" * 64)),
         mut(lambda m: m["artifacts"][1]["wheelhouse"].__setitem__("build_lock_sha256", "9" * 64)),  # disagree w/ locks
         mut(lambda m: m["artifacts"].append(m["artifacts"][0])),                # duplicate platform
         mut(lambda m: m["artifacts"][0].__setitem__("top_level", [])),          # empty allowlist

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Shared full 6+24=30 dual-origin release fixture (NOT a test module -- no test_ prefix, so pytest
 does not collect it). Builds a tagged git repo + a Phase-B-style bundle (wheelhouse + provenance +
-runtime lock + image manifest) that satisfies the v0.3.17 approved-partition policy, so the
+runtime lock + image manifest) that satisfies the approved dual-origin partition policy, so the
 produce_release round-trip / verify / update tests exercise a REAL release rather than a 1+1 demo."""
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import subprocess
 
 from release import ccc_release as R
 from release import reuse_authz as RA
+from release import transfer_manifest as TM
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 TARGET_TAGS_TEXT = (_ROOT / "release" / "builder" / "target-supported-tags.txt").read_text(encoding="utf-8")
@@ -41,7 +42,7 @@ _ENV = {"os": "Ubuntu 22.04.5 LTS", "python": "Python 3.10.12", "rustc": "rustc 
         "os_id": "ubuntu", "os_version_id": "22.04", "arch": "armv7l", "apt_architecture": "armhf",
         "apt": {"build-essential": "12.9ubuntu3"}, "build_backends": {"maturin": "1.5.1"}}
 
-BUILT = sorted(R.V0317_SOURCE_BUILD_PACKAGES)              # 6 source-built package names
+BUILT = sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)              # 6 source-built package names
 REUSED = ["reusepkg%02d" % i for i in range(1, 25)]        # 24 synthetic reused packages
 ALL30 = sorted(BUILT + REUSED)
 
@@ -133,39 +134,58 @@ def make_release(base: pathlib.Path, *, version="0.3.16"):
     g("commit", "-q", "-m", "c")
     g("tag", "v%s" % version)
 
-    wh = base / "wheelhouse-armhf"
-    wh.mkdir()
+    bundle = base / "bundle"
+    wh = bundle / "wheelhouse-armhf"
+    wh.mkdir(parents=True)
     sums, wheels, runtime = [], [], []
     for n in BUILT:
         wf, wb, sdn, ssha = built_wheels[n]
         (wh / wf).write_bytes(wb)
         wsha = hashlib.sha256(wb).hexdigest()
-        sums.append("%s  %s" % (wsha, wf))
+        sums.append((wf, wsha))
         wheels.append({"origin": "built", "sdist_name": sdn, "sdist_sha256": ssha,
                        "wheel_filename": wf, "wheel_sha256": wsha})
         runtime.append("%s==1.0 --hash=sha256:%s" % (n, wsha))
     for n in REUSED:
         wf, wb, wsha = reuse_wheels[n]
         (wh / wf).write_bytes(wb)
-        sums.append("%s  %s" % (wsha, wf))
+        sums.append((wf, wsha))
         wheels.append({"origin": "reused", "name": n, "version": "1.0",
                        "wheel_filename": wf, "wheel_sha256": wsha, "tags": ["py3-none-any"]})
         runtime.append("%s==1.0 --hash=sha256:%s" % (n, wsha))
-    (wh / "SHA256SUMS").write_text("".join(s + "\n" for s in sorted(sums)))
+    # Canonical form Phase B emits: sorted by WHEEL FILENAME (not by the whole line/hash).
+    (wh / "SHA256SUMS").write_text(
+        "".join("%s  %s\n" % (d, n) for n, d in sorted(sums)), newline="")
     validated = RA.load_and_validate(authz_bytes, target_tags=set(TARGET_TAGS_TEXT.split()))
-    prov = base / "prov.json"
+    members = R._wheelhouse_members(str(wh))
+    tree_sha = R.wheelhouse_tree_digest(members)
+    # REAL Phase-B bundle layout, so the MANDATORY producer transfer-manifest gate can verify it:
+    #   <bundle>/{wheelhouse-armhf/, wheelhouse-armv7.json, requirements-armv7.lock,
+    #             build-evidence.json}  +  the manifest OUTSIDE the bundle.
+    prov = bundle / "wheelhouse-armv7.json"
     prov.write_text(json.dumps({
         "builder": _builder(R.sha256_hex(_RECIPE.encode())),
-        "bundle": {"sha256": R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))},
+        "bundle": {"tree_digest": {"scheme": R._ltree.SCHEME, "sha256": tree_sha},
+                   "member_count": len(members)},
         "authorizers": {"reuse_authz_sha256": RA.sha256_hex(RA.canonical_bytes(validated)),
                         "target_tags_sha256": TARGET_TAGS_SHA},
         "wheels": sorted(wheels, key=lambda w: w["wheel_filename"])}))
-    rlock = base / "requirements-armv7.lock"
-    rlock.write_text("".join(ln + "\n" for ln in sorted(runtime)))
+    rlock = bundle / "requirements-armv7.lock"
+    # EXACT production form: the canonical header build_wheelhouse.py emits, then the pins.
+    rlock.write_text(TM.RUNTIME_LOCK_HEADER + "\n" + "".join(ln + "\n" for ln in sorted(runtime)),
+                     newline="")
+    (bundle / "build-evidence.json").write_text(json.dumps(
+        {"bundle_tree_sha256": tree_sha, "tree_scheme": R._ltree.SCHEME,
+         "member_count": len(members), "wheel_count": len(wheels),
+         "built": sorted(BUILT), "reused": sorted(REUSED),
+         "authorizers": {}, "partition_policy_enforced": True}, sort_keys=True))
+    xfer = base / "phase-b-bundle-transfer-manifest.json"
+    TM.generate(str(bundle), str(xfer))
     man = base / "image-manifest.json"
     man.write_bytes(MANIFEST)
     return {"repo": str(repo), "wheelhouse_dir": str(wh), "provenance_path": str(prov),
-            "runtime_lock_path": str(rlock), "image_manifest_path": str(man)}
+            "runtime_lock_path": str(rlock), "image_manifest_path": str(man),
+            "bundle_dir": str(bundle), "transfer_manifest_path": str(xfer)}
 
 
 def recommit(repo: str, *, version="0.3.16"):

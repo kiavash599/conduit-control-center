@@ -20,7 +20,7 @@ Forces: authenticity and integrity of releases; reproducibility (so a digest is 
 
 ## Decision
 
-1. **Canonical Release Artifact.** Releases are packed into a deterministic, content-fixed `.tar.gz`: members sorted, `mtime=0`, fixed mode/uid/gid and empty owner names, gzip header `mtime=0`. Identical content yields identical bytes, so the **content digest (SHA-256)** is a stable identity. Artifacts are built **only from a committed, tagged source** (`commit → tag → --git-ref`).
+1. **Canonical Release Artifact.** Releases are packed into a content-fixed `.tar.gz`: members sorted, `mtime=0`, fixed mode/uid/gid and empty owner names, gzip header `mtime=0`. Identical content yields identical bytes **on the same runtime**; the compressed bytes are NOT reproducible across different Python/zlib implementations (see Amendment A6), so the **content digest (SHA-256) of the exact published bytes** is the artifact identity. Artifacts are built **only from a committed, tagged source** (`commit → tag → --git-ref`).
 2. **Signed Object.** A manifest (`format_version = 1`) binds `{product, version, artifact name, digest{algorithm, value}, compatibility{platform, recommended_conduit_core}}` and is signed with an **SSH Ed25519** key using SSHSIG, namespace **`ccc-update-manifest`**, publisher identity **`conduit-control-center-publisher`**.
 3. **On-Device Trust Store (M2).** The device holds an `allowed_signers` trust anchor at `/opt/conduit-cc/trust/allowed_signers` (root-owned, service-readable, `root:conduit-cc 0750`). It is **provisioned out-of-band** and is **never** shipped inside a release artifact.
 4. **Fail-Closed Verification.** The privileged update helper verifies the manifest signature against the on-device trust store **before extraction and before the version gate**. Any verification, product-scope, or integrity failure aborts with **no** privileged action.
@@ -38,7 +38,7 @@ Forces: authenticity and integrity of releases; reproducibility (so a digest is 
 
 ## Normative constants
 
-`PRODUCT = "conduit-control-center"` · `DIGEST_ALGORITHM = "sha256"` · `SSHSIG_NAMESPACE = "ccc-update-manifest"` · `PUBLISHER_IDENTITY = "conduit-control-center-publisher"` · manifest `format_version = 1`.
+`PRODUCT = "conduit-control-center"` · `DIGEST_ALGORITHM = "sha256"` · `SSHSIG_NAMESPACE = "ccc-update-manifest"` · `PUBLISHER_IDENTITY = "conduit-control-center-publisher"` · manifest `format_version = 1` *(historical: the original V1 decision; superseded by Amendment A1 and now Amendment A6 — the current normative value is `3`)*.
 
 ## Consequences
 
@@ -64,12 +64,14 @@ is required and the trusted surface can be narrowed.
 1. **One version, two deterministic platform artifacts, BOTH mandatory:** `ccc-X.Y.Z-aarch64.tar.gz`
    (source/runtime, no wheelhouse) and `ccc-X.Y.Z-armv7l.tar.gz` (same source + embedded
    `wheelhouse-armhf/` + `provenance/wheelhouse-armv7.json`).
-2. **One canonical V2 manifest, one signature** (`format_version = 2`, existing SSHSIG namespace/
+2. **One canonical manifest, one signature** (`format_version = 3` as of Amendment A6; this
+   amendment was authored at `format_version = 2`, existing SSHSIG namespace/
    identity) binding: product, version, `source{vcs,commit,tag}`, the per-platform artifact set
    (each `name` + sha256 `digest`; armv7l a strict wheelhouse block), and `dependency_locks`
    (requirements.txt + both platform-lock sha256). Canonical bytes = signed bytes; `artifacts[]`
    sorted by platform.
-3. **Verifier is V2-only** (`SUPPORTED_MANIFEST_FORMATS = {2}`) — V1 is rejected (removes a
+3. **Verifier accepts exactly one format** (`SUPPORTED_MANIFEST_FORMATS`; `{2}` when this
+   amendment was written, `{3}` as of Amendment A6) — older formats are rejected (removes a
    platform-unbound / format-downgrade bypass).
 4. **Helper is the platform authority.** It detects the real host `uname -m` independently and binds
    the received bytes to the SIGNED entry for THAT platform. **Digest-to-platform-entry binding is
@@ -83,7 +85,15 @@ is required and the trusted surface can be narrowed.
    COMMITTED PRE-TAG (PyPI sdist hashes for armv7 sources; PyPI wheel
    hashes for aarch64); the wheelhouse and `provenance/wheelhouse-armv7.json` (per-wheel
    sdist->builder->wheel chain) are POST-TAG content-addressed inputs, never committed, injected into
-   the armv7 artifact and explicitly digest-bound (`bundle_sha256`, `provenance_sha256`).
+   the armv7 artifact and explicitly digest-bound (`tree_digest`, `provenance_sha256`).
+   The wheelhouse identity is the **Logical Tree Digest v1** (`release/logical_tree.py`): a
+   domain-separated, length-prefixed SHA-256 over the exact 31-member `{path -> bytes}` mapping,
+   with no compression and no `tarfile`, so Phase B (RPi2) and the release producer (Owner PC)
+   agree regardless of runtime. Manifest **format 3** carries exactly one wheelhouse identity;
+   the gzip-derived `bundle_sha256` is removed with no compatibility mode. `pack_tree()` builds
+   final artifact bytes only; their sha256 is over the exact published bytes. Final `.tar.gz`
+   bytes are deterministic per runtime but NOT reproducible across zlib implementations -- the
+   artifact digest always describes what was shipped. See docs/incidents/v0.3.17-unreleased.md.
 6. **Two-lock dependency install (parity in install.sh + update.sh):** armv7l installs offline,
    `--no-index --only-binary=:all: --require-hashes -r requirements-armv7.lock --find-links <wheelhouse>`;
    aarch64 installs from the index but hash-locked, `--require-hashes --only-binary=:all: -r
@@ -265,5 +275,44 @@ the acquisition store and the Phase-B wheelhouse are published as ONE atomic bun
 → validate everything → single rename; refuse-existing; cleanup on failure); Phase B (the Python
 builder, not the shell) enforces the 6/24/30 approved-six policy and generates `requirements-armv7.lock`
 from the final validated wheelhouse (exact 30-way bijection) before publication. The reuse store is
-**filename-addressed, hash-verified** (not a digest-CAS layout). The `V0317_SOURCE_BUILD_PACKAGES`
+**filename-addressed, hash-verified** (not a digest-CAS layout). The `WHEELHOUSE_SOURCE_BUILD_PACKAGES`
 constant in `ccc_release` is the single policy source for generator, producer, and tests.
+
+
+---
+
+## Amendment A6 — Compressor-Independent Wheelhouse Identity, Manifest Format 3 (accepted)
+
+**Status:** Accepted · **Supersedes:** the gzip-derived `bundle_sha256` wheelhouse identity and
+`format_version = 2`.
+
+**Context.** The wheelhouse identity was `sha256(pack_tree(members))` — a digest over **gzip** bytes.
+`pack_tree()` canonicalises the tar layer (sorted members, `mtime=0`, mode `0644`, uid/gid `0`) but
+nothing constrains the DEFLATE stream, which is chosen by whichever zlib the runtime links. Phase B
+(RPi2, zlib 1.2.11) and the release producer (Owner PC, zlib-ng 1.3.1) produced byte-identical raw
+tars but different gzip bytes, so the v0.3.17 SRT failed closed. See
+`docs/incidents/v0.3.17-unreleased.md`.
+
+**Decision.**
+1. **Wheelhouse identity is the Logical Tree Digest v1** (`release/logical_tree.py`): a
+   domain-separated, length-prefixed SHA-256 over the exact 31-member `{path -> bytes}` mapping. No
+   compression, no `tarfile` — therefore no compressor or archive-format behaviour can affect it.
+   (Raw tar was considered and rejected: `tarfile` emits a PAX extended header for paths over 100
+   bytes, and `DEFAULT_FORMAT` itself changed in CPython 3.8, so raw tar narrows the drift class
+   without removing it.)
+2. **Manifest `format_version = 3`**, `SUPPORTED_MANIFEST_FORMATS = {3}`. Exactly ONE wheelhouse
+   identity: `tree_digest{scheme,sha256}` in the signed manifest wheelhouse block and in the
+   provenance bundle block (plus `member_count`). `bundle_sha256` is removed and actively rejected.
+   No compatibility or migration mode (no external users; both Pis are Owner-controlled).
+3. **`pack_tree()` builds final artifact bytes only.** The signed artifact digest is the SHA-256 of
+   the exact published bytes, so it always describes what shipped. Cross-runtime byte reproducibility
+   of the compressed artifact is explicitly NOT claimed.
+4. **The Phase-B transfer manifest is a committed, mandatory contract**
+   (`release/transfer_manifest.py`, schema `ccc-phase-b-transfer-manifest-v2`). It independently
+   recomputes the Logical Tree Digest, enforces the exact bundle set at every depth, and cross-checks
+   SHA256SUMS, provenance, build evidence and the runtime lock. `produce_release` requires it
+   (`--transfer-manifest`) and fails closed before producing any artifact bytes.
+
+**Invariants.** **I3** is refined: the *artifact* identity remains the digest of its exact published
+bytes, while the *wheelhouse* identity is compressor-independent and agrees across runtimes by
+construction.

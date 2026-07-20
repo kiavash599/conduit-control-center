@@ -109,8 +109,17 @@ def test_finding8_skopeo_is_explicit_preflight_not_autoinstalled():
 
 def test_finding9_provenance_copy_checked_no_suppression():
     assert "2>/dev/null || true" not in _PHASE_B
-    assert 'readlink -f' in _PHASE_B
+    # The self/alias guard on the provenance copy moved FORWARD into the pre-Docker output-identity
+    # gate: readlink -m (works for not-yet-existing outputs) via _abs, distinct + non-nested in both
+    # directions. The cp itself needs no inline readlink guard anymore -- collisions cannot reach it.
+    assert 'readlink -m' in _PHASE_B
+    assert 'would overwrite a verified manifest' in _PHASE_B
+    assert 'must not live under the transfer-manifest output path' in _PHASE_B
     assert '[[ -s "${SRC}" ]] ||' in _PHASE_B          # bundle provenance is checked
+    # FINAL verification is the last output operation before success is declared.
+    assert _PHASE_B.index("FINAL transfer-manifest verification failed") \
+        > _PHASE_B.index('cp "${SRC}" "${CCC_PROV_OUT}"')
+    assert _PHASE_B.index("CCC_PAIR_OK=1") > _PHASE_B.index("FINAL transfer-manifest verification failed")
 
 
 def test_phase_b_atomic_bundle_and_target_policy():
@@ -268,16 +277,60 @@ _FAKE_DOCKER = (
     "    if [[ -n \"$out\" && \"${FAKE_SKIP_OUTPUT:-0}\" != \"1\" ]]; then\n"
     # The Python builder publishes ONE atomic bundle at /out/bundle; the shell validates that
     # layout (provenance + runtime lock), so the mock must reproduce it, not the old flat files.
-    "      mkdir -p \"$out/bundle/wheelhouse-armhf\"\n"
-    "      echo '{\"ok\":true}' > \"$out/bundle/wheelhouse-armv7.json\"\n"
-    "      echo 'x==1 --hash=sha256:2222222222222222222222222222222222222222222222222222222222222222' \\\n"
-    "        > \"$out/bundle/requirements-armv7.lock\"\n"
-    "      echo '{\"wheel_count\":0}' > \"$out/bundle/build-evidence.json\"\n"
+    # The committed Phase-B shell now generates the transfer manifest with release.transfer_manifest,
+    # which enforces the REAL bundle shape (exactly 30 wheels + SHA256SUMS + the three top-level
+    # files, with SHA256SUMS agreeing and provenance member_count == 31). The mock must therefore
+    "      python3 \"$CCC_MKBUNDLE\" \"$out/bundle\" \"${FAKE_SHORT_WHEELSET:-0}\" || exit 9\n"
     "    fi;;\n"
     "  *) : ;;\n"
     "esac\n"
 )
 
+
+
+# Builds a FULLY SELF-CONSISTENT mock Phase-B bundle: 30 wheels, canonical SHA256SUMS (sorted by
+# filename), provenance whose tree_digest is the REAL recomputed Logical Tree Digest, matching
+# build-evidence, and a runtime lock that is an exact bijection with the wheels. The transfer
+# manifest now recomputes and cross-checks all of this, so a stub bundle can no longer pass.
+_MKBUNDLE = r'''
+import hashlib, json, os, sys
+sys.path.insert(0, os.environ["CCC_REPO"])
+from release import logical_tree as LT
+out, short = sys.argv[1], sys.argv[2] == "1"
+wh = os.path.join(out, "wheelhouse-armhf")
+os.makedirs(wh, exist_ok=True)
+built = ["cffi", "httptools", "markupsafe", "psutil", "pyyaml", "uvloop"]
+reused = ["reusepkg%02d" % i for i in range(1, 25 - (1 if short else 0))]
+members, sums, recs, lock = {}, [], [], []
+for pkg, origin in [(b, "built") for b in built] + [(r, "reused") for r in reused]:
+    fn = "%s-1.0-py3-none-any.whl" % pkg
+    data = ("WHEEL:" + pkg).encode()
+    open(os.path.join(wh, fn), "wb").write(data)
+    d = hashlib.sha256(data).hexdigest()
+    members["wheelhouse-armhf/" + fn] = data
+    sums.append((fn, d))
+    lock.append("%s==1.0 --hash=sha256:%s" % (pkg, d))
+    if origin == "built":
+        recs.append({"origin": "built", "sdist_name": "%s-1.0.tar.gz" % pkg,
+                     "sdist_sha256": "a" * 64, "wheel_filename": fn, "wheel_sha256": d})
+    else:
+        recs.append({"origin": "reused", "name": pkg, "version": "1.0",
+                     "wheel_filename": fn, "wheel_sha256": d, "tags": ["py3-none-any"]})
+text = "".join("%s  %s\n" % (d, n) for n, d in sorted(sums))
+open(os.path.join(wh, "SHA256SUMS"), "w", newline="").write(text)
+members["wheelhouse-armhf/SHA256SUMS"] = text.encode()
+tree = LT.tree_digest(members)
+json.dump({"bundle": {"tree_digest": {"scheme": LT.SCHEME, "sha256": tree},
+                      "member_count": len(members)}, "wheels": recs},
+          open(os.path.join(out, "wheelhouse-armv7.json"), "w"), sort_keys=True)
+json.dump({"bundle_tree_sha256": tree, "tree_scheme": LT.SCHEME, "member_count": len(members),
+           "wheel_count": len(recs), "built": sorted(built), "reused": sorted(reused),
+           "authorizers": {}, "partition_policy_enforced": True},
+          open(os.path.join(out, "build-evidence.json"), "w"), sort_keys=True)
+from release import transfer_manifest as _TMH   # the ONE canonical runtime-lock header
+open(os.path.join(out, "requirements-armv7.lock"), "w", newline="").write(
+    _TMH.RUNTIME_LOCK_HEADER + "\n" + "\n".join(sorted(lock)) + "\n")
+'''
 
 _READER = _B / "read_builder_inputs.py"
 # The real committed Containerfile's canonical sha256, via THE shared implementation (never a local
@@ -362,6 +415,10 @@ def _prep(tmp_path, *, image_id=_IMG_ID, skip_output=False, swap_capable=True):
     swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n/swapfile\tfile\t4000000\t0\t-2\n")
     env = dict(os.environ)
     env["PATH"] = str(binp) + os.pathsep + env["PATH"]
+    mk = tmp_path / "mkbundle.py"
+    mk.write_text(_MKBUNDLE)
+    env["CCC_MKBUNDLE"] = str(mk)
+    env["CCC_REPO"] = str(_ROOT)
     env["DOCKER_LOG"] = str(log)
     env["FAKE_IMAGE_ID"] = image_id
     env["FAKE_MANIFEST_FILE"] = str(manifest)
@@ -393,6 +450,61 @@ def _run_phase_b(env, inputs, sdist, outd, prov_out, *extra):
 def _no_docker_run(log):
     return not log.exists() or not any(
         ln.startswith("docker run") for ln in log.read_text().splitlines())
+
+
+# --- OUTPUT-PAIR lifecycle: the bundle and its transfer manifest are ONE pair ------------------ #
+
+@_needs_bash
+def test_phase_b_rejects_preexisting_bundle_output(tmp_path):
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    (outd / "bundle").mkdir(parents=True)
+    r = _run_phase_b(env, inputs, sdist, outd, tmp_path / "prov.json", *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "bundle output already exists" in r.stderr
+    assert _no_docker_run(log)                       # rejected BEFORE the expensive build
+
+
+@_needs_bash
+def test_phase_b_rejects_preexisting_transfer_manifest(tmp_path):
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    outd.mkdir(parents=True, exist_ok=True)
+    keep = outd / "phase-b-bundle-transfer-manifest.json"
+    keep.write_text("PRE-EXISTING EVIDENCE")
+    r = _run_phase_b(env, inputs, sdist, outd, tmp_path / "prov.json", *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "transfer-manifest output already exists" in r.stderr
+    assert _no_docker_run(log)
+    assert keep.read_text() == "PRE-EXISTING EVIDENCE"   # pre-existing evidence untouched
+
+
+@_needs_bash
+def test_phase_b_publishes_verified_pair(tmp_path):
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    r = _run_phase_b(env, inputs, sdist, outd, tmp_path / "prov.json", *_res_args(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert (outd / "bundle").is_dir()
+    xfer = outd / "phase-b-bundle-transfer-manifest.json"
+    assert xfer.is_file()
+    assert "TRANSFER_MANIFEST=GENERATED" in r.stdout and "TRANSFER_MANIFEST=VERIFIED" in r.stdout
+    assert not list(outd.glob("*.tmp.*"))               # no temp residue
+
+
+@_needs_bash
+def test_phase_b_manifest_failure_removes_only_this_attempts_outputs(tmp_path):
+    # A bundle that cannot produce a valid manifest (mock emits a short wheel set) must leave NO
+    # bundle-only half-state, and must not disturb unrelated pre-existing files in the out dir.
+    _binp, inputs, sdist, _lock, outd, log, env = _prep(tmp_path)
+    outd.mkdir(parents=True, exist_ok=True)
+    unrelated = outd / "earlier-evidence.txt"
+    unrelated.write_text("KEEP ME")
+    env["FAKE_SHORT_WHEELSET"] = "1"                   # 29 wheels -> transfer manifest fails closed
+    r = _run_phase_b(env, inputs, sdist, outd, tmp_path / "prov.json", *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "transfer-manifest generation failed" in r.stderr
+    assert not (outd / "bundle").exists()              # no bundle-only half-state
+    assert not (outd / "phase-b-bundle-transfer-manifest.json").exists()
+    assert not list(outd.glob("*.tmp.*"))
+    assert unrelated.read_text() == "KEEP ME"          # pre-existing evidence preserved
 
 
 @_needs_bash
@@ -1061,3 +1173,155 @@ def test_phase_b_partial_or_failed_reader_does_not_populate_state(tmp_path):
     assert r.returncode != 0
     assert "strict validation" in r.stderr
     assert _no_docker_run(log)
+
+
+# --- F2: --provenance-out must never be able to overwrite the VERIFIED transfer manifest --------- #
+#
+# The provenance convenience copy runs AFTER the bundle/manifest pair is generated and verified. If
+# --provenance-out resolved to the manifest path, `cp` would replace verified manifest bytes with
+# provenance bytes and the script would still set CCC_PAIR_OK=1 and report success. The gate below
+# runs in the output preflight, i.e. BEFORE the expensive Docker build.
+
+_XFER_NAME = "phase-b-bundle-transfer-manifest.json"
+
+
+def _no_docker_ran(log):
+    """The preflight must reject before the expensive build: the fake docker never logged a run."""
+    return (not log.exists()) or ("run" not in log.read_text())
+
+
+@_needs_bash
+def test_provenance_out_colliding_with_transfer_manifest_rejected_before_docker(tmp_path):
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    prov = outd / _XFER_NAME                       # EXACT collision with the manifest output
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "would overwrite a verified manifest" in r.stderr
+    assert _no_docker_ran(log)
+    assert not (outd / "bundle").exists() and not (outd / _XFER_NAME).exists()
+
+
+@_needs_bash
+def test_provenance_out_aliasing_transfer_manifest_via_dotdot_rejected(tmp_path):
+    """Path comparison must normalize/resolve, since none of the outputs exist yet."""
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    prov = outd / "sub" / ".." / _XFER_NAME        # same file, different spelling
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "would overwrite a verified manifest" in r.stderr
+    assert _no_docker_ran(log)
+
+
+@_needs_bash
+def test_provenance_out_inside_the_bundle_rejected(tmp_path):
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    prov = outd / "bundle" / "wheelhouse-armv7.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "must not live inside the bundle" in r.stderr
+    assert _no_docker_ran(log)
+
+
+@_needs_bash
+def test_provenance_out_equal_to_bundle_dir_rejected(tmp_path):
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    r = _run_phase_b(env, inputs, sdist, outd, outd / "bundle", *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "resolves to the bundle output" in r.stderr
+    assert _no_docker_ran(log)
+
+
+@_needs_bash
+def test_provenance_out_colliding_with_resource_evidence_rejected(tmp_path):
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    ev = tmp_path / "res.env"
+    r = _run_phase_b(env, inputs, sdist, outd, ev,
+                     "--ram", "800m", "--swap", "0", "--host-reserve", "200m",
+                     "--resource-evidence", str(ev))
+    assert r.returncode != 0
+    assert "collides" in r.stderr
+    assert _no_docker_ran(log)
+
+
+@_needs_bash
+def test_output_collision_does_not_modify_pre_existing_evidence(tmp_path):
+    """A rejected attempt must leave prior evidence byte-identical."""
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    keep = outd / "previous-evidence.json"
+    keep.write_bytes(b'{"prior":"evidence"}')
+    before = keep.read_bytes()
+    r = _run_phase_b(env, inputs, sdist, outd, outd / _XFER_NAME, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert keep.read_bytes() == before
+
+
+@_needs_bash
+def test_distinct_provenance_out_still_succeeds_and_manifest_still_verifies(tmp_path):
+    """The supported case: a distinct provenance path. The manifest must still verify AFTER every
+    optional output operation has run -- i.e. the copy did not disturb the verified pair."""
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    prov = tmp_path / "provenance-copy.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert "TRANSFER_MANIFEST=VERIFIED" in r.stdout
+    bundle, xfer = outd / "bundle", outd / _XFER_NAME
+    assert bundle.is_dir() and xfer.is_file() and prov.is_file()
+    # Re-verify from scratch, after the provenance copy: the pair is still intact.
+    v = subprocess.run([_py, "-m", "release.transfer_manifest", "verify",
+                        "--bundle", str(bundle), "--manifest", str(xfer)],
+                       capture_output=True, text=True, cwd=str(_ROOT))
+    assert v.returncode == 0, v.stderr
+    assert "TRANSFER_MANIFEST=VERIFIED" in v.stdout
+    # The convenience copy is the bundle provenance, and the bundle remains the source of truth.
+    assert prov.read_bytes() == (bundle / "wheelhouse-armv7.json").read_bytes()
+
+
+@_needs_bash
+def test_provenance_out_under_transfer_manifest_path_rejected_before_docker(tmp_path):
+    """Reverse nesting: <manifest-path>/copy.json. The manifest does not exist at preflight, so
+    without the explicit both-directions check this passes preflight, burns the Docker build, and
+    only fails at `cp`. Must be rejected BEFORE Docker, leaving existing evidence untouched."""
+    _binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    keep = outd / "previous-evidence.json"
+    keep.write_bytes(b'{"prior":"evidence"}')
+    prov = outd / _XFER_NAME / "copy.json"
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "must not live under the transfer-manifest output path" in r.stderr
+    assert _no_docker_ran(log)
+    assert keep.read_bytes() == b'{"prior":"evidence"}'
+    assert not (outd / "bundle").exists() and not (outd / _XFER_NAME).exists()
+
+
+_FAKE_CORRUPTING_CP = (
+    "#!/usr/bin/env bash\n"
+    "/bin/cp \"$@\"\n"                       # perform the real copy
+    "# corrupt the manifest ONLY during the provenance convenience copy -- the script also uses cp\n"
+    "# earlier, and corrupting there would just pre-create the manifest and fail generation instead.\n"
+    "if [[ \"${2:-}\" == \"${FAKE_CORRUPT_ON_DEST}\" ]]; then\n"
+    "  echo corrupt >> \"${FAKE_CORRUPT_TARGET}\"\n"
+    "fi\n"
+)
+
+
+@_needs_bash
+def test_manifest_corruption_during_optional_output_phase_prevents_success(tmp_path):
+    """If anything in the optional-output phase corrupts/replaces the manifest, the FINAL
+    from-scratch verification must fail, success must not be reported, and the ownership-aware
+    cleanup must remove exactly this attempt's bundle, manifest, and provenance copy."""
+    binp, inputs, sdist, lock, outd, log, env = _prep(tmp_path)
+    _mkbin(binp, "cp", _FAKE_CORRUPTING_CP)
+    env["FAKE_CORRUPT_TARGET"] = str(outd / _XFER_NAME)
+    keep = outd / "previous-evidence.json"
+    keep.write_bytes(b'{"prior":"evidence"}')
+    prov = tmp_path / "provenance-copy.json"     # distinct path: passes the identity gate
+    env["FAKE_CORRUPT_ON_DEST"] = str(prov)
+    r = _run_phase_b(env, inputs, sdist, outd, prov, *_res_args(tmp_path))
+    assert r.returncode != 0
+    assert "FINAL transfer-manifest verification failed after optional outputs" in r.stderr
+    assert "Phase B complete" not in r.stdout
+    # This attempt's outputs are gone; pre-existing evidence is untouched.
+    assert not (outd / "bundle").exists()
+    assert not (outd / _XFER_NAME).exists()
+    assert not prov.exists()
+    assert keep.read_bytes() == b'{"prior":"evidence"}'

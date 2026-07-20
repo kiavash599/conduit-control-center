@@ -235,3 +235,29 @@ fetched. The allowlist sha256 is bound in provenance and required by the produce
 No image pulled/built, no container run, no wheel built, no Docker started, no Pi
 touched. These scripts are the Owner-gated ceremony; the real digests/hashes are supplied
 during construction (never committed as placeholders).
+
+
+## Wheelhouse identity and the transfer manifest (ADR-0003 Amendment A6)
+
+The wheelhouse identity is the **Logical Tree Digest v1** (`release/logical_tree.py`) — a
+domain-separated, length-prefixed SHA-256 over the exact 31-member mapping (30 wheels +
+`SHA256SUMS`), with no compression and no `tarfile`. Phase B and the release producer therefore
+compute the same value regardless of their zlib. `pack_tree()`/gzip is used ONLY to build final
+artifact bytes; those bytes are deterministic per runtime but are **not** reproducible across
+different Python/zlib implementations, which is why identity never depends on them.
+
+Phase B publishes the bundle and its **transfer manifest as one lifecycle pair**. Both output paths
+are preflighted before the expensive build; if manifest generation or verification fails, only the
+outputs created by that attempt are removed — pre-existing evidence is never touched.
+
+    python3 -m release.transfer_manifest generate --bundle <out>/bundle \
+        --out <out>/phase-b-bundle-transfer-manifest.json          # on the RPi2 (stdlib-only)
+    python  -m release.transfer_manifest verify   --bundle <bundle> \
+        --manifest <manifest>                                       # on the Owner PC
+
+The manifest (`ccc-phase-b-transfer-manifest-v2`) independently RECOMPUTES the tree digest, enforces
+the exact 34-file bundle set at every depth (rejecting nested foreign paths, extra wheelhouse
+metadata, symlinks and non-regular entries), and cross-checks SHA256SUMS, provenance, build evidence
+and the runtime lock. It is deterministic — no timestamp — so verification is a byte-for-byte
+comparison. `release/ccc_release.py` **requires** it via `--transfer-manifest` and fails closed
+before producing any artifact bytes.

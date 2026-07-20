@@ -122,7 +122,7 @@ def test_build_ok_and_round_trips(tmp_path):
     assert "image_id" not in b
     assert b["build_backends_lock_sha256"] == R.sha256_hex(_BB_LOCK.encode())
     assert b["environment"]["glibc"] == "2.35"
-    R._validate_provenance(res["provenance"], R._wheelhouse_members(res["wheelhouse_dir"]), res["bundle_sha256"],
+    R._validate_provenance(res["provenance"], R._wheelhouse_members(res["wheelhouse_dir"]), res["bundle_tree_sha256"],
                            open(d / "requirements-armv7-build.lock").read(),
                            R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()), _BB_LOCK,
                            _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
@@ -234,7 +234,7 @@ def _expected_ctx(d):
 
 def _validate_prov(res, d, *, expected):
     R._validate_provenance(res["provenance"], R._wheelhouse_members(res["wheelhouse_dir"]),
-                           res["bundle_sha256"], (d / "requirements-armv7-build.lock").read_text(),
+                           res["bundle_tree_sha256"], (d / "requirements-armv7-build.lock").read_text(),
                            R.sha256_hex(b"FROM base\nRUN true\n"), R.sha256_hex(_BB_LOCK.encode()),
                            _BB_LOCK, _APT_SHA, _RUSTUP_SHA, _APT, _EXT_LOCK_SHA, _ALLOWLIST_SHA,
                            image_manifest_bytes=_MANIFEST_BYTES, image_context_expected=expected)
@@ -385,7 +385,7 @@ def test_cli_main_accepts_production_argv_and_binds_out_dir_to_out_bundle(tmp_pa
 
     def _fake_build_wheelhouse(**kw):
         captured.update(kw)
-        return {"provenance": {}, "bundle_sha256": "0" * 64, "bundle_dir": kw["out_dir"],
+        return {"provenance": {}, "bundle_tree_sha256": "0" * 64, "bundle_dir": kw["out_dir"],
                 "wheelhouse_dir": kw["out_dir"] + "/wheelhouse-armhf", "runtime_lock_text": "x\n"}
 
     monkeypatch.setattr(B, "build_wheelhouse", _fake_build_wheelhouse)
@@ -637,7 +637,7 @@ def _run_policy(tmp_path, *, built_names):
 
 
 def test_phase_b_6_24_30_policy_success_and_bundle(tmp_path):
-    res = _run_policy(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    res = _run_policy(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
     bundle = pathlib.Path(res["bundle_dir"])
     whl = [p.name for p in (bundle / "wheelhouse-armhf").iterdir() if p.name.endswith(".whl")]
     assert len(whl) == 30
@@ -650,13 +650,13 @@ def test_phase_b_6_24_30_policy_success_and_bundle(tmp_path):
 
 def test_phase_b_policy_rejects_wrong_built_member(tmp_path):
     # a non-approved built package (7-set) fails the approved-six/count gate BEFORE publication
-    wrong = sorted(set(R.V0317_SOURCE_BUILD_PACKAGES) - {"uvloop"} | {"notapproved"})
+    wrong = sorted(set(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES) - {"uvloop"} | {"notapproved"})
     with pytest.raises(R.ReleaseError):
         _run_policy(tmp_path, built_names=wrong)
 
 
 def test_phase_b_refuses_preexisting_bundle(tmp_path):
-    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
     (d / "bundle").mkdir()
     with pytest.raises(R.ReleaseError):
         B.build_wheelhouse(
@@ -710,7 +710,7 @@ def _call_policy(d, sdir, rdir, ap, *, build_fn, requirements_text, target_tags_
 def test_phase_b_fail_fast_foreign_store_starts_no_build(tmp_path):
     # A foreign subdirectory in the reuse store must be rejected in the CHEAP preflight, BEFORE any
     # source build is attempted (0 build_fn calls) -- the core fail-fast guarantee.
-    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
     (pathlib.Path(rdir) / "foreign_sub").mkdir()
     fn, calls = _counting_bfn()
     with pytest.raises(R.ReleaseError) as ei:
@@ -722,7 +722,7 @@ def test_phase_b_fail_fast_foreign_store_starts_no_build(tmp_path):
 def test_phase_b_fail_fast_missing_required_input_starts_no_build(tmp_path):
     # Under the production policy, a missing mandatory input (requirements text) fails in the cheap
     # preflight before any build starts.
-    d, sdir, rdir, ap, _reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    d, sdir, rdir, ap, _reqs = _policy_inputs(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
     fn, calls = _counting_bfn()
     with pytest.raises(R.ReleaseError):
         _call_policy(d, sdir, rdir, ap, build_fn=fn, requirements_text=None)
@@ -732,8 +732,8 @@ def test_phase_b_fail_fast_missing_required_input_starts_no_build(tmp_path):
 def test_phase_b_all_30_target_tag_check_rejects_incompatible_built_wheel(tmp_path):
     # Every one of the final 30 wheels (built AND reused) must carry a tag in the committed 495-set;
     # a source-built wheel emitted with an x86_64 tag fails the all-30 compatibility gate.
-    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
-    built0 = sorted(R.V0317_SOURCE_BUILD_PACKAGES)[0]
+    d, sdir, rdir, ap, reqs = _policy_inputs(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
+    built0 = sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)[0]
     fn, _calls = _counting_bfn(bad_tag_for=built0)
     with pytest.raises(R.ReleaseError) as ei:
         _call_policy(d, sdir, rdir, ap, build_fn=fn, requirements_text=reqs)
@@ -743,7 +743,7 @@ def test_phase_b_all_30_target_tag_check_rejects_incompatible_built_wheel(tmp_pa
 def test_phase_b_success_generates_mandatory_runtime_lock(tmp_path):
     # The runtime lock is MANDATORY under policy: the successful bundle contains an exact 30-line
     # runtime lock (one hashed pin per final wheel), generated before publication.
-    res = _run_policy(tmp_path, built_names=sorted(R.V0317_SOURCE_BUILD_PACKAGES))
+    res = _run_policy(tmp_path, built_names=sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES))
     bundle = pathlib.Path(res["bundle_dir"])
     lock = (bundle / "requirements-armv7.lock").read_text().splitlines()
     pins = [ln for ln in lock if ln and not ln.startswith("#")]

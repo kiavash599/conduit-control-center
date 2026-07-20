@@ -230,6 +230,65 @@ echo "image-context: recipe binding OK (${CUR_RECIPE_SHA})"
 # OUT_DIR is the writable mount + host-side recap scratch; the FINAL bundle (/out/bundle) is created
 # atomically by the Python builder and must NOT be pre-created here.
 mkdir -p "${OUT_DIR}"
+# --- OUTPUT-PAIR PREFLIGHT (before the expensive build) ---------------------------------------
+# The bundle and its transfer manifest are ONE lifecycle pair. Reject either collision up front so
+# an expensive build never runs into a half-state, and record which paths this attempt owns (only
+# those may be removed on failure -- pre-existing evidence is never touched).
+CCC_BUNDLE_OUT="${OUT_DIR}/bundle"
+CCC_XFER_OUT="${OUT_DIR}/phase-b-bundle-transfer-manifest.json"
+[[ -e "${CCC_BUNDLE_OUT}" ]] && { echo "ERROR: bundle output already exists: ${CCC_BUNDLE_OUT}" >&2; exit 1; }
+[[ -e "${CCC_XFER_OUT}" ]] && { echo "ERROR: transfer-manifest output already exists: ${CCC_XFER_OUT}" >&2; exit 1; }
+# The optional --provenance-out convenience copy is part of the SAME atomic failure boundary: it is
+# collision-checked here, owned by this attempt, written only AFTER the verified pair, and removed
+# with the pair on failure. A failed ceremony must leave no convenience output behind.
+CCC_PROV_OUT=""
+if [[ -n "${PROV_OUT}" ]]; then
+  [[ -e "${PROV_OUT}" ]] && { echo "ERROR: provenance output already exists: ${PROV_OUT}" >&2; exit 1; }
+  # OUTPUT-IDENTITY GATE. The provenance copy happens AFTER the transfer manifest is generated and
+  # verified, so if --provenance-out resolves to the manifest path (directly or via ./ .. symlink or
+  # any other alias) `cp` would overwrite a VERIFIED manifest with provenance bytes and the script
+  # would still report success. `readlink -m` resolves symlinks and normalizes without requiring the
+  # path to exist yet, which is exactly the case here (all three outputs are absent by preflight).
+  # All owned outputs must be mutually distinct and non-nested. Checked BEFORE the Docker build.
+  _PROV_ABS="$(_abs "${PROV_OUT}")"
+  _BUNDLE_ABS="$(_abs "${CCC_BUNDLE_OUT}")"
+  _XFER_ABS="$(_abs "${CCC_XFER_OUT}")"
+  [[ "${_PROV_ABS}" == "${_XFER_ABS}" ]] \
+    && die "--provenance-out resolves to the transfer-manifest output (${_XFER_ABS}); this would overwrite a verified manifest"
+  [[ "${_PROV_ABS}" == "${_BUNDLE_ABS}" ]] \
+    && die "--provenance-out resolves to the bundle output (${_BUNDLE_ABS})"
+  [[ "${_PROV_ABS}" == "${_BUNDLE_ABS}/"* ]] \
+    && die "--provenance-out must not live inside the bundle (${_BUNDLE_ABS}); the bundle is the source of truth and is covered by the transfer manifest"
+  [[ "${_XFER_ABS}" == "${_PROV_ABS}/"* ]] \
+    && die "--provenance-out is a parent directory of the transfer-manifest output"
+  # Reverse nesting: the manifest does not exist yet at preflight, so <manifest>/copy.json would
+  # sail through, burn the Docker build, and only fail at `cp` (a file cannot also be a directory).
+  # Distinct and non-nested must hold in BOTH directions.
+  [[ "${_PROV_ABS}" == "${_XFER_ABS}/"* ]] \
+    && die "--provenance-out must not live under the transfer-manifest output path (${_XFER_ABS})"
+  [[ "${_PROV_ABS}" == "${EV_ABS}" ]] \
+    && die "--provenance-out collides with --resource-evidence (${EV_ABS})"
+  CCC_PROV_OUT="${PROV_OUT}"
+fi
+# The bundle and the transfer manifest are separately owned outputs and can never be the same path
+# or nested; assert it rather than assume it, since both derive from OUT_DIR.
+[[ "$(_abs "${CCC_BUNDLE_OUT}")" == "$(_abs "${CCC_XFER_OUT}")" ]] \
+  && die "internal: bundle and transfer-manifest outputs resolve to the same path"
+[[ "$(_abs "${CCC_XFER_OUT}")" == "$(_abs "${CCC_BUNDLE_OUT}")/"* ]] \
+  && die "internal: transfer manifest must live OUTSIDE the bundle it describes"
+echo "output preflight OK: ${CCC_BUNDLE_OUT} + ${CCC_XFER_OUT}${CCC_PROV_OUT:+ + ${CCC_PROV_OUT}} (absent, owned by this attempt)"
+# Remove ONLY outputs this collision-free attempt created; never pre-existing evidence.
+# Deliberately NO error suppression (this script forbids it): `rm -rf` and `rm -f` already succeed
+# on absent paths, and an unmatched .tmp.* glob is passed literally to `rm -f`, which is a no-op.
+# A genuine removal failure is therefore surfaced rather than hidden.
+_ccc_pair_cleanup() {
+  [[ "${CCC_PAIR_OK:-0}" == "1" ]] && return 0
+  rm -rf "${CCC_BUNDLE_OUT}"
+  rm -f  "${CCC_XFER_OUT}" "${CCC_XFER_OUT}".tmp.*
+  [[ -n "${CCC_PROV_OUT:-}" ]] && rm -f "${CCC_PROV_OUT}"
+  return 0
+}
+trap _ccc_pair_cleanup EXIT
 
 # --- re-verify the tag STILL maps to the captured image id (immutable execution target) ---
 CUR_ID="$(sudo docker image inspect --format '{{.Id}}' "${CCC_IMAGE_TAG}")"
@@ -304,8 +363,31 @@ SRC="${OUT_DIR}/bundle/wheelhouse-armv7.json"
 [[ -s "${SRC}" ]] || { echo "ERROR: Phase-B bundle provenance missing/empty: ${SRC}" >&2; exit 1; }
 [[ -s "${OUT_DIR}/bundle/requirements-armv7.lock" ]] \
   || { echo "ERROR: Phase-B bundle runtime lock missing/empty" >&2; exit 1; }
-if [[ -n "${PROV_OUT}" && "$(readlink -f "${SRC}")" != "$(readlink -f "${PROV_OUT}")" ]]; then
-  cp "${SRC}" "${PROV_OUT}"        # optional convenience copy; the bundle is the source of truth
+# --- transfer manifest: generated by the COMMITTED tool, never an external ad-hoc script --------
+# It is written OUTSIDE the bundle (self-reference would make the document describe itself) and
+# beside it, so the Owner verifies with the same committed contract:
+#   python -m release.transfer_manifest verify --bundle <bundle> --manifest <manifest>
+PYTHONPATH="${REPO}" python3 -m release.transfer_manifest generate \
+  --bundle "${CCC_BUNDLE_OUT}" --out "${CCC_XFER_OUT}" \
+  || { echo "ERROR: transfer-manifest generation failed (fail closed)" >&2; exit 1; }
+# FIRST verification: proves the GENERATOR/builder produced a coherent pair, BEFORE any optional
+# output mutation. A failure here attributes the defect to Phase-B production itself, not to the
+# optional-output phase -- that separation is the only property this earlier check adds.
+PYTHONPATH="${REPO}" python3 -m release.transfer_manifest verify \
+  --bundle "${CCC_BUNDLE_OUT}" --manifest "${CCC_XFER_OUT}" \
+  || { echo "ERROR: transfer-manifest verification failed (fail closed)" >&2; exit 1; }
+# Optional convenience copy (identity-gated at preflight; bundle remains the source of truth).
+if [[ -n "${CCC_PROV_OUT}" ]]; then
+  cp "${SRC}" "${CCC_PROV_OUT}"
 fi
+# FINAL verification: re-verify the pair FROM SCRATCH after ALL optional output operations, so
+# success is only ever reported about the FINAL on-disk state. If anything in the optional-output
+# phase corrupted or replaced the manifest, this fails, CCC_PAIR_OK stays 0, and the EXIT trap
+# removes exactly this attempt's bundle, manifest, and provenance copy.
+PYTHONPATH="${REPO}" python3 -m release.transfer_manifest verify \
+  --bundle "${CCC_BUNDLE_OUT}" --manifest "${CCC_XFER_OUT}" \
+  || { echo "ERROR: FINAL transfer-manifest verification failed after optional outputs (fail closed)" >&2; exit 1; }
+CCC_PAIR_OK=1            # complete verified FINAL outputs -> the EXIT trap must not remove them
+echo "transfer manifest: ${CCC_XFER_OUT}"
 echo "Phase B complete. bundle=${OUT_DIR}/bundle (wheelhouse-armhf + provenance + requirements-armv7.lock)"
 echo "limits: --memory ${RAM} --memory-swap ${MEMORY_SWAP} (swap=${SWAP}, reserve=${HOST_RESERVE}); evidence=${RES_EVIDENCE}"

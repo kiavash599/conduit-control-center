@@ -63,6 +63,7 @@ def _release(base):
                             wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
                             armv7_runtime_lock_path=r["runtime_lock_path"],
                             image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"],
                             git_ref="v0.3.16", repo_dir=r["repo"])
     store = base / "as"
     store.write_text(R.public_allowed_signers_line(str(key), V.PUBLISHER_IDENTITY) + "\n")

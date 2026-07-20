@@ -22,7 +22,7 @@ auto-generated source archives are **not** part of the update trust model.
 ## Canonicalization (what makes the artifact *canonical*)
 
 The **Canonical Release Artifact** is defined by the artifact's bytes being
-**deterministic, reproducible, and platform-independent** — it is a property of
+**deterministic (per runtime), content-addressed, and platform-independent** — it is a property of
 the *release process*, not of any storage backend. Git is therefore **one valid
 producer** of a source tree, not the definition of canonicality.
 
@@ -73,7 +73,14 @@ Defense-in-depth: `.gitattributes` pins deployment artifacts to LF
 (`deployment/* text eol=lf`) so the working tree, `git archive`, and this tool
 all agree — one ruleset, three consumers.
 
-## Manifest schema (format_version 1)
+## Manifest schema (format_version 3)
+
+> **Current normative format is 3** (ADR-0003 Amendment A6). The field list below was written for
+> the original `format_version = 1` manifest and is retained as historical background. Format 3 adds
+> `source{vcs,commit,tag}`, the two-platform `artifacts[]` set, `dependency_locks`, and — for the
+> armv7l entry — a wheelhouse block whose identity is `tree_digest{scheme,sha256}` (the
+> compressor-independent Logical Tree Digest v1). The gzip-derived `bundle_sha256` is removed and
+> rejected.
 
 Fields (canonical JSON: sorted keys, no insignificant whitespace, UTF-8; the
 on-disk bytes are exactly the signed bytes):

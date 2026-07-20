@@ -106,19 +106,19 @@ def _solution_partition_inputs(tmp_path):
     req = (repo / "requirements.txt").read_text()
     authz = json.loads((repo / "release" / "builder" / "armv7-reuse-authz.json").read_text())
     reuse_versions = {w["name"]: w["version"] for w in authz["wheels"]}
-    build_pins = {n: ("1.0", {"a" * 64}) for n in R.V0317_SOURCE_BUILD_PACKAGES}
+    build_pins = {n: ("1.0", {"a" * 64}) for n in R.WHEELHOUSE_SOURCE_BUILD_PACKAGES}
     return sol, req, reuse_versions, build_pins
 
 
 def test_validate_armv7_solution_partitions_30_into_6_plus_24(tmp_path):
     sol, req, rv, bp = _solution_partition_inputs(tmp_path)
     pins = R.validate_armv7_solution(sol, req, reuse_names=set(rv), reuse_versions=rv, build_pins=bp)
-    assert len(pins) == R.V0317_TOTAL_COUNT
+    assert len(pins) == R.WHEELHOUSE_TOTAL_COUNT
 
 
 def test_validate_armv7_solution_rejects_build_version_disagreement(tmp_path):
     sol, req, rv, _bp = _solution_partition_inputs(tmp_path)
-    bad = {n: ("9.9", {"a" * 64}) for n in R.V0317_SOURCE_BUILD_PACKAGES}   # != solution version 1.0
+    bad = {n: ("9.9", {"a" * 64}) for n in R.WHEELHOUSE_SOURCE_BUILD_PACKAGES}   # != solution version 1.0
     with pytest.raises(R.ReleaseError):
         R.validate_armv7_solution(sol, req, reuse_names=set(rv), reuse_versions=rv, build_pins=bad)
 

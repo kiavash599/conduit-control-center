@@ -20,7 +20,7 @@ GEN = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(GEN)
 _TAGS_PATH = _ROOT / "release" / "builder" / "target-supported-tags.txt"
 
-BUILT = sorted(R.V0317_SOURCE_BUILD_PACKAGES)
+BUILT = sorted(R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)
 REUSED = ["reusepkg%02d" % i for i in range(1, 25)]
 _FILE_HOST = "files.pythonhosted.org"
 

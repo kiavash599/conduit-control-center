@@ -243,7 +243,8 @@ Produces exactly: `ccc-X.Y.Z-aarch64.tar.gz`, `ccc-X.Y.Z-armv7l.tar.gz`,
 secret-exclusion + no-NUL-in-text scan and fails closed on any violation.
 
 **6b. Qualify locally.** For BOTH platforms: `ssh-keygen -Y verify` the manifest; recompute each
-artifact sha256 and confirm it matches its signed entry; confirm the armv7 wheelhouse `bundle_sha256`
+artifact sha256 and confirm it matches its signed entry; confirm the armv7 wheelhouse `tree_digest`
+(scheme `ccc-logical-tree-v1`, compressor-independent -- recomputed from the exact 31-member mapping)
 and `provenance_sha256`; run `deployment/bin/ccc-verify-release` per platform (expect exit 0 for the
 matching platform, exit 2 cross-platform). Record both artifact digests.
 

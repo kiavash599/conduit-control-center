@@ -41,12 +41,13 @@ PRODUCT = "conduit-control-center"
 SSHSIG_NAMESPACE = "ccc-update-manifest"
 DIGEST_ALGORITHM = "sha256"
 PUBLISHER_IDENTITY = "conduit-control-center-publisher"   # allowed-signers principal
-# V2-only (ADR-0003 amendment): the platform-artifact manifest. V1 (single-artifact,
-# no platform binding) is intentionally NOT accepted -- supporting it would keep a
-# platform-unbound manifest shape valid and create a format-downgrade / platform-gate
-# bypass vector. No field client needs V1 (no external users; the legacy RPi4 migrates
-# manually over SSH), so the trusted surface is narrowed to {2}.
-SUPPORTED_MANIFEST_FORMATS = frozenset({2})
+# FORMAT-3-ONLY: the platform-artifact manifest with a single, compressor-independent wheelhouse
+# identity (Logical Tree Digest v1). Earlier formats are intentionally NOT accepted -- supporting
+# them would keep a platform-unbound or gzip-derived-identity shape valid and create a
+# format-downgrade / platform-gate bypass vector. There are no external users (the RPi2/RPi4 are
+# Owner-controlled and upgrade over SSH), so the trusted surface is narrowed to {3}.
+SUPPORTED_MANIFEST_FORMATS = frozenset({3})   # V3: single logical-tree wheelhouse identity
+SUPPORTED_TREE_SCHEMES = frozenset({"ccc-logical-tree-v1"})   # exact allowlist; else fail closed
 
 # Canonical host-platform tokens (raw `uname -m`); the manifest's per-artifact
 # `platform` field uses exactly these strings, removing any producer<->device
@@ -241,7 +242,22 @@ def _validate_wheelhouse(wh: object) -> None:
         raise VerifyError("wheelhouse block must be an object")
     if wh.get("path") != "wheelhouse-armhf/":
         raise VerifyError(f"wheelhouse path must be 'wheelhouse-armhf/': {wh.get('path')!r}")
-    for field in ("bundle_sha256", "requirements_sha256", "lock_sha256",
+    # FORMAT 3: exactly one wheelhouse identity -- the compressor-independent Logical Tree Digest.
+    # The legacy gzip-derived bundle_sha256 is rejected outright (no compatibility mode).
+    if "bundle_sha256" in wh:
+        raise VerifyError("legacy wheelhouse bundle_sha256 is not accepted in format 3")
+    td = wh.get("tree_digest")
+    if not isinstance(td, dict):
+        raise VerifyError("wheelhouse tree_digest must be an object")
+    if set(td) != {"scheme", "sha256"}:
+        raise VerifyError("wheelhouse tree_digest must have EXACTLY the keys "
+                          f"{{'scheme','sha256'}}; got {sorted(td)}")
+    if td.get("scheme") not in SUPPORTED_TREE_SCHEMES:
+        raise VerifyError(f"unsupported wheelhouse tree_digest scheme: {td.get('scheme')!r}")
+    _v = td.get("sha256")
+    if not _is_hex64(_v) or _v != _v.lower():
+        raise VerifyError(f"wheelhouse tree_digest.sha256 must be canonical lowercase 64-hex: {_v!r}")
+    for field in ("requirements_sha256", "lock_sha256",
                   "build_lock_sha256", "provenance_sha256"):
         if not _is_hex64(wh.get(field)):
             raise VerifyError(f"wheelhouse {field} is not a sha256: {wh.get(field)!r}")

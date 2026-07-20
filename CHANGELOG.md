@@ -11,6 +11,51 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.18] — 2026-07-20
+
+**Compressor-independent wheelhouse identity (manifest format 3) + mandatory transfer-manifest contract.**
+
+> **NOT YET RELEASED.** This entry records implemented code only. Hardware qualification (Phase A/B
+> on RPi2), tagging, signing, and GitHub Release publication are still **pending**. No `v0.3.18` tag,
+> signed asset, or Release exists.
+
+### Changed
+- **Wheelhouse identity is now the Logical Tree Digest v1** (`release/logical_tree.py`): a
+  domain-separated, length-prefixed SHA-256 over the exact 31-member `{path -> bytes}` mapping, with
+  no compression and no `tarfile`. It replaces `sha256(pack_tree(...))`, whose gzip layer made the
+  digest depend on the runtime's zlib and caused the v0.3.17 SRT to fail closed (see
+  `docs/incidents/v0.3.17-unreleased.md`).
+- **Manifest format 3.** Exactly one wheelhouse identity: `tree_digest{scheme,sha256}` in both the
+  signed manifest wheelhouse block and the provenance bundle block (plus `member_count`). The
+  gzip-derived `bundle_sha256` is removed and actively rejected. No compatibility or migration mode.
+- `pack_tree()` now builds final artifact bytes only. Its output is deterministic per runtime but is
+  **not** byte-reproducible across zlib implementations; the signed artifact digest is taken over the
+  exact published bytes, so it always describes what shipped.
+- Version-specific `V0317_*` partition constants renamed to `WHEELHOUSE_*` (the 6+24 policy continues).
+
+### Added
+- **`release/transfer_manifest.py`** — repository-owned, stdlib-only Phase-B transfer manifest
+  (`ccc-phase-b-transfer-manifest-v2`), replacing an unversioned external script. It independently
+  recomputes the Logical Tree Digest, enforces the exact 34-file bundle set at every depth, and
+  cross-checks SHA256SUMS, provenance, build evidence, and the runtime lock. Deterministic output
+  with no timestamp, so verification is a byte-for-byte comparison.
+- **Mandatory transfer-manifest gate at release production.** `produce_release` takes a required
+  `transfer_manifest_path` (`--transfer-manifest`); a missing, misnamed, substituted, malformed or
+  mismatched manifest fails closed before any artifact bytes exist. Sibling-filename inference and
+  the optional-skip path are removed.
+- **Bundle + transfer manifest as one lifecycle pair** in the Phase-B entry point: both outputs are
+  preflighted before the expensive build, and a failure removes only the current attempt's outputs,
+  never pre-existing evidence.
+- Known-answer tests for the digest built from an independently written encoder, plus exploit
+  regressions for a nested foreign path and a falsified provenance digest.
+
+### Fixed
+- `_wheelhouse_members()` hardened: symlinks, directory symlinks, and all non-regular entries are
+  rejected via `os.scandir(follow_symlinks=False)`; the validated in-memory snapshot is what gets
+  digested and packaged.
+
+---
+
 ## [0.3.17] — 2026-07-14
 
 **Declared, auditable armv7 wheelhouse builder (pinned/verified inputs) + bound builder provenance.**

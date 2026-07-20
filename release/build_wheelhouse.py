@@ -24,6 +24,7 @@ except Exception:  # noqa: BLE001 - allow running as a script from repo root
     from release import ccc_release as _R
 
 from release import reuse_authz as _reuse_authz  # noqa: E402 (release importable above)
+from release import transfer_manifest as _tmanifest  # noqa: E402 (canonical lock header)
 
 ReleaseError = _R.ReleaseError
 
@@ -352,8 +353,8 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
                                        ("requirements", requirements_text)) if not v]
             if _missing:
                 raise ReleaseError(f"production partition policy requires inputs: {_missing}")
-            if set(sdists) != set(_R.V0317_SOURCE_BUILD_PACKAGES):
-                raise ReleaseError(f"source sdists != approved six {sorted(_R.V0317_SOURCE_BUILD_PACKAGES)}; "
+            if set(sdists) != set(_R.WHEELHOUSE_SOURCE_BUILD_PACKAGES):
+                raise ReleaseError(f"source sdists != approved six {sorted(_R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)}; "
                                    f"got {sorted(sdists)}")
         authz = None
         reuse_authz_bytes = None
@@ -362,8 +363,8 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
             with open(reuse_authz_path, "rb") as fh:
                 reuse_authz_bytes = fh.read()
             authz = _reuse_authz.load_and_validate(reuse_authz_bytes, target_tags=target_tags)
-            if enforce_partition_policy and len(authz["wheels"]) != _R.V0317_REUSED_COUNT:
-                raise ReleaseError(f"reuse authorization must have exactly {_R.V0317_REUSED_COUNT} wheels; "
+            if enforce_partition_policy and len(authz["wheels"]) != _R.WHEELHOUSE_REUSED_COUNT:
+                raise ReleaseError(f"reuse authorization must have exactly {_R.WHEELHOUSE_REUSED_COUNT} wheels; "
                                    f"got {len(authz['wheels'])}")
             if reuse_wheels_dir is None or not os.path.isdir(reuse_wheels_dir):
                 raise ReleaseError(f"reuse wheels dir not found: {reuse_wheels_dir!r}")
@@ -392,9 +393,9 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         _reused_expected = {a["name"] for a, _ in reused_records}
         if _built_expected & _reused_expected:
             raise ReleaseError(f"built/reused overlap: {sorted(_built_expected & _reused_expected)}")
-        if enforce_partition_policy and (len(_built_expected) != _R.V0317_BUILT_COUNT
-                or len(_reused_expected) != _R.V0317_REUSED_COUNT
-                or len(_built_expected | _reused_expected) != _R.V0317_TOTAL_COUNT):
+        if enforce_partition_policy and (len(_built_expected) != _R.WHEELHOUSE_BUILT_COUNT
+                or len(_reused_expected) != _R.WHEELHOUSE_REUSED_COUNT
+                or len(_built_expected | _reused_expected) != _R.WHEELHOUSE_TOTAL_COUNT):
             raise ReleaseError("6/24/30 partition not feasible before build")
 
         # ================= FIELD-PROVEN six-wheel build (UNCHANGED) -- only after preflight =========
@@ -444,15 +445,15 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
 
         # PRODUCTION PARTITION POLICY (exact, before publication).
         if enforce_partition_policy:
-            if built_names != set(_R.V0317_SOURCE_BUILD_PACKAGES):
-                raise ReleaseError(f"built packages != approved six {sorted(_R.V0317_SOURCE_BUILD_PACKAGES)}; "
+            if built_names != set(_R.WHEELHOUSE_SOURCE_BUILD_PACKAGES):
+                raise ReleaseError(f"built packages != approved six {sorted(_R.WHEELHOUSE_SOURCE_BUILD_PACKAGES)}; "
                                    f"got {sorted(built_names)}")
             if built_names & reused_names:
                 raise ReleaseError(f"built/reused overlap: {sorted(built_names & reused_names)}")
-            if (len(built_names) != _R.V0317_BUILT_COUNT or len(reused_names) != _R.V0317_REUSED_COUNT
-                    or len(wheels) != _R.V0317_TOTAL_COUNT):
-                raise ReleaseError(f"partition counts must be {_R.V0317_BUILT_COUNT}/"
-                                   f"{_R.V0317_REUSED_COUNT}/{_R.V0317_TOTAL_COUNT}; got "
+            if (len(built_names) != _R.WHEELHOUSE_BUILT_COUNT or len(reused_names) != _R.WHEELHOUSE_REUSED_COUNT
+                    or len(wheels) != _R.WHEELHOUSE_TOTAL_COUNT):
+                raise ReleaseError(f"partition counts must be {_R.WHEELHOUSE_BUILT_COUNT}/"
+                                   f"{_R.WHEELHOUSE_REUSED_COUNT}/{_R.WHEELHOUSE_TOTAL_COUNT}; got "
                                    f"{len(built_names)}/{len(reused_names)}/{len(wheels)}")
 
         wheels.sort(key=lambda w: w["wheel_filename"])
@@ -460,8 +461,11 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
             for w in wheels:
                 fh.write("%s  %s\n" % (w["wheel_sha256"], w["wheel_filename"]))
 
+        # Collector hardening + compressor-independent identity: the SAME in-memory mapping is
+        # validated, digested and (by the release producer) packaged. pack_tree/gzip is NEVER used
+        # to establish identity -- that made the digest depend on the runtime's zlib.
         members = _R._wheelhouse_members(wh_dir)
-        bundle_sha = _R.sha256_hex(_R.pack_tree(members))
+        bundle_tree_sha = _R.wheelhouse_tree_digest(members)
         env = dict(environment)
         builder = {
             "identity": builder_identity,
@@ -483,10 +487,14 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
             "image_context": dict(image_context),
             "image_context_sha256": image_context_sha,
         }
-        provenance = {"builder": builder, "bundle": {"sha256": bundle_sha}, "wheels": wheels,
+        provenance = {"builder": builder,
+                      "bundle": {"tree_digest": {"scheme": _R._ltree.SCHEME,
+                                                 "sha256": bundle_tree_sha},
+                                 "member_count": len(members)},
+                      "wheels": wheels,
                       "authorizers": authorizers}
         _reuse_text = reuse_authz_bytes if reuse_authz_path is not None else None
-        _R._validate_provenance(provenance, members, bundle_sha, build_lock_text, recipe_sha,
+        _R._validate_provenance(provenance, members, bundle_tree_sha, build_lock_text, recipe_sha,
                                 bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
                                 apt_pkgs_text, extractor_tools_lock_sha,
                                 build_backends_source_allowlist_sha,
@@ -501,7 +509,7 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
         # policy: the bundle cannot publish without it.
         runtime_lock_text = None
         if requirements_text is not None:
-            lines = ["# GENERATED from the final validated wheelhouse -- DO NOT hand-edit."]
+            lines = [_tmanifest.RUNTIME_LOCK_HEADER]   # ONE definition, shared with the validator
             for w in wheels:
                 _n, _v = _R._parse_wheel_name(w["wheel_filename"])
                 lines.append(f"{_n}=={_v} --hash=sha256:{w['wheel_sha256']}")
@@ -515,7 +523,8 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
 
         with open(os.path.join(staging, "wheelhouse-armv7.json"), "w", encoding="utf-8") as fh:
             json.dump(provenance, fh)
-        evidence = {"bundle_sha256": bundle_sha, "wheel_count": len(wheels),
+        evidence = {"bundle_tree_sha256": bundle_tree_sha, "tree_scheme": _R._ltree.SCHEME,
+                    "member_count": len(members), "wheel_count": len(wheels),
                     "built": sorted(built_names), "reused": sorted(reused_names),
                     "authorizers": authorizers, "partition_policy_enforced": bool(enforce_partition_policy)}
         with open(os.path.join(staging, "build-evidence.json"), "w", encoding="utf-8") as fh:
@@ -525,7 +534,8 @@ def build_wheelhouse(*, build_lock_path: str, sdist_dir: str, out_dir: str,
     except BaseException:
         _shutil.rmtree(staging, ignore_errors=True)          # no partial/stale final on failure
         raise
-    return {"provenance": provenance, "bundle_sha256": bundle_sha, "bundle_dir": final_bundle,
+    return {"provenance": provenance, "bundle_tree_sha256": bundle_tree_sha,
+            "bundle_dir": final_bundle,
             "wheelhouse_dir": os.path.join(final_bundle, "wheelhouse-armhf"),
             "runtime_lock_text": runtime_lock_text}
 
@@ -585,7 +595,7 @@ def main(argv=None) -> int:
                            reuse_authz_path=a.reuse_authz, reuse_wheels_dir=a.reuse_wheels_dir,
                            target_tags=_tags, target_tags_sha256=_tags_sha, requirements_text=_reqs,
                            enforce_partition_policy=a.enforce_partition_policy)
-    print(f"phase-b bundle: {res['bundle_dir']}  bundle_sha256={res['bundle_sha256']}")
+    print(f"phase-b bundle: {res['bundle_dir']}  tree_sha256={res['bundle_tree_sha256']}")
     print(f"  wheelhouse={res['wheelhouse_dir']}  provenance={res['bundle_dir']}/wheelhouse-armv7.json")
     print(f"  runtime_lock={res['bundle_dir']}/requirements-armv7.lock")
     return 0

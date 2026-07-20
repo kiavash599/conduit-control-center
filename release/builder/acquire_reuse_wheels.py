@@ -29,7 +29,7 @@ import sys
 
 # repo root = parent of release/ = three levels up from release/builder/<this file>.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from release import ccc_release as _R  # noqa: E402  (V0317_REUSED_COUNT policy)
+from release import ccc_release as _R  # noqa: E402  (WHEELHOUSE_REUSED_COUNT policy)
 from release import reuse_authz as _authz  # noqa: E402
 
 METADATA_HOST = _authz.PYPI_METADATA_HOST
@@ -82,8 +82,8 @@ def acquire(authz_bytes: bytes, bundle_dir: str, *, fetcher: Fetcher, target_tag
     """Acquire + verify the exact authorized wheels and publish ONE atomic bundle. Returns the
     evidence dict. Raises AcquireError on any violation; publishes nothing on failure."""
     authz = _authz.load_and_validate(authz_bytes, target_tags=target_tags)
-    if len(authz["wheels"]) != _R.V0317_REUSED_COUNT:
-        raise AcquireError(f"reuse authorization must contain exactly {_R.V0317_REUSED_COUNT} wheels; "
+    if len(authz["wheels"]) != _R.WHEELHOUSE_REUSED_COUNT:
+        raise AcquireError(f"reuse authorization must contain exactly {_R.WHEELHOUSE_REUSED_COUNT} wheels; "
                            f"got {len(authz['wheels'])}")
     if os.path.exists(bundle_dir):
         raise AcquireError(f"bundle dir must not pre-exist (no overwrite): {bundle_dir!r}")

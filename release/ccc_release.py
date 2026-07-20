@@ -50,7 +50,9 @@ except Exception:  # noqa: BLE001 - allow `python release/ccc_release.py` (scrip
     from release import lock_validate as _lockval
 
 from release import canonical_bytes as _canon  # THE canonical text-byte rule (stdlib-only module)
+from release import logical_tree as _ltree  # THE compressor-independent wheelhouse identity (v1)
 from release import oci_manifest as _ocim  # release/ is importable (path patched above if needed)
+from release import transfer_manifest as _tmanifest  # committed Phase-B transfer contract
 from release import reuse_authz as _reuse_authz  # strict reused-wheel authorization (dual-origin)
 
 # Re-export (NOT re-implement): exactly one normalisation/digest implementation exists, in
@@ -62,7 +64,7 @@ canonical_file_sha256 = _canon.canonical_file_sha256
 # --- Normative constants (ADR-0003) ---------------------------------------- #
 
 PRODUCT = "conduit-control-center"          # Product identity (authoritative)
-MANIFEST_FORMAT_VERSION = 2                  # V2 platform-artifact manifest schema
+MANIFEST_FORMAT_VERSION = 3                  # V3: single logical-tree wheelhouse identity
 DIGEST_ALGORITHM = "sha256"                  # Content-digest algorithm
 SSHSIG_NAMESPACE = "ccc-update-manifest"     # Fixed SSHSIG namespace (sign+verify)
 
@@ -138,7 +140,10 @@ def _validate_wheelhouse_block(wh: object) -> None:
         raise ReleaseError("wheelhouse block must be an object")
     if wh.get("path") != "wheelhouse-armhf/":
         raise ReleaseError(f"wheelhouse path must be 'wheelhouse-armhf/': {wh.get('path')!r}")
-    for field in ("bundle_sha256", "requirements_sha256", "lock_sha256",
+    if "bundle_sha256" in wh:
+        raise ReleaseError("legacy wheelhouse bundle_sha256 is not part of the format-3 contract")
+    validate_tree_digest_block(wh.get("tree_digest"))
+    for field in ("requirements_sha256", "lock_sha256",
                   "build_lock_sha256", "provenance_sha256"):
         if not _is_hex64(wh.get(field)):
             raise ReleaseError(f"wheelhouse {field} must be a sha256: {wh.get(field)!r}")
@@ -243,19 +248,72 @@ def _wheelhouse_members(wheelhouse_dir: str) -> dict:
     top-level path `wheelhouse-armhf/`. Bytes are left EXACT (never LF-munged);
     injected AFTER source canonicalization so wheels are byte-preserved."""
     base = os.path.abspath(wheelhouse_dir)
-    if not os.path.isdir(base):
-        raise ReleaseError(f"wheelhouse dir not found: {wheelhouse_dir!r}")
+    if os.path.islink(base) or not os.path.isdir(base):
+        raise ReleaseError(f"wheelhouse dir not found or is a symlink: {wheelhouse_dir!r}")
     out: dict = {}
-    for root, dirs, files in os.walk(base):
-        dirs.sort()
-        for name in sorted(files):
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, base).replace(os.sep, "/")
-            with open(path, "rb") as fh:
-                out[f"wheelhouse-armhf/{rel}"] = fh.read()
+
+    def _scan(directory: str, prefix: str) -> None:
+        # Explicit os.scandir walk (never os.walk): follow_symlinks=False makes BOTH predicates
+        # false for symlinks AND for every non-regular entry (FIFO, socket, device), portably on
+        # Windows and Linux without platform-specific reparse-tag handling. Anything that is
+        # neither a real directory nor a real regular file is rejected -- the bytes we digest must
+        # be the bytes we package.
+        try:
+            entries = sorted(os.scandir(directory), key=lambda e: e.name)
+        except OSError as exc:
+            raise ReleaseError(f"wheelhouse dir unreadable: {directory!r}: {exc}") from exc
+        for entry in entries:
+            rel = f"{prefix}{entry.name}"
+            try:
+                if entry.is_symlink():
+                    raise ReleaseError(f"wheelhouse entry is a symlink (rejected): {rel}")
+                if entry.is_dir(follow_symlinks=False):
+                    _scan(entry.path, f"{rel}/")
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    raise ReleaseError(f"wheelhouse entry is not a regular file (rejected): {rel}")
+                with open(entry.path, "rb") as fh:
+                    out[f"wheelhouse-armhf/{rel}"] = fh.read()   # immutable bytes snapshot
+            except OSError as exc:
+                raise ReleaseError(f"wheelhouse entry unreadable: {rel}: {exc}") from exc
+
+    _scan(base, "")
     if not out:
         raise ReleaseError("wheelhouse dir is empty")
     return out
+
+
+def wheelhouse_tree_digest(members: dict) -> str:
+    """THE wheelhouse identity: Logical Tree Digest v1 over the exact in-memory member mapping.
+
+    Compressor-independent by construction -- no tar, no gzip -- so Phase B (RPi2) and the release
+    producer (Owner PC) always agree regardless of their zlib implementation. Domain policy (the
+    exact 31-member set) is enforced by the caller; this is the identity function only."""
+    try:
+        return _ltree.tree_digest(members)
+    except _ltree.LogicalTreeError as exc:
+        raise ReleaseError(f"wheelhouse logical-tree encoding rejected: {exc}") from exc
+
+
+def validate_tree_digest_block(block: object, *, expected_sha256: str = None) -> str:
+    """Fail-closed validation of a `tree_digest` object: EXACT key set {scheme, sha256}, the exact
+    supported scheme, and a canonical lowercase 64-hex digest. Extra/missing keys, unknown schemes,
+    and uppercase or malformed values are rejected. Returns the digest."""
+    if not isinstance(block, dict):
+        raise ReleaseError("tree_digest must be an object")
+    if set(block) != {"scheme", "sha256"}:
+        raise ReleaseError("tree_digest must have EXACTLY the keys {'scheme','sha256'}; got "
+                           f"{sorted(block)}")
+    if block["scheme"] != _ltree.SCHEME:
+        raise ReleaseError(f"unsupported tree_digest scheme: {block['scheme']!r} "
+                           f"(supported: {_ltree.SCHEME!r})")
+    value = block["sha256"]
+    if not isinstance(value, str) or not _is_hex64(value) or value != value.lower():
+        raise ReleaseError(f"tree_digest.sha256 must be canonical lowercase 64-hex: {value!r}")
+    if expected_sha256 is not None and value != expected_sha256:
+        raise ReleaseError(f"tree_digest.sha256 mismatch (recorded {value}, "
+                           f"recomputed {expected_sha256})")
+    return value
 
 
 def _read_provenance(path: str):
@@ -365,10 +423,10 @@ BUILD_LOCK_PATH = "requirements-armv7-build.lock"              # DERIVED six-ent
 # active-input generator, the producer, and the tests). These six packages publish no acceptable
 # official armv7 wheel, so they are source-built; everyone else is reused. Versions come from the
 # authoritative solution/build lock; exact sdist hashes are authorized ONLY by the six-entry lock. ---
-V0317_SOURCE_BUILD_PACKAGES = frozenset({"cffi", "httptools", "markupsafe", "psutil", "pyyaml", "uvloop"})
-V0317_BUILT_COUNT = 6
-V0317_REUSED_COUNT = 24
-V0317_TOTAL_COUNT = 30
+WHEELHOUSE_SOURCE_BUILD_PACKAGES = frozenset({"cffi", "httptools", "markupsafe", "psutil", "pyyaml", "uvloop"})
+WHEELHOUSE_BUILT_COUNT = 6
+WHEELHOUSE_REUSED_COUNT = 24
+WHEELHOUSE_TOTAL_COUNT = 30
 TARGET_GLIBC = "2.35"                # Ubuntu 22.04 (Jammy) armhf baseline
 TARGET_OS_ID = "ubuntu"
 TARGET_OS_VERSION = "22.04"
@@ -402,15 +460,15 @@ def validate_armv7_solution(solution_text: str, requirements_text: str, *,
     of requirements.txt; the approved six are a subset; and (when supplied) it partitions EXACTLY into
     the approved-six build set + the 24 reuse records with agreeing versions."""
     pins = _parse_lock_pins(solution_text)                      # closed grammar + no duplicate names
-    if len(pins) != V0317_TOTAL_COUNT:
-        raise ReleaseError(f"{SOLUTION_LOCK_PATH} must have exactly {V0317_TOTAL_COUNT} pins; got {len(pins)}")
+    if len(pins) != WHEELHOUSE_TOTAL_COUNT:
+        raise ReleaseError(f"{SOLUTION_LOCK_PATH} must have exactly {WHEELHOUSE_TOTAL_COUNT} pins; got {len(pins)}")
     _require_valid_lock(requirements_text, solution_text, SOLUTION_LOCK_PATH)   # valid solution of requirements.txt
-    approved = set(V0317_SOURCE_BUILD_PACKAGES)
+    approved = set(WHEELHOUSE_SOURCE_BUILD_PACKAGES)
     if not approved <= set(pins):
         raise ReleaseError(f"solution missing approved source-build packages: {sorted(approved - set(pins))}")
     reuse_expected = set(pins) - approved
-    if len(reuse_expected) != V0317_REUSED_COUNT:
-        raise ReleaseError(f"solution reuse partition must be {V0317_REUSED_COUNT}; got {len(reuse_expected)}")
+    if len(reuse_expected) != WHEELHOUSE_REUSED_COUNT:
+        raise ReleaseError(f"solution reuse partition must be {WHEELHOUSE_REUSED_COUNT}; got {len(reuse_expected)}")
     if build_pins is not None:
         if set(build_pins) != approved:
             raise ReleaseError(f"build lock packages != approved six; got {sorted(set(build_pins))}")
@@ -439,13 +497,13 @@ def validate_build_partition_lock(build_lock_text: str) -> dict:
     Enforces, reusing the existing authoritative primitives so no second set of rules can drift:
       * the closed pin/hash grammar via _parse_lock_pins (pinned `==`, sha256 hashes, no duplicate
         names, no directives) -- the SAME parser produce_release and the preflight use;
-      * exactly the approved six source-built packages (V0317_SOURCE_BUILD_PACKAGES).
+      * exactly the approved six source-built packages (WHEELHOUSE_SOURCE_BUILD_PACKAGES).
     Version agreement against the durable 30-pin solution is enforced separately by
     validate_armv7_solution(build_pins=...), which owns the cross-artifact relationship.
 
     Returns the parsed pins {name: (version, {hashes})}. Fails closed."""
     pins = _parse_lock_pins(build_lock_text)                 # closed grammar + hashes + no duplicates
-    approved = set(V0317_SOURCE_BUILD_PACKAGES)
+    approved = set(WHEELHOUSE_SOURCE_BUILD_PACKAGES)
     if set(pins) != approved:
         missing = sorted(approved - set(pins))
         extra = sorted(set(pins) - approved)
@@ -1007,7 +1065,7 @@ def _validate_builder(builder: object, *, recipe_sha256: str, build_backends_loc
         raise ReleaseError("provenance.builder.environment_sha256 does not match the recorded environment")
 
 
-def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str,
+def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_tree_sha256: str,
                          build_lock_text: str, recipe_sha256: str,
                          build_backends_lock_sha256: str, build_backends_lock_text: str,
                          apt_packages_sha256: str, rustup_init_file_sha256: str,
@@ -1027,7 +1085,7 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
       NOTE: image_context + image_context_sha256 are MANDATORY (no legacy mode). Their
       structure is always validated; when image_context_expected is supplied they must also
       equal the canonical committed bytes.
-      bundle:  {sha256: <bundle_sha256>}
+      bundle:  {tree_digest:{scheme,sha256}, member_count}   # format 3: logical-tree identity
       wheels:  [{sdist_name:str, sdist_sha256:hex64,
                  wheel_filename:str, wheel_sha256:hex64}, ...]
 
@@ -1048,8 +1106,22 @@ def _validate_provenance(obj: dict, wheelhouse_members: dict, bundle_sha256: str
                       manifest_bytes=image_manifest_bytes,
                       image_context_expected=image_context_expected)
     bundle = obj.get("bundle")
-    if not isinstance(bundle, dict) or bundle.get("sha256") != bundle_sha256:
-        raise ReleaseError("provenance.bundle.sha256 must equal the embedded bundle digest")
+    # FORMAT 3: one active wheelhouse identity -- the Logical Tree Digest. The legacy gzip-derived
+    # bundle.sha256 is gone entirely (it made identity depend on the runtime's zlib).
+    if not isinstance(bundle, dict):
+        raise ReleaseError("provenance.bundle must be an object")
+    if "sha256" in bundle:
+        raise ReleaseError("legacy provenance.bundle.sha256 is not part of the format-3 contract")
+    if set(bundle) != {"tree_digest", "member_count"}:
+        raise ReleaseError("provenance.bundle must have EXACTLY the keys "
+                           f"{{'tree_digest','member_count'}}; got {sorted(bundle)}")
+    validate_tree_digest_block(bundle.get("tree_digest"), expected_sha256=bundle_tree_sha256)
+    member_count = bundle.get("member_count")
+    if not isinstance(member_count, int) or isinstance(member_count, bool):
+        raise ReleaseError(f"provenance.bundle.member_count must be an int: {member_count!r}")
+    if member_count != len(wheelhouse_members):
+        raise ReleaseError(f"provenance.bundle.member_count {member_count} != actual member count "
+                           f"{len(wheelhouse_members)}")
     wheels = obj.get("wheels")
     if not isinstance(wheels, list) or not wheels:
         raise ReleaseError("provenance.wheels must be a non-empty list")
@@ -1372,10 +1444,16 @@ def _raw_from_git_ref(ref: str, repo_dir: str = ".") -> dict[str, bytes]:
 def pack_tree(mapping: dict[str, bytes]) -> bytes:
     """Pack a {arcname -> bytes} mapping into a content-fixed .tar.gz.
 
-    Determinism is enforced by sorting members and normalising metadata
-    (mtime=0, uid/gid=0, empty owner names, canonical mode 0644) plus a gzip
-    header with mtime=0. Two runs over identical content yield identical bytes,
-    so the content digest is stable.
+    SCOPE OF DETERMINISM -- read carefully. Sorting members and normalising metadata (mtime=0,
+    uid/gid=0, empty owner names, canonical mode 0644) plus a gzip header with mtime=0 make the
+    output stable for repeated runs ON THE SAME RUNTIME. It is NOT byte-reproducible across
+    different Python/zlib implementations: the DEFLATE stream is chosen by whichever zlib is
+    linked (zlib 1.2.11 and zlib-ng 1.3.1 differ on byte-identical input). Assuming otherwise is
+    what broke the v0.3.17 SRT -- see docs/incidents/v0.3.17-unreleased.md.
+
+    Therefore this function is used ONLY to build final artifact bytes, whose sha256 is taken over
+    the exact bytes actually published and signed. It must NEVER establish logical identity; that
+    is release.logical_tree (compressor-independent by construction).
     """
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w") as tar:
@@ -1505,6 +1583,46 @@ def _resolve_source(git_ref, repo_dir):
     return raw, {"vcs": "git", "commit": commit, "tag": git_ref}
 
 
+def verify_phase_b_transfer_inputs(wheelhouse_armv7_dir: str,
+                                   provenance_armv7_path: str,
+                                   armv7_runtime_lock_path: str,
+                                   transfer_manifest_path: str) -> dict:
+    """THE Phase-B transfer input gate for the release producer.
+
+    This is the single definition of the gate. ``produce_release()`` calls exactly this function
+    and performs no transfer/bundle-binding checks of its own, so a regression test that exercises
+    this helper with real producer output is exercising the production release path itself -- the
+    two cannot drift, because there is only one implementation and
+    ``test_release_gate_seam_is_the_one_produce_release_uses`` asserts ``produce_release`` reaches
+    it (and reaches it before any artifact bytes are constructed).
+
+    Returns the verified transfer manifest. Raises ReleaseError on any failure.
+    """
+    if not transfer_manifest_path:
+        raise ReleaseError("transfer_manifest_path is required (Phase-B transfer manifest)")
+    if not os.path.isfile(transfer_manifest_path):
+        raise ReleaseError(f"Phase-B transfer manifest not found: {transfer_manifest_path!r}")
+    bundle_root = os.path.dirname(os.path.abspath(wheelhouse_armv7_dir))
+    try:
+        xfer = _tmanifest.verify(bundle_root, transfer_manifest_path)
+    except _tmanifest.TransferManifestError as exc:
+        raise ReleaseError(f"Phase-B transfer manifest verification failed: {exc}") from exc
+    print(f"transfer manifest verified: {transfer_manifest_path} "
+          f"(files={xfer['file_count']}, tree_sha256={xfer['bind']['tree_sha256']})")
+    # BIND the separately-supplied inputs to the VERIFIED bundle: the provenance and runtime lock we
+    # consume must be exactly the canonical files inside the bundle just verified. Otherwise a caller
+    # could verify one bundle and feed provenance/lock bytes from somewhere else entirely.
+    for label, supplied, canonical in (
+            ("provenance", provenance_armv7_path, _tmanifest.PROVENANCE),
+            ("runtime lock", armv7_runtime_lock_path, _tmanifest.RUNTIME_LOCK)):
+        want = os.path.join(bundle_root, canonical)
+        if os.path.abspath(supplied or "") != os.path.abspath(want):
+            raise ReleaseError(
+                f"{label} must be the canonical file inside the VERIFIED Phase-B bundle: "
+                f"expected {want!r}, got {supplied!r}")
+    return xfer
+
+
 def produce_release(
     *,
     version: str,
@@ -1514,6 +1632,7 @@ def produce_release(
     provenance_armv7_path: str,
     armv7_runtime_lock_path: str,
     image_manifest_path: str,
+    transfer_manifest_path: str,
     git_ref: Optional[str] = None,
     source_dir: Optional[str] = None,
     source_commit: Optional[str] = None,
@@ -1621,6 +1740,16 @@ def produce_release(
     if not image_manifest_bytes:
         raise ReleaseError("OCI image manifest is empty")
 
+    # MANDATORY TRANSFER-MANIFEST GATE -- runs BEFORE any artifact bytes are constructed. This is an
+    # explicit REQUIRED input: never inferred from a sibling filename, never skipped. A missing,
+    # misnamed, substituted, malformed, inside-bundle or mismatched manifest fails closed before the
+    # first pack_tree() call, so invalid Phase-B inputs cannot reach artifact construction at all.
+    _xfer_manifest = verify_phase_b_transfer_inputs(
+        wheelhouse_armv7_dir=wheelhouse_armv7_dir,
+        provenance_armv7_path=provenance_armv7_path,
+        armv7_runtime_lock_path=armv7_runtime_lock_path,
+        transfer_manifest_path=transfer_manifest_path)
+
     # aarch64 = canonical source only (NO wheelhouse — isolation).
     aarch64_bytes = pack_tree(canon)
 
@@ -1629,9 +1758,10 @@ def produce_release(
     # injected as a content-addressed release input (never committed). Provenance is
     # strictly validated against the embedded bundle/SHA256SUMS AND the build lock.
     wh_members = _wheelhouse_members(wheelhouse_armv7_dir)
-    bundle_sha = sha256_hex(pack_tree(wh_members))
+    # Compressor-independent identity. pack_tree() is used ONLY to build final artifact bytes.
+    bundle_tree_sha = wheelhouse_tree_digest(wh_members)
     prov_bytes, prov_obj = _read_provenance(provenance_armv7_path)
-    _validate_provenance(prov_obj, wh_members, bundle_sha, build_lock_text, recipe_sha,
+    _validate_provenance(prov_obj, wh_members, bundle_tree_sha, build_lock_text, recipe_sha,
                          bb_lock_sha, bb_lock_text, apt_pkgs_sha, rustup_file_sha,
                          apt_pkgs_bytes.decode("utf-8", "replace"), extractor_tools_lock_sha,
                          backend_source_allowlist_sha,
@@ -1688,14 +1818,14 @@ def produce_release(
         _extra = sorted((_build_names | _reuse_names) - _runtime_names)
         raise ReleaseError("build lock + reuse authorization do not partition the runtime lock "
                            f"(missing={_miss}, extra={_extra})")
-    # v0.3.17 approved-partition policy (single source): exactly the approved six built, 24 reused, 30 total.
-    if _build_names != set(V0317_SOURCE_BUILD_PACKAGES):
-        raise ReleaseError(f"build lock packages != approved six {sorted(V0317_SOURCE_BUILD_PACKAGES)}; "
+    # approved dual-origin partition policy (single source): exactly the approved six built, 24 reused, 30 total.
+    if _build_names != set(WHEELHOUSE_SOURCE_BUILD_PACKAGES):
+        raise ReleaseError(f"build lock packages != approved six {sorted(WHEELHOUSE_SOURCE_BUILD_PACKAGES)}; "
                            f"got {sorted(_build_names)}")
-    if (len(_build_names) != V0317_BUILT_COUNT or len(_reuse_names) != V0317_REUSED_COUNT
-            or len(_runtime_names) != V0317_TOTAL_COUNT):
-        raise ReleaseError(f"partition counts must be {V0317_BUILT_COUNT}/{V0317_REUSED_COUNT}/"
-                           f"{V0317_TOTAL_COUNT}; got {len(_build_names)}/{len(_reuse_names)}/{len(_runtime_names)}")
+    if (len(_build_names) != WHEELHOUSE_BUILT_COUNT or len(_reuse_names) != WHEELHOUSE_REUSED_COUNT
+            or len(_runtime_names) != WHEELHOUSE_TOTAL_COUNT):
+        raise ReleaseError(f"partition counts must be {WHEELHOUSE_BUILT_COUNT}/{WHEELHOUSE_REUSED_COUNT}/"
+                           f"{WHEELHOUSE_TOTAL_COUNT}; got {len(_build_names)}/{len(_reuse_names)}/{len(_runtime_names)}")
 
     for _label, _computed, _expected in (
             ("requirements_sha256", requirements_sha, expected_requirements_sha256),
@@ -1722,7 +1852,7 @@ def produce_release(
     armv7_top = sorted({m.split("/", 1)[0] for m in armv7_tree})
     wheelhouse = {
         "path": "wheelhouse-armhf/",
-        "bundle_sha256": bundle_sha,
+        "tree_digest": {"scheme": _ltree.SCHEME, "sha256": bundle_tree_sha},
         "requirements_sha256": requirements_sha,
         "lock_sha256": armv7_lock_sha,
         "build_lock_sha256": armv7_build_lock_sha,
@@ -1800,6 +1930,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--expect-aarch64-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
     p.add_argument("--expect-armv7-build-lock-sha256", default=None, help="OPTIONAL expected sha256 cross-check")
     p.add_argument("--repo", default=".", help="repository directory for --git-ref (default: .)")
+    p.add_argument("--transfer-manifest", metavar="PATH",
+                   help="REQUIRED: the committed Phase-B transfer manifest describing the bundle "
+                        "(release.transfer_manifest); verified before any artifact is produced")
     p.add_argument("--recommended-core", default=None, help="advisory recommended Conduit Core version")
     p.add_argument("--out", default="dist", help="output directory for the release asset set")
     p.add_argument("--emit-trusted-publishers", metavar="PATH",
@@ -1819,9 +1952,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         if not args.version:
             raise ReleaseError("--version is required")
         if not (args.wheelhouse_armv7 and args.provenance_armv7 and args.armv7_runtime_lock
-                and args.image_manifest):
-            raise ReleaseError("--wheelhouse-armv7, --provenance-armv7, --armv7-runtime-lock and "
-                               "--image-manifest are required")
+                and args.image_manifest and args.transfer_manifest):
+            raise ReleaseError("--wheelhouse-armv7, --provenance-armv7, --armv7-runtime-lock, "
+                               "--image-manifest and --transfer-manifest are required")
         result = produce_release(
             version=args.version,
             out_dir=args.out,
@@ -1830,6 +1963,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             provenance_armv7_path=args.provenance_armv7,
             armv7_runtime_lock_path=args.armv7_runtime_lock,
             image_manifest_path=args.image_manifest,
+            transfer_manifest_path=args.transfer_manifest,
             git_ref=args.git_ref,
             repo_dir=args.repo,
             expected_requirements_sha256=args.expect_requirements_sha256,

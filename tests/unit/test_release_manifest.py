@@ -97,7 +97,8 @@ def _builder(recipe_sha=_RECIPE_SHA, **over):
 
 
 def _wh():
-    return {"path": "wheelhouse-armhf/", "bundle_sha256": "c" * 64,
+    return {"path": "wheelhouse-armhf/",
+            "tree_digest": {"scheme": R._ltree.SCHEME, "sha256": "c" * 64},
             "requirements_sha256": _REQ, "lock_sha256": _VLOCK, "build_lock_sha256": _BLOCK,
             "provenance": "provenance/wheelhouse-armv7.json", "provenance_sha256": "d" * 64}
 
@@ -124,11 +125,127 @@ def _gen_key(path):
                    check=True, capture_output=True)
 
 
+# --- MANDATORY transfer-manifest gate at the producer boundary --------------- #
+# Regression: the gate used to infer a sibling filename and skip when absent, so a missing or
+# misnamed manifest silently disabled it. It is now an explicit REQUIRED input.
+
+def _produce(tmp_path, **over):
+    r = _HF.make_release(tmp_path)
+    key = tmp_path / "k"
+    _gen_key(key)
+    kw = dict(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
+              wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
+              armv7_runtime_lock_path=r["runtime_lock_path"],
+              image_manifest_path=r["image_manifest_path"],
+              transfer_manifest_path=r["transfer_manifest_path"],
+              git_ref="v0.3.16", repo_dir=r["repo"])
+    kw.update(over)
+    return r, kw
+
+
+@_git
+@_ssh
+def test_producer_requires_transfer_manifest_argument(tmp_path):
+    r, kw = _produce(tmp_path)
+    kw["transfer_manifest_path"] = ""
+    with pytest.raises(R.ReleaseError, match="transfer_manifest_path is required"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()          # nothing produced
+
+
+@_git
+@_ssh
+def test_producer_rejects_missing_transfer_manifest(tmp_path):
+    r, kw = _produce(tmp_path)
+    os.remove(r["transfer_manifest_path"])
+    with pytest.raises(R.ReleaseError, match="transfer manifest not found"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()
+
+
+@_git
+@_ssh
+def test_producer_rejects_substituted_transfer_manifest(tmp_path):
+    r, kw = _produce(tmp_path)
+    # A structurally valid but MISMATCHED manifest (one recorded digest altered) must not be
+    # accepted. This is the substitution case: the document parses and carries the right schema,
+    # yet does not describe the bundle actually present.
+    doc = json.loads(pathlib.Path(r["transfer_manifest_path"]).read_text())
+    doc["files"][0]["sha256"] = "b" * 64
+    substituted = tmp_path / "substituted-transfer-manifest.json"
+    substituted.write_text(json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n")
+    kw["transfer_manifest_path"] = str(substituted)
+    with pytest.raises(R.ReleaseError, match="transfer manifest verification failed"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()
+
+
+@_git
+@_ssh
+def test_producer_rejects_tampered_bundle_via_transfer_manifest(tmp_path):
+    r, kw = _produce(tmp_path)
+    wheel = next(p for p in pathlib.Path(r["wheelhouse_dir"]).iterdir() if p.suffix == ".whl")
+    wheel.write_bytes(b"TAMPERED-AFTER-TRANSFER")
+    with pytest.raises(R.ReleaseError, match="transfer manifest verification failed"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()
+
+
+@_git
+@_ssh
+def test_producer_rejects_provenance_outside_the_verified_bundle(tmp_path):
+    # A well-formed provenance copy from ANOTHER location must not be consumed: the file we consume
+    # has to be the canonical one inside the bundle the transfer manifest just verified.
+    r, kw = _produce(tmp_path)
+    alt = tmp_path / "elsewhere-wheelhouse-armv7.json"
+    alt.write_bytes(pathlib.Path(r["provenance_path"]).read_bytes())     # byte-identical copy
+    kw["provenance_armv7_path"] = str(alt)
+    with pytest.raises(R.ReleaseError, match="canonical file inside the VERIFIED"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()
+
+
+@_git
+@_ssh
+def test_producer_rejects_runtime_lock_outside_the_verified_bundle(tmp_path):
+    r, kw = _produce(tmp_path)
+    alt = tmp_path / "elsewhere-requirements-armv7.lock"
+    alt.write_bytes(pathlib.Path(r["runtime_lock_path"]).read_bytes())
+    kw["armv7_runtime_lock_path"] = str(alt)
+    with pytest.raises(R.ReleaseError, match="canonical file inside the VERIFIED"):
+        R.produce_release(**kw)
+    assert not (tmp_path / "d").exists()
+
+
+@_git
+@_ssh
+def test_transfer_verification_precedes_artifact_construction(tmp_path):
+    # The mandatory gate must run BEFORE the first pack_tree() call, so invalid Phase-B inputs never
+    # reach artifact construction. Fail the gate and assert pack_tree was never invoked.
+    r, kw = _produce(tmp_path)
+    os.remove(r["transfer_manifest_path"])
+    calls = {"n": 0}
+    real = R.pack_tree
+
+    def counting(mapping):
+        calls["n"] += 1
+        return real(mapping)
+
+    R.pack_tree = counting
+    try:
+        with pytest.raises(R.ReleaseError, match="transfer manifest not found"):
+            R.produce_release(**kw)
+    finally:
+        R.pack_tree = real
+    assert calls["n"] == 0, "artifact construction was reached despite a failed transfer gate"
+    assert not (tmp_path / "d").exists()
+
+
 # --- schema + cardinality (defect 4) --------------------------------------- #
 
 def test_build_manifest_v2_fields():
     m = R.build_manifest(version="0.3.16", source=_SRC, artifacts=_entries(), dependency_locks=_locks())
-    assert m["format_version"] == 2
+    assert m["format_version"] == 3
     assert [a["platform"] for a in m["artifacts"]] == ["aarch64", "armv7l"]
     assert m["artifacts"][0]["top_level"] == ["backend", "requirements.txt"]
     assert set(m["dependency_locks"]) == {"requirements_sha256", "aarch64_lock_sha256",
@@ -201,14 +318,16 @@ def _prov_case(*, wname="fastapi-0.133.0-py3-none-any.whl", sname="fastapi-0.133
     wsha = hashlib.sha256(wheel).hexdigest()
     members = {f"wheelhouse-armhf/{wname}": wheel,
                "wheelhouse-armhf/SHA256SUMS": ("%s  %s\n" % (wsha, wname)).encode()}
-    bundle = R.sha256_hex(R.pack_tree(members))
+    bundle = R.wheelhouse_tree_digest(members)
     # Dual-origin (A5): every provenance wheel record MUST declare its origin.
     wheels = [{"origin": "built", "sdist_name": sname, "sdist_sha256": sdh,
                "wheel_filename": wname, "wheel_sha256": wsha}]
     if dup:
         wheels.append(dict(wheels[0]))
     prov = {"builder": builder if builder is not None else _builder(),
-            "bundle": {"sha256": "f" * 64 if break_bundle else bundle}, "wheels": wheels}
+            "bundle": {"tree_digest": {"scheme": R._ltree.SCHEME,
+                                       "sha256": "f" * 64 if break_bundle else bundle},
+                       "member_count": len(members)}, "wheels": wheels}
     return prov, members, bundle, build
 
 
@@ -309,13 +428,15 @@ def _wheelhouse_prov_lock(tmp):
     wsha = hashlib.sha256(wheel).hexdigest()
     (wh / _REUSE_WHEEL).write_bytes(_REUSE_BYTES)                        # dual-origin: reused wheel
     (wh / "SHA256SUMS").write_text("%s  %s\n%s  %s\n" % (wsha, wname, _REUSE_SHA, _REUSE_WHEEL))
-    bundle = R.sha256_hex(R.pack_tree(R._wheelhouse_members(str(wh))))
+    bundle = R.wheelhouse_tree_digest(R._wheelhouse_members(str(wh)))
     # target_tags is MANDATORY: the committed 495-tag artifact is the single target-compat source.
     authz_sha = _RA.sha256_hex(_RA.canonical_bytes(_RA.load_and_validate(
         _REUSE_AUTHZ_JSON.encode(), target_tags=set(_HF.TARGET_TAGS_TEXT.split()))))
     prov = tmp / "prov.json"
     prov.write_text(json.dumps({
-        "builder": _builder(), "bundle": {"sha256": bundle},
+        "builder": _builder(),
+        "bundle": {"tree_digest": {"scheme": R._ltree.SCHEME, "sha256": bundle},
+                   "member_count": len(R._wheelhouse_members(str(wh)))},
         "authorizers": {"reuse_authz_sha256": authz_sha},
         "wheels": [
             {"origin": "built", "sdist_name": "fastapi-0.133.0.tar.gz", "sdist_sha256": _SDH,
@@ -336,7 +457,8 @@ def test_produce_release_rejects_caller_asserted_source(tmp_path):
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):                 # --source path removed (I4)
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
                           provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
                           source_dir=str(tmp_path), source_commit=_COMMIT, source_tag="v0.3.16")
 
@@ -348,7 +470,8 @@ def test_produce_release_requires_runtime_lock(tmp_path):
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
                           provenance_armv7_path=r["provenance_path"],
                           armv7_runtime_lock_path=str(tmp_path / "missing.lock"),
                           git_ref="v0.3.16", repo_dir=r["repo"])
@@ -364,7 +487,8 @@ def test_produce_release_rejects_malformed_committed_lock(tmp_path):
     _gen_key(key) if _HAS_SSH else key.write_text("x")
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
                           provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
                           git_ref="v0.3.16", repo_dir=r["repo"])
 
@@ -378,7 +502,8 @@ def test_produce_release_full_dual_origin_6_24_30(tmp_path):
         pytest.skip("ssh-keygen required")
     _gen_key(key)
     res = R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                            image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                            image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
                             provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
                             git_ref="v0.3.16", repo_dir=r["repo"])
     assert os.path.isfile(res["manifest"]) and os.path.isfile(res["signature"])
@@ -400,7 +525,8 @@ def test_produce_release_rejects_target_tags_sha_mismatch(tmp_path):
     prov.write_text(json.dumps(obj))
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
-                          image_manifest_path=r["image_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
+                          image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"], wheelhouse_armv7_dir=r["wheelhouse_dir"],
                           provenance_armv7_path=r["provenance_path"], armv7_runtime_lock_path=r["runtime_lock_path"],
                           git_ref="v0.3.16", repo_dir=r["repo"])
 
@@ -439,6 +565,7 @@ def test_produce_release_v2_end_to_end(tmp_path):
     repo = r["repo"]
     res = R.produce_release(version="0.3.16", out_dir=str(tmp_path / "dist"), key_path=str(key),
                             image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"],
                             wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
                             armv7_runtime_lock_path=r["runtime_lock_path"],
                             git_ref="v0.3.16", repo_dir=repo, recommended_conduit_core="2.0.0")
@@ -474,6 +601,7 @@ def test_producer_requires_extractor_tools_lock(tmp_path):
     with pytest.raises(R.ReleaseError):
         R.produce_release(version="0.3.16", out_dir=str(tmp_path / "d"), key_path=str(key),
                           image_manifest_path=r["image_manifest_path"],
+                            transfer_manifest_path=r["transfer_manifest_path"],
                           wheelhouse_armv7_dir=r["wheelhouse_dir"], provenance_armv7_path=r["provenance_path"],
                           armv7_runtime_lock_path=r["runtime_lock_path"],
                           git_ref="v0.3.16", repo_dir=repo)
