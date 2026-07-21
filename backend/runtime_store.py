@@ -742,13 +742,93 @@ def _validate_tree_shape(root: str) -> None:
                 raise RuntimeStoreError(f"hardlinked file in runtime tree: {path!r}")
 
 
+def _tighten_base_venv_permissions(root: str,
+                                   owner_uid: int = OWNER_UID) -> None:
+    """Remove g/o-write inherited from base-venv templates, before install.
+
+    Some Python distributions preserve the mode of their bundled activation
+    templates after applying the child umask.  This narrowly normalizes only
+    the freshly created, trusted base venv; arbitrary installer output is
+    never permission-laundered.  Shape/ownership/set-id checks for the complete
+    tree precede every mutation, and fchmod operates on an O_NOFOLLOW
+    descriptor whose identity is matched back to the read-only preflight.
+    """
+    _validate_tree_shape(root)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if (not nofollow or not directory or not nonblock
+            or not hasattr(os, "fchmod")):
+        raise RuntimeStoreError("secure base-venv permission tightening unavailable")
+
+    paths = [root]
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        paths.extend(os.path.join(dirpath, name)
+                     for name in dirnames + filenames)
+
+    preflight = []
+    for path in paths:
+        try:
+            before = os.lstat(path)
+        except OSError as exc:
+            raise RuntimeStoreError(
+                f"base venv entry {path!r} changed during preflight: {exc}") from exc
+        if stat.S_ISLNK(before.st_mode):
+            continue  # allowed interpreter links were checked by the shape gate
+        if before.st_uid != owner_uid:
+            raise RuntimeStoreError(
+                f"base venv entry {path!r} owner uid {before.st_uid}, "
+                f"expected {owner_uid}")
+        if before.st_mode & 0o6000:
+            raise RuntimeStoreError(f"base venv entry {path!r} is setuid/setgid")
+        preflight.append((path, before.st_dev, before.st_ino,
+                          stat.S_ISDIR(before.st_mode)))
+
+    for path, expected_dev, expected_ino, is_dir in preflight:
+        flags = (os.O_RDONLY | nofollow | nonblock
+                 | getattr(os, "O_CLOEXEC", 0))
+        if is_dir:
+            flags |= directory
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise RuntimeStoreError(
+                f"cannot securely open base venv entry {path!r}: {exc}") from exc
+        try:
+            current = os.fstat(fd)
+            if (current.st_dev, current.st_ino) != (expected_dev, expected_ino):
+                raise RuntimeStoreError(
+                    f"base venv entry {path!r} changed during permission tightening")
+            current_is_dir = stat.S_ISDIR(current.st_mode)
+            if current_is_dir != is_dir or (not is_dir
+                                             and not stat.S_ISREG(current.st_mode)):
+                raise RuntimeStoreError(
+                    f"base venv entry {path!r} changed type during tightening")
+            if stat.S_ISREG(current.st_mode) and current.st_nlink != 1:
+                raise RuntimeStoreError(
+                    f"base venv entry {path!r} became hardlinked")
+            if current.st_uid != owner_uid:
+                raise RuntimeStoreError(
+                    f"base venv entry {path!r} owner changed during tightening")
+            if current.st_mode & 0o6000:
+                raise RuntimeStoreError(
+                    f"base venv entry {path!r} became setuid/setgid")
+            mode = stat.S_IMODE(current.st_mode)
+            if mode & 0o022:
+                os.fchmod(fd, mode & ~0o022)
+        finally:
+            os.close(fd)
+
+    _validate_tree_path(root, owner_uid)
+
+
 def _validate_tree_path(root: str, owner_uid: int = OWNER_UID) -> None:
     """Recursively validate a runtime tree without following any symlink.
 
-    This function is deliberately read-only.  In particular it must run before
-    any chmod/chown normalization: those operations follow directory symlinks on
-    POSIX and could otherwise mutate an external target before the escape is
-    rejected.
+    This function is deliberately read-only.  It must run before ordinary
+    path-based chmod/chown normalization, which can follow directory symlinks.
+    The base-venv exception above first shape-gates the complete tree, then uses
+    identity-matched O_NOFOLLOW descriptors, and finally calls this full gate.
     """
     _validate_tree_shape(root)
     rst = os.lstat(root)
@@ -986,6 +1066,7 @@ def stage_candidate(app_dir: str, runtime_id: str, attempt_id: str,
                        umask=0o022)
     if r.returncode != 0:
         raise RuntimeStoreError(f"venv creation failed: {r.stderr.strip()[:200]}")
+    _tighten_base_venv_permissions(staging, owner_uid)
     return os.path.join(staging, "bin", "python3")
 
 

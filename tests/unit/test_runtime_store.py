@@ -334,6 +334,21 @@ def _install_nothing(py):
     return None
 
 
+def _patch_created_venv(monkeypatch, mutation):
+    """Mutate only the venv child output, before stage_candidate inspects it."""
+    real_run = subprocess.run
+
+    def run_with_mutated_venv(*args, **kwargs):
+        result = real_run(*args, **kwargs)
+        command = args[0] if args else kwargs["args"]
+        if (result.returncode == 0 and len(command) >= 4
+                and list(command[1:3]) == ["-m", "venv"]):
+            mutation(pathlib.Path(command[-1]))
+        return result
+
+    monkeypatch.setattr(subprocess, "run", run_with_mutated_venv)
+
+
 def test_build_candidate_full_lifecycle(tmp_path):
     app, priv = _converted(tmp_path)
     rid = "e" * 64
@@ -351,10 +366,23 @@ def test_build_candidate_full_lifecycle(tmp_path):
     assert not [n for n in os.listdir(app / ".venvs") if n.startswith(".staging-")]
 
 
-def test_candidate_venv_creation_does_not_inherit_ambient_umask(tmp_path):
-    """GitHub runners use 0002; candidate trust must remain deterministic."""
+def test_candidate_venv_creation_does_not_inherit_ambient_umask(tmp_path,
+                                                                monkeypatch):
+    """Runner umask and group-writable Python templates cannot affect trust."""
     app, priv = _converted(tmp_path)
     rid = "e" * 64
+    injected_modes = []
+
+    def make_activation_template_group_writable(staging):
+        bin_dir = staging / "bin"
+        activate = staging / "bin" / "activate"
+        bin_mode = stat.S_IMODE(bin_dir.stat().st_mode) | 0o020
+        activate_mode = stat.S_IMODE(activate.stat().st_mode) | 0o020
+        os.chmod(bin_dir, bin_mode)
+        os.chmod(activate, activate_mode)
+        injected_modes.append((bin_mode, activate_mode))
+
+    _patch_created_venv(monkeypatch, make_activation_template_group_writable)
     previous_umask = os.umask(0o002)
     try:
         got = RS.build_candidate(
@@ -368,11 +396,64 @@ def test_candidate_venv_creation_does_not_inherit_ambient_umask(tmp_path):
     finally:
         os.umask(previous_umask)
 
+    assert len(injected_modes) == 1
+    assert all(mode & 0o020 for mode in injected_modes[0])
     assert got == rid
+    bin_dir = app / ".venvs" / rid / "bin"
     activate = app / ".venvs" / rid / "bin" / "activate"
+    assert stat.S_IMODE(bin_dir.stat().st_mode) & 0o022 == 0
     assert stat.S_IMODE(activate.stat().st_mode) & 0o022 == 0
     RS.validate_target(str(app), rid, UID)
     RS.validate_runtime_tree(str(app), rid, UID)
+
+
+@pytest.mark.parametrize(
+    ("alias_kind", "message"),
+    (("symlink", "disallowed symlink"), ("hardlink", "hardlinked file")),
+)
+def test_base_venv_tightening_never_mutates_external_alias(
+        tmp_path, monkeypatch, alias_kind, message):
+    """The pre-install tightening gate cannot chmod outside the staging tree."""
+    app, _priv = _converted(tmp_path)
+    victim = tmp_path / "external-activation"
+    victim.write_text("preserve")
+    os.chmod(victim, 0o660)
+    before = stat.S_IMODE(victim.stat().st_mode)
+
+    def replace_activation_with_external_alias(staging):
+        activate = staging / "bin" / "activate"
+        activate.unlink()
+        if alias_kind == "symlink":
+            activate.symlink_to(victim)
+        else:
+            os.link(victim, activate)
+
+    _patch_created_venv(monkeypatch, replace_activation_with_external_alias)
+    with pytest.raises(RS.RuntimeStoreError, match=message):
+        RS.stage_candidate(str(app), "e" * 64, "abcdefabcdef", UID)
+
+    assert stat.S_IMODE(victim.stat().st_mode) == before
+    assert victim.read_text() == "preserve"
+
+
+def test_installer_group_writable_output_is_not_permission_laundered(tmp_path):
+    """Only base-venv templates are tightened; installer output stays strict."""
+    app, priv = _converted(tmp_path)
+    rid = "e" * 64
+
+    def install_group_writable_file(py):
+        unsafe = pathlib.Path(py).parent.parent / "installer-output"
+        unsafe.write_text("unsafe")
+        os.chmod(unsafe, 0o664)
+
+    with pytest.raises(RS.RuntimeStoreError, match="group/other writable"):
+        RS.build_candidate(
+            str(app), str(priv), rid, attempt_id="abcdefabcdef",
+            install_cmd=install_group_writable_file,
+            manifest_fields={"input_digest": "f" * 64},
+            owner_uid=UID, smoke_imports=(),
+        )
+    assert not (app / ".venvs" / rid).exists()
 
 
 def test_build_candidate_failure_leaves_active_untouched_and_no_validated_manifest(tmp_path):
