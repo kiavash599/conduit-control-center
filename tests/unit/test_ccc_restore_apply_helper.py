@@ -2,10 +2,12 @@
 """Unit tests for deployment/bin/ccc-restore-apply (S4B-2.1).
 
 Loads the extension-less helper via importlib, redirects its hardcoded path
-constants to tmp dirs, and stubs the backend engine + systemd/health + detach so
+constants to tmp dirs, and stubs the backend engine + systemd/health + transient
+unit handoff so
 frame parsing, pre-flight, lock, checkpoint, worker branching, and the outcome
-file can be exercised on Linux without root, systemd, cryptography, or a real
-fork. The real double-fork + service stop/start is Pi-only (S4B-2.5)."""
+file can be exercised without root, systemd, cryptography, or a live service.
+Linux also exercises the real FIFO/fork handoff; real systemd remains
+device-authoritative."""
 from __future__ import annotations
 
 import importlib.util
@@ -36,8 +38,19 @@ def _load():
 
 
 @pytest.fixture
-def mod():
-    return _load()
+def mod(monkeypatch):
+    # The real helper exits after main(), so its restrictive process umask has
+    # no caller to contaminate. These tests invoke main() in-process; restore
+    # the pytest process's ambient umask after every case.
+    original_umask = os.umask(0o077)
+    os.umask(original_umask)
+    m = _load()
+    # Epic-1: run the root-owned-state invariants against the TEST user's uid.
+    monkeypatch.setattr(m, "_OWNER_UID", getattr(os, "getuid", lambda: 0)())
+    try:
+        yield m
+    finally:
+        os.umask(original_umask)
 
 
 # --- dummy engine + helpers -------------------------------------------------
@@ -116,18 +129,29 @@ def test_parse_frame_short_read(mod):
         mod.parse_frame(io.BytesIO(raw))
 
 
-# --- main: usage / state-dir / pre-flight / lock / backend ------------------
+# --- main: usage / state-dir / lock / transient-unit handoff ----------------
 
 
 def _wire_main(mod, tmp_path, monkeypatch, open_backup):
-    state = tmp_path / "state"
-    state.mkdir()
+    priv = tmp_path / "priv"
+    priv.mkdir(mode=0o700)
+    os.chmod(str(priv), 0o700)
+    attempts = priv / "attempts"
+    attempts.mkdir(mode=0o700)
+    os.chmod(str(attempts), 0o700)
+    pub = tmp_path / "pub"
+    pub.mkdir(mode=0o755)
+    os.chmod(str(pub), 0o755)
     ccc = tmp_path / "ccc"
     ccc.mkdir()
-    monkeypatch.setattr(mod, "STATE_DIR", str(state))
-    monkeypatch.setattr(mod, "OUTCOME_PATH", str(state / "restore-status.json"))
-    monkeypatch.setattr(mod, "LOCK_PATH", str(state / ".restore.lock"))
+    monkeypatch.setattr(mod, "PRIVATE_DIR", str(priv))
+    monkeypatch.setattr(mod, "ATTEMPTS_DIR", str(attempts))
+    monkeypatch.setattr(mod, "PUBLIC_STATUS_DIR", str(pub))
+    monkeypatch.setattr(mod, "OUTCOME_PATH", str(pub / "restore-status.json"))
+    monkeypatch.setattr(mod, "LOCK_PATH", str(priv / "lifecycle.lock"))
     monkeypatch.setattr(mod, "CCC_DIR", str(ccc))
+    monkeypatch.setattr(mod, "_unit_busy", lambda unit: False)
+    state = pub    # back-compat alias for callers that inspect the outcome dir
     monkeypatch.setattr(
         mod, "_load_backend",
         lambda: (open_backup, lambda opened, ccc_dir: _Result("restored"),
@@ -142,34 +166,41 @@ def test_main_usage(mod):
 
 @_linux_only
 def test_main_state_dir_missing(mod, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "STATE_DIR", str(tmp_path / "nope"))
+    monkeypatch.setattr(mod, "PRIVATE_DIR", str(tmp_path / "nope"))
+    monkeypatch.setattr(mod, "PUBLIC_STATUS_DIR", str(tmp_path / "nope2"))
     assert mod.main(argv=["apply"], stdin=io.BytesIO(_frame())) == mod.EXIT_FS
 
 
 @_linux_only
-def test_main_preflight_failure_no_detach_no_outcome(mod, tmp_path, monkeypatch):
-    def bad(blob, pp):
-        raise _CryptoErr("wrong passphrase")
+def test_main_worker_preflight_failure_no_ack_no_outcome(mod, tmp_path, monkeypatch):
+    state, _ = _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
 
-    state, _ = _wire_main(mod, tmp_path, monkeypatch, bad)
-    detached = []
-    monkeypatch.setattr(mod, "_detach_and_run", lambda *a: detached.append(a))
+    def handoff(frame, restore_id, attempt_id, work, payload, ack, lockfd):
+        os.close(lockfd)
+        return mod.EXIT_PREFLIGHT, f"error {mod.EXIT_PREFLIGHT}"
+
+    monkeypatch.setattr(mod, "_handoff_and_wait", handoff)
     rc = mod.main(argv=["apply"], stdin=io.BytesIO(_frame()))
     assert rc == mod.EXIT_PREFLIGHT
-    assert detached == []                                   # never detached
     assert not (state / "restore-status.json").exists()     # nothing changed
+    assert list(pathlib.Path(mod.ATTEMPTS_DIR).iterdir()) == []
 
 
 @_linux_only
-def test_main_preflight_success_acks_and_detaches(mod, tmp_path, monkeypatch, capsys):
-    sentinel = _Opened()
-    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: sentinel)
+def test_main_success_returns_exact_worker_ack(mod, tmp_path, monkeypatch, capsys):
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
     seen = []
-    monkeypatch.setattr(mod, "_detach_and_run",
-                        lambda opened, rb, rid, started, fd: seen.append((opened, rid)))
+
+    def handoff(frame, restore_id, attempt_id, work, payload, ack, lockfd):
+        seen.append((frame, restore_id, attempt_id, work, payload, ack))
+        os.close(lockfd)
+        return mod.EXIT_OK, f"accepted {restore_id}"
+
+    monkeypatch.setattr(mod, "_handoff_and_wait", handoff)
     rc = mod.main(argv=["apply"], stdin=io.BytesIO(_frame()))
     assert rc == mod.EXIT_OK
-    assert seen and seen[0][0] is sentinel and seen[0][1] == _RID
+    assert seen and seen[0][1] == _RID
+    assert b"secretpass" in seen[0][0]  # payload is handed over in memory/FIFO only
     assert capsys.readouterr().out.startswith("accepted " + _RID)
 
 
@@ -177,9 +208,8 @@ def test_main_preflight_success_acks_and_detaches(mod, tmp_path, monkeypatch, ca
 def test_main_busy_lock(mod, tmp_path, monkeypatch):
     import fcntl
 
-    state, _ = _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
-    monkeypatch.setattr(mod, "_detach_and_run", lambda *a: None)
-    held = os.open(str(state / ".restore.lock"), os.O_CREAT | os.O_WRONLY, 0o600)
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
+    held = os.open(str(mod.LOCK_PATH), os.O_CREAT | os.O_WRONLY, 0o600)
     fcntl.flock(held, fcntl.LOCK_EX)
     try:
         assert mod.main(argv=["apply"], stdin=io.BytesIO(_frame())) == mod.EXIT_BUSY
@@ -189,17 +219,261 @@ def test_main_busy_lock(mod, tmp_path, monkeypatch):
 
 
 @_linux_only
-def test_main_backend_unavailable(mod, tmp_path, monkeypatch):
-    state = tmp_path / "state"
-    state.mkdir()
-    monkeypatch.setattr(mod, "STATE_DIR", str(state))
-    monkeypatch.setattr(mod, "LOCK_PATH", str(state / ".restore.lock"))
-
+def test_public_main_never_imports_restore_backend(mod, tmp_path, monkeypatch):
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
     def boom():
-        raise ImportError("no backend")
+        raise AssertionError("public handoff path must not import the restore backend")
 
     monkeypatch.setattr(mod, "_load_backend", boom)
+
+    def handoff(frame, restore_id, attempt_id, work, payload, ack, lockfd):
+        os.close(lockfd)
+        return mod.EXIT_OK, f"accepted {restore_id}"
+
+    monkeypatch.setattr(mod, "_handoff_and_wait", handoff)
+    assert mod.main(argv=["apply"], stdin=io.BytesIO(_frame())) == mod.EXIT_OK
+
+
+# --- real Linux FIFO/fork handoff ------------------------------------------
+
+
+@_linux_only
+def test_real_fifo_fork_handoff_keeps_secrets_out_of_argv_and_env(
+        mod, tmp_path, monkeypatch):
+    blob = b"real-fifo-ciphertext"
+    passphrase = b"real-fifo-passphrase"
+    worker_entered = tmp_path / "worker-entered"
+    release_worker = tmp_path / "release-worker"
+    child = {}
+
+    def open_backup(got_blob, got_passphrase):
+        assert got_blob == blob
+        assert got_passphrase == passphrase
+        return _Opened()
+
+    _wire_main(mod, tmp_path, monkeypatch, open_backup)
+
+    def fake_run_worker(opened, restore_backup, restore_id, started_utc,
+                        lockfd=None):
+        assert isinstance(opened, _Opened)
+        worker_entered.write_text("entered", encoding="ascii")
+        deadline = mod.time.monotonic() + 5
+        while not release_worker.exists() and mod.time.monotonic() < deadline:
+            mod.time.sleep(0.01)
+        return "restored"
+
+    monkeypatch.setattr(mod, "run_worker", fake_run_worker)
+    attempt_id = "a1b2c3d4e5f6"
+    work, payload_fifo, ack_fifo = mod._prepare_handoff(attempt_id)
+    lockfd = mod.acquire_lock()
+
+    def launch(got_attempt, got_restore, got_work):
+        assert (got_attempt, got_restore, got_work) == (
+            attempt_id, _RID, work)
+        pid = os.fork()
+        if pid == 0:
+            # systemd starts the real worker across an exec boundary, so the
+            # O_CLOEXEC launch lock is not inherited.  Mirror that boundary in
+            # this fork-only harness; otherwise the child waits on its own copy
+            # of the parent's flock forever.
+            os.close(lockfd)
+            os._exit(mod._run_worker_entry(attempt_id, _RID, work))
+        child["pid"] = pid
+        return 0
+
+    monkeypatch.setattr(mod, "_launch_restore_unit", launch)
+    frame = mod._frame_bytes(_RID, blob, passphrase)
+    try:
+        rc, ack = mod._handoff_and_wait(
+            frame, _RID, attempt_id, work, payload_fifo, ack_fifo, lockfd)
+        assert rc == mod.EXIT_OK
+        assert ack == f"accepted {_RID}"
+        deadline = mod.time.monotonic() + 2
+        while not worker_entered.exists() and mod.time.monotonic() < deadline:
+            mod.time.sleep(0.01)
+        assert worker_entered.exists()
+        proc = pathlib.Path(f"/proc/{child['pid']}")
+        exposed = (
+            (proc / "cmdline").read_bytes()
+            + (proc / "environ").read_bytes()
+        )
+        assert blob not in exposed
+        assert passphrase not in exposed
+        assert sorted(os.listdir(work)) == ["ack.fifo", "payload.fifo"]
+        assert all(
+            pathlib.Path(work, name).is_fifo()
+            for name in ("ack.fifo", "payload.fifo")
+        )
+    finally:
+        release_worker.touch()
+        if "pid" in child:
+            _, status = os.waitpid(child["pid"], 0)
+            assert os.waitstatus_to_exitcode(status) == mod.EXIT_OK
+    assert not os.path.lexists(work)
+
+
+@_linux_only
+def test_real_fifo_malformed_ack_stops_transient_unit(
+        mod, tmp_path, monkeypatch):
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
+    attempt_id = "b1c2d3e4f5a6"
+    work, payload_fifo, ack_fifo = mod._prepare_handoff(attempt_id)
+    lockfd = mod.acquire_lock()
+    stopped = []
+    child = {}
+
+    def launch(*_args):
+        pid = os.fork()
+        if pid == 0:
+            with open(payload_fifo, "rb", buffering=0) as stream:
+                while stream.read(4096):
+                    pass
+            with open(ack_fifo, "wb", buffering=0) as stream:
+                stream.write(b"malformed acknowledgement\n")
+            os._exit(0)
+        child["pid"] = pid
+        return 0
+
+    monkeypatch.setattr(mod, "_launch_restore_unit", launch)
+    monkeypatch.setattr(mod, "_stop_restore_unit", lambda: stopped.append(True))
+    try:
+        rc, ack = mod._handoff_and_wait(
+            mod._frame_bytes(_RID, b"blob", b"pw"),
+            _RID, attempt_id, work, payload_fifo, ack_fifo, lockfd,
+        )
+        assert rc == mod.EXIT_INTERNAL
+        assert ack == "malformed acknowledgement"
+        assert stopped == [True]
+    finally:
+        if "pid" in child:
+            os.waitpid(child["pid"], 0)
+        mod._cleanup_attempt(attempt_id, work)
+
+
+@_linux_only
+def test_real_fifo_timeout_stops_transient_unit(
+        mod, tmp_path, monkeypatch):
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
+    monkeypatch.setattr(mod, "HANDOFF_TIMEOUT_S", 0.05)
+    attempt_id = "c1d2e3f4a5b6"
+    work, payload_fifo, ack_fifo = mod._prepare_handoff(attempt_id)
+    lockfd = mod.acquire_lock()
+    stopped = []
+    monkeypatch.setattr(mod, "_launch_restore_unit", lambda *_args: 0)
+    monkeypatch.setattr(mod, "_stop_restore_unit", lambda: stopped.append(True))
+    try:
+        with pytest.raises(TimeoutError):
+            mod._handoff_and_wait(
+                mod._frame_bytes(_RID, b"blob", b"pw"),
+                _RID, attempt_id, work, payload_fifo, ack_fifo, lockfd,
+            )
+        assert stopped == [True]
+    finally:
+        mod._cleanup_attempt(attempt_id, work)
+
+
+@_linux_only
+def test_real_fifo_ack_wait_timeout_stops_transient_unit(
+        mod, tmp_path, monkeypatch):
+    """Reach the post-payload ack deadline, not the payload-open deadline."""
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
+    monkeypatch.setattr(mod, "HANDOFF_TIMEOUT_S", 0.08)
+    attempt_id = "d1e2f3a4b5c6"
+    work, payload_fifo, ack_fifo = mod._prepare_handoff(attempt_id)
+    lockfd = mod.acquire_lock()
+    stopped = []
+    child = {}
+    frame = mod._frame_bytes(_RID, b"blob", b"pw")
+    ready_r, ready_w = os.pipe()
+
+    def launch(*_args):
+        pid = os.fork()
+        if pid == 0:
+            os.close(ready_r)
+            payloadfd = os.open(payload_fifo, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                os.write(ready_w, b"1")
+                os.close(ready_w)
+                received = bytearray()
+                deadline = mod.time.monotonic() + 2
+                while len(received) < len(frame) and mod.time.monotonic() < deadline:
+                    try:
+                        chunk = os.read(payloadfd, len(frame) - len(received))
+                    except BlockingIOError:
+                        chunk = b""
+                    if chunk:
+                        received.extend(chunk)
+                    else:
+                        mod.time.sleep(0.005)
+                if bytes(received) != frame:
+                    os._exit(2)
+                # The worker consumed the complete payload but deliberately
+                # never opens/writes ack.fifo.  Parent must hit the ack deadline.
+                mod.time.sleep(0.20)
+                os._exit(0)
+            finally:
+                os.close(payloadfd)
+        os.close(ready_w)
+        child["pid"] = pid
+        assert os.read(ready_r, 1) == b"1"
+        os.close(ready_r)
+        return 0
+
+    monkeypatch.setattr(mod, "_launch_restore_unit", launch)
+    monkeypatch.setattr(mod, "_stop_restore_unit", lambda: stopped.append(True))
+    try:
+        rc, ack = mod._handoff_and_wait(
+            frame, _RID, attempt_id, work, payload_fifo, ack_fifo, lockfd)
+        assert rc == mod.EXIT_INTERNAL
+        assert ack == ""
+        assert stopped == [True]
+    finally:
+        if "pid" in child:
+            _, status = os.waitpid(child["pid"], 0)
+            assert os.waitstatus_to_exitcode(status) == 0
+        else:
+            os.close(ready_r)
+            os.close(ready_w)
+        mod._cleanup_attempt(attempt_id, work)
+
+
+@_linux_only
+def test_main_preserves_attempt_while_restore_unit_owns_it(
+        mod, tmp_path, monkeypatch):
+    _wire_main(mod, tmp_path, monkeypatch, lambda blob, pp: _Opened())
+    handed_off = {"value": False}
+
+    def busy(unit):
+        return handed_off["value"] and unit == mod.RESTORE_UNIT
+
+    def handoff(frame, restore_id, attempt_id, work, payload, ack, lockfd):
+        os.close(lockfd)
+        handed_off["value"] = True
+        return mod.EXIT_INTERNAL, "malformed acknowledgement"
+
+    monkeypatch.setattr(mod, "_unit_busy", busy)
+    monkeypatch.setattr(mod, "_handoff_and_wait", handoff)
     assert mod.main(argv=["apply"], stdin=io.BytesIO(_frame())) == mod.EXIT_INTERNAL
+    records = list(pathlib.Path(mod.ATTEMPTS_DIR).glob("*.json"))
+    workdirs = list(pathlib.Path(mod.PRIVATE_DIR).glob("ccc-restore-*"))
+    assert len(records) == 1
+    assert len(workdirs) == 1
+
+
+@_linux_only
+def test_open_fifo_validation_rejects_path_object_swap(mod, tmp_path):
+    fifo = tmp_path / "handoff.fifo"
+    os.mkfifo(fifo, 0o600)
+    os.chmod(fifo, 0o600)
+    fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        fifo.unlink()
+        os.mkfifo(fifo, 0o600)
+        os.chmod(fifo, 0o600)
+        with pytest.raises(OSError, match="opened restore FIFO"):
+            mod._validate_open_fifo(str(fifo), fd)
+    finally:
+        os.close(fd)
 
 
 # --- run_worker branches ----------------------------------------------------
@@ -286,7 +560,10 @@ def test_worker_exception_rollback_failed(mod, tmp_path, monkeypatch):
 
 @_linux_only
 def test_write_outcome_schema_modes_and_no_secrets(mod, tmp_path, monkeypatch):
-    out = tmp_path / "restore-status.json"
+    pub = tmp_path / "pub"
+    pub.mkdir(mode=0o755)
+    os.chmod(str(pub), 0o755)
+    out = pub / "restore-status.json"
     monkeypatch.setattr(mod, "OUTCOME_PATH", str(out))
     mod.write_outcome("restored", "rid-1", "t0", "t1", True, "Restore complete.")
     data = json.loads(out.read_text())
@@ -308,7 +585,10 @@ def test_write_outcome_schema_modes_and_no_secrets(mod, tmp_path, monkeypatch):
 
 @_linux_only
 def test_write_outcome_in_progress_has_pid_terminal_null(mod, tmp_path, monkeypatch):
-    out = tmp_path / "restore-status.json"
+    pub = tmp_path / "pub"
+    pub.mkdir(mode=0o755)
+    os.chmod(str(pub), 0o755)
+    out = pub / "restore-status.json"
     monkeypatch.setattr(mod, "OUTCOME_PATH", str(out))
     mod.write_outcome("in_progress", "rid-1", "t0", None, None, "Restore in progress.")
     assert json.loads(out.read_text())["pid"] == os.getpid()   # schema 1, additive
@@ -328,12 +608,43 @@ def test_worker_grace_delay_before_stop(mod, tmp_path, monkeypatch):
     assert order.index("sleep") < order.index("stop")   # grace BEFORE stop
 
 
-def test_service_unit_has_killmode_process():
+def test_service_unit_kills_the_complete_service_control_group():
     unit = (
         pathlib.Path(__file__).resolve().parents[2]
         / "deployment" / "conduit-cc.service"
     ).read_text()
-    assert "KillMode=process" in unit
+    assert "KillMode=control-group" in unit
+    assert "KillMode=process" not in unit
+
+
+def test_restore_uses_fixed_transient_unit_and_fifo_only_secret_handoff():
+    helper = _HELPER.read_text(encoding="utf-8")
+    assert 'RESTORE_UNIT = "ccc-restore.service"' in helper
+    assert 'SYSTEMD_RUN = "/usr/bin/systemd-run"' in helper
+    assert '"__run-worker"' in helper
+    assert "os.mkfifo(payload_fifo" in helper
+    assert "os.mkfifo(ack_fifo" in helper
+    assert "os.fork(" not in helper
+    assert "os.setsid(" not in helper
+    launch = helper[helper.index("def _launch_restore_unit"):
+                    helper.index("def _validate_fifo")]
+    assert "blob" not in launch
+    assert "passphrase" not in launch
+    handoff = helper[helper.index("def _handoff_and_wait"):
+                     helper.index("def _worker_ack")]
+    assert "except BaseException:" in handoff
+    assert "_stop_restore_unit()" in handoff
+
+
+def test_update_and_restore_share_one_lifecycle_mutex():
+    update = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "deployment" / "bin" / "ccc-update-apply"
+    ).read_text(encoding="utf-8")
+    restore = _HELPER.read_text(encoding="utf-8")
+    expected = 'LOCK_PATH = f"{PRIVATE_DIR}/lifecycle.lock"'
+    assert expected in update
+    assert expected in restore
 
 
 # ===========================================================================
@@ -515,7 +826,10 @@ def test_worker_unhealthy_restore_records_skipped(mod, tmp_path, monkeypatch):
 
 @_linux_only
 def test_write_outcome_carries_conduit_settings_state(mod, tmp_path, monkeypatch):
-    out = tmp_path / "restore-status.json"
+    pub = tmp_path / "pub"
+    pub.mkdir(mode=0o755)
+    os.chmod(str(pub), 0o755)
+    out = pub / "restore-status.json"
     monkeypatch.setattr(mod, "OUTCOME_PATH", str(out))
     mod.write_outcome("restored", "rid", "t0", "t1", True, "done",
                       conduit_settings_state="applied")

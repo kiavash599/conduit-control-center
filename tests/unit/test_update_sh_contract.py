@@ -60,10 +60,15 @@ def _deploy_excludes() -> list[str]:
     """Parse the EXACT --exclude list from the phase3_deploy rsync, so the
     behavioral regression cannot drift from the production command."""
     text = _src()
+    shared_match = re.search(
+        r"readonly -a CCC_LIFECYCLE_EXCLUDES=\(\n(.*?)\n\)", text, re.S)
+    assert shared_match, "shared lifecycle exclude contract not found"
+    shared = re.findall(r"--exclude=([^\s]+)", shared_match.group(1))
     body = text.split("phase3_deploy()", 1)[1]
     # the deploy rsync runs from `rsync -a --delete` to the `${SOURCE_DIR}/` line
     block = body.split("rsync -a --checksum --delete", 1)[1].split("${SOURCE_DIR}/", 1)[0]
-    return re.findall(r"--exclude '([^']*)'", block)
+    assert '"${CCC_LIFECYCLE_EXCLUDES[@]}"' in block
+    return shared + re.findall(r"--exclude '([^']*)'", block)
 
 
 # --------------------------------------------------------------------------- #
@@ -137,10 +142,11 @@ def test_phase0g_interaction_decoupled_from_ccc_only():
 # --------------------------------------------------------------------------- #
 def test_deploy_rsync_excludes_top_level_bin():
     excludes = _deploy_excludes()
-    # ANCHORED exclude only: '/bin/' protects ${APP_DIR}/bin; an unanchored
-    # 'bin/' would wrongly also exclude deployment/bin (the helper SOURCE).
-    assert "/bin/" in excludes, f"deploy rsync must exclude '/bin/'; got {excludes}"
-    assert "bin/" not in excludes, "exclude must be anchored ('/bin/'), not 'bin/'"
+    # ANCHORED exclude only: '/bin' protects ${APP_DIR}/bin as either a real
+    # directory or an unsafe replacement object; an unanchored 'bin' would
+    # wrongly also exclude deployment/bin (the helper SOURCE).
+    assert "/bin" in excludes, f"deploy rsync must exclude '/bin'; got {excludes}"
+    assert "bin" not in excludes, "exclude must be anchored ('/bin'), not 'bin'"
 
 
 def test_3b2_reprovisions_bin_dir():

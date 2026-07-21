@@ -1,0 +1,169 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-env -- THE root-only CLI over the single canonical `.env` implementation
+(backend/env_file.py). Epic 1 A3.
+
+Invocation contract (exact; shell callers use precisely this form):
+
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-env <op> <path> [<KEY>]
+
+  * `-I` is REAL interpreter isolation (no cwd, no PYTHONPATH, no user site);
+    this tool performs no post-hoc sys.path scrubbing and takes no value from
+    the environment.
+  * Operations (exact allowlist, nothing else):
+      assert-contract <path>          -- verify regular-file/mode contract
+      init <path>                     -- create/replace FULL content from stdin
+      get-key <path> <KEY>            -- read ONE allowlisted non-secret key
+      set-key <path> <KEY>            -- set ONE allowlisted key, value from stdin
+  * SECRETS NEVER APPEAR IN ARGV OR ENVIRONMENT: values arrive only via
+    bounded stdin. Nothing is echoed; error text never contains the value.
+  * Backed by the deployed root-owned module tree, located via the installed
+    self-location bootstrap (<app-root>/bin/ccc-env -> <app-root>); a foreign
+    layout fails closed. No sudo grant exists for this tool (root-only).
+
+Exit codes: 0 ok; 2 usage/contract violation; 3 filesystem/safety.
+"""
+from __future__ import annotations
+
+import os
+import re
+import stat
+import sys
+from typing import NoReturn
+
+MAX_STDIN_BYTES = 256 * 1024
+
+# Installed-location bootstrap (A5): derive the app root from our own real path.
+_SELF_REAL = os.path.realpath(__file__)
+_BIN_DIR = os.path.dirname(_SELF_REAL)
+_LAYOUT_OK = os.path.basename(_BIN_DIR) == "bin"
+APP_DIR = os.path.dirname(_BIN_DIR) if _LAYOUT_OK else "/invalid-helper-layout"
+
+# Keys a caller may set individually (exact allowlist; A3).
+KEY_ALLOWLIST = frozenset({
+    "ADMIN_USERNAME",
+    "ADMIN_PASSWORD_HASH",
+})
+READ_KEY_ALLOWLIST = frozenset({
+    # The updater needs this non-secret routing name before downtime. Secrets
+    # are deliberately absent: this CLI must never become a generic env dump.
+    "CF_RECORD_NAME",
+})
+
+
+def die(code: int, msg: str) -> NoReturn:
+    sys.stderr.write(f"ccc-env: ERROR: {msg}\n")   # never contains a value
+    sys.exit(code)
+
+
+def _import_env_file():
+    if not _LAYOUT_OK:
+        die(3, "invalid installed layout (expected <app-root>/bin/ccc-env)")
+    if APP_DIR not in sys.path:
+        sys.path.insert(0, APP_DIR)
+    try:
+        from backend import env_file
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        die(3, f"canonical env module unavailable: {type(exc).__name__}")
+    return env_file
+
+
+def _read_stdin_bounded() -> str:
+    data = sys.stdin.buffer.read(MAX_STDIN_BYTES + 1)
+    if len(data) > MAX_STDIN_BYTES:
+        die(2, "stdin exceeds the bounded size")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        die(2, "stdin is not UTF-8")
+
+
+def _assert_contract(env_file, path: str) -> None:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        die(2, f"{path!r} does not exist")
+    except OSError as exc:
+        die(3, f"cannot stat: {exc}")
+    if not stat.S_ISREG(st.st_mode):
+        die(2, f"{path!r} is not a regular file (symlink/foreign object)")
+    if (st.st_mode & 0o777) != 0o600:
+        # EXACT comparison: 0400/0200/0000 are as non-canonical as extra bits.
+        die(2, f"{path!r} mode {oct(st.st_mode & 0o777)} != exact 0600")
+    ids = env_file._canonical_ids()
+    if ids is not None and os.geteuid() == 0 and (st.st_uid, st.st_gid) != ids:
+        die(2, f"{path!r} owner uid/gid ({st.st_uid},{st.st_gid}) is not canonical")
+    # Reuse the canonical reader for the parts that cannot be safely duplicated
+    # here: parent-object validation, single-link requirement, O_NOFOLLOW open,
+    # lstat/fstat identity binding, bounded UTF-8 read and exact ownership.
+    env_file.read_env_text(path)
+
+
+def cmd_assert_contract(env_file, path: str) -> int:
+    _assert_contract(env_file, path)
+    print("ENV_CONTRACT=OK")
+    return 0
+
+
+def cmd_get_key(env_file, path: str, key: str) -> int:
+    if key not in READ_KEY_ALLOWLIST:
+        die(2, f"read key not in allowlist: {key!r}")
+    _assert_contract(env_file, path)
+    prefix = f"{key}="
+    matches = [line[len(prefix):] for line in env_file.read_env_text(path).splitlines()
+               if line.startswith(prefix)]
+    if len(matches) != 1:
+        die(2, f"expected exactly one {key!r} assignment")
+    value = matches[0]
+    if key == "CF_RECORD_NAME":
+        labels = value.split(".")
+        if len(value) > 253 or len(labels) < 2 or any(
+                not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                for label in labels):
+            die(2, "CF_RECORD_NAME is not a valid bounded DNS name")
+    # Only an explicitly non-secret key can reach stdout. CR/LF cannot occur
+    # because splitlines removed the terminator and rejects embedded framing.
+    print(value)
+    return 0
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    env_file = _import_env_file()
+    try:
+        if len(argv) == 2 and argv[0] == "assert-contract":
+            return cmd_assert_contract(env_file, argv[1])
+        if len(argv) == 2 and argv[0] == "init":
+            content = _read_stdin_bounded()
+            env_file.write_env_text(argv[1], content)
+            print("ENV_INIT=OK")
+            return 0
+        if len(argv) == 3 and argv[0] == "get-key":
+            return cmd_get_key(env_file, argv[1], argv[2])
+        if len(argv) == 3 and argv[0] == "set-key":
+            path, key = argv[1], argv[2]
+            if key not in KEY_ALLOWLIST:
+                die(2, f"key not in allowlist: {key!r}")
+            value = _read_stdin_bounded().rstrip("\n")
+            if "\n" in value or "\r" in value or "'" in value:
+                die(2, "value is not a safely representable single-quoted scalar")
+            if key == "ADMIN_USERNAME" and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+                die(2, "ADMIN_USERNAME has invalid syntax")
+            if key == "ADMIN_PASSWORD_HASH" and not re.fullmatch(
+                    r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}", value):
+                die(2, "ADMIN_PASSWORD_HASH has invalid bcrypt syntax")
+            # Single-quote so bash `source .env` cannot expand $-prefixed
+            # values (bcrypt hashes); pydantic-settings strips the quotes.
+            env_file.set_env_key(path, f"{key}=", f"{key}='{value}'\n")
+            print("ENV_SET=OK")
+            return 0
+    except env_file.EnvFileError as exc:
+        die(2, f"contract violation: {exc}")
+    except OSError as exc:
+        die(3, f"filesystem error: {exc.__class__.__name__}")
+    die(2, "usage: ccc-env assert-contract <path> | init <path> | get-key <path> <KEY> | set-key <path> <KEY>  (write values on stdin)")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

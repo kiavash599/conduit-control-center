@@ -203,15 +203,18 @@ class UpdateFailureMessageTests(unittest.TestCase):
     operator the service is still running and to re-run update.sh."""
 
     def test_update_preserves_operator_failure_message(self):
-        self.assertRegex(
-            _UPDATE,
-            r'install_python_deps [^\n]*\|\| die "pip install failed\. '
-            r'Service is still running version \$\{CURRENT_VERSION\}\. '
-            r'Resolve the dependency issue and re-run update\.sh\."',
-        )
+        call = _UPDATE.split('install_python_deps "${_cand_py}"', 1)[1].split("\n", 2)
+        message = "\n".join(call)
+        self.assertIn("candidate dependency install failed", message)
+        self.assertIn("Service is still running version ${CURRENT_VERSION}", message)
+        self.assertIn("the active runtime was NOT touched", message)
+        self.assertIn("Resolve the dependency issue and re-run update.sh", message)
 
     def test_install_dependency_failure_is_failclosed(self):
-        self.assertRegex(_INSTALL, r'install_python_deps [^\n]*\|\| die ')
+        failure = _INSTALL.split("if ! install_python_deps", 1)[1].split("fi", 1)[0]
+        self.assertIn("discard-staging", failure)
+        self.assertIn("die", failure)
+        self.assertLess(failure.index("discard-staging"), failure.index("die"))
 
 
 @unittest.skipUnless(_HAS_BASH, "bash is not available")

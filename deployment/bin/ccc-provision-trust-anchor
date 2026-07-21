@@ -1,0 +1,312 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-provision-trust-anchor -- Owner-controlled, OUT-OF-BAND provisioning of the
+on-device publisher trust anchor (Epic 1, F12).
+
+    ccc-provision-trust-anchor install \
+        --from <owner-supplied-allowed-signers-file> \
+        --fingerprint SHA256:<independently-supplied-ed25519-fingerprint>
+
+Security contract (DO NOT WEAKEN):
+  * The anchor authorizes releases; it must therefore NEVER be embedded in,
+    downloaded from, or derived from a release. `--from` REFUSES any path that
+    resolves inside the application tree (/opt/conduit-cc) or the privileged
+    updater state (/var/lib/ccc-update) -- an anchor found inside a candidate
+    release tree can never authorize that same release (circular trust).
+  * The expected ED25519 fingerprint is an INDEPENDENT ceremony input: the tool
+    recomputes the key's SHA256 fingerprint and requires exact equality with
+    the Owner-supplied value. The file alone never authorizes itself.
+  * Canonical allowed-signers syntax, EXACTLY ONE entry, exact principal
+    (backend.update_verify.PUBLISHER_IDENTITY), optional namespaces option
+    restricted to the exact signing namespace. BOM / NUL / CR / control bytes,
+    extra principals, extra keys, and extra lines are rejected.
+  * Candidate must be a REGULAR file (lstat; symlinks refused) with safe
+    permissions (no group/other write).
+  * Installation is ATOMIC into the root-owned, non-service-writable
+    /opt/conduit-cc/trust (0700): mkstemp sibling, fsync, chmod 0600,
+    chown root:root, os.replace, directory fsync.
+  * An existing IDENTICAL anchor is preserved (idempotent success). An existing
+    CONFLICTING anchor fails closed -- there is deliberately no --force.
+  * `verify` re-runs the on-device validation against the installed anchor via
+    the SAME reader the release verifier uses (backend.update_verify).
+  * Raw key material is never logged; output shows only principal+fingerprint.
+
+Exit codes: 0 ok; 2 validation/usage; 3 filesystem/safety.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import os
+import re
+import stat
+import sys
+import tempfile
+
+# Finding 1: implementation SOURCE and mutation TARGET are separated explicitly.
+#
+#   * Implementation source: the tree containing `backend/`. Installed, this is
+#     <app-root>/bin/<helper> -> <app-root>. STAGED for the bootstrap ceremony,
+#     the tool lives at <snapshot>/deployment/bin/<helper>, so the parent-of-bin
+#     is <snapshot>/deployment and backend/ is NOT there. We therefore probe
+#     upward for the directory that actually contains backend/update_verify.py.
+#   * Mutation target: the app root whose trust/ dir is written. Defaults to the
+#     source root; --target (exactly /opt/conduit-cc) overrides it for staging.
+_SELF_REAL = os.path.realpath(__file__)
+_BIN_DIR = os.path.dirname(_SELF_REAL)
+
+
+def _find_impl_root(start: str) -> "str | None":
+    """Nearest ancestor of `start` that contains backend/update_verify.py."""
+    d = start
+    for _ in range(6):
+        if os.path.isfile(os.path.join(d, "backend", "update_verify.py")):
+            return d
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    return None
+
+
+_IMPL_ROOT = _find_impl_root(_BIN_DIR)
+_LAYOUT_OK = os.path.basename(_BIN_DIR) == "bin"
+# Default mutation target: installed layout -> parent of bin; else the impl root.
+APP_DIR = os.path.dirname(_BIN_DIR) if _LAYOUT_OK else (_IMPL_ROOT or "/invalid-helper-layout")
+TRUST_DIR = f"{APP_DIR}/trust"
+TRUST_PATH = f"{TRUST_DIR}/allowed_signers"
+PRIVATE_STATE_DIR = "/var/lib/ccc-update"
+_OWNER_UID = 0                    # expected owner of the trust boundary (tests inject)
+MAX_ANCHOR_BYTES = 8 * 1024
+
+# The verifier is the authority for principal/namespace; import from the IMPL
+# ROOT (never the mutation target), fail-closed.
+try:
+    if _IMPL_ROOT is None:
+        raise ImportError("no backend/update_verify.py found above the helper")
+    if _IMPL_ROOT not in sys.path:
+        sys.path.insert(0, _IMPL_ROOT)
+    from backend.update_verify import (  # noqa: E402
+        PUBLISHER_IDENTITY, SSHSIG_NAMESPACE, read_trust_store,
+    )
+    _VERIFY_AVAILABLE = True
+except Exception:  # noqa: BLE001 - fail closed
+    _VERIFY_AVAILABLE = False
+
+_B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+
+def die(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+    sys.stderr.write(f"ccc-provision-trust-anchor: ERROR: {msg}\n")
+    sys.exit(code)
+
+
+def _ed25519_fingerprint(b64_key: str) -> str:
+    """OpenSSH SHA256 fingerprint of the base64 key blob: SHA256:<b64-nopad>."""
+    try:
+        blob = base64.b64decode(b64_key, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        die(2, f"key is not valid base64: {exc}")
+    digest = hashlib.sha256(blob).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _parse_anchor_line(line: str) -> tuple[str, str, str]:
+    """Validate ONE canonical allowed-signers entry. Returns
+    (principal, b64_key, fingerprint). Accepted forms (exact):
+        <principal> ssh-ed25519 <base64> [comment...]
+        <principal> namespaces="<ns>" ssh-ed25519 <base64> [comment...]
+    """
+    parts = line.split()
+    if len(parts) < 3:
+        die(2, "anchor entry has too few fields for canonical allowed-signers syntax")
+    principal = parts[0]
+    idx = 1
+    if parts[idx].startswith("namespaces="):
+        ns = parts[idx][len("namespaces="):].strip('"')
+        if ns != SSHSIG_NAMESPACE:
+            die(2, f"namespaces option must be exactly {SSHSIG_NAMESPACE!r}, got {ns!r}")
+        idx += 1
+    if idx >= len(parts) or parts[idx] != "ssh-ed25519":
+        die(2, "anchor key type must be exactly ssh-ed25519 (Ed25519 only)")
+    if idx + 1 >= len(parts):
+        die(2, "anchor entry is missing the base64 key")
+    b64_key = parts[idx + 1]
+    if not _B64_RE.match(b64_key):
+        die(2, "anchor key is not canonical base64")
+    return principal, b64_key, _ed25519_fingerprint(b64_key)
+
+
+def _read_candidate(path: str) -> bytes:
+    """Read and byte-validate the Owner-supplied candidate file, fail-closed."""
+    real = os.path.realpath(path)
+    for forbidden, label in ((os.path.realpath(APP_DIR), "the application tree"),
+                             (os.path.realpath(PRIVATE_STATE_DIR), "the updater state")):
+        if real == forbidden or real.startswith(forbidden + os.sep):
+            die(2, f"candidate anchor must be OUT-OF-BAND: {path!r} resolves inside "
+                   f"{label} ({forbidden}); an anchor shipped with a release can "
+                   f"never authorize that release (circular trust)")
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        die(3, f"cannot stat candidate: {exc}")
+    if stat.S_ISLNK(st.st_mode):
+        die(2, f"candidate anchor must not be a symlink: {path!r}")
+    if not stat.S_ISREG(st.st_mode):
+        die(2, f"candidate anchor is not a regular file: {path!r}")
+    if st.st_mode & 0o022:
+        die(2, f"candidate anchor is group/other writable "
+               f"(mode {oct(st.st_mode & 0o777)}); fix permissions first")
+    if st.st_size > MAX_ANCHOR_BYTES:
+        die(2, "candidate anchor exceeds the bounded size")
+    with open(path, "rb") as fh:
+        raw = fh.read(MAX_ANCHOR_BYTES + 1)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        die(2, "candidate anchor starts with a UTF-8 BOM (ambiguous; rejected)")
+    if b"\x00" in raw:
+        die(2, "candidate anchor contains NUL bytes (rejected)")
+    if b"\r" in raw:
+        die(2, "candidate anchor contains CR bytes (CRLF/CR ambiguity; rejected)")
+    return raw
+
+
+def _validate(raw: bytes, expected_fp: str) -> tuple[str, str]:
+    """Full ceremony validation. Returns (principal, fingerprint)."""
+    if not _VERIFY_AVAILABLE:
+        die(2, "backend.update_verify unavailable; cannot validate principal/namespace")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        die(2, f"candidate anchor is not UTF-8: {exc}")
+    entries = [ln.strip() for ln in text.splitlines()
+               if ln.strip() and not ln.lstrip().startswith("#")]
+    if len(entries) != 1:
+        die(2, f"exactly ONE allowed-signers entry required, found {len(entries)} "
+               f"(extra principals/keys/lines are rejected)")
+    principal, _b64, fp = _parse_anchor_line(entries[0])
+    if principal != PUBLISHER_IDENTITY:
+        die(2, f"principal must be exactly {PUBLISHER_IDENTITY!r}, got {principal!r}")
+    if not (expected_fp or "").startswith("SHA256:"):
+        die(2, "--fingerprint must be the independently supplied 'SHA256:...' value")
+    if fp != expected_fp:
+        die(2, f"fingerprint mismatch: anchor key is {fp}, ceremony expects {expected_fp} "
+               f"(refusing; verify the out-of-band value)")
+    return principal, fp
+
+
+def _assert_trust_dir() -> None:
+    try:
+        st = os.lstat(TRUST_DIR)
+    except FileNotFoundError:
+        os.makedirs(TRUST_DIR, exist_ok=True)
+        os.chmod(TRUST_DIR, 0o700)
+        if os.geteuid() == 0:
+            os.chown(TRUST_DIR, 0, 0)
+        st = os.lstat(TRUST_DIR)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        die(3, f"{TRUST_DIR!r} must be a real directory")
+    if st.st_uid != _OWNER_UID:
+        die(3, f"{TRUST_DIR!r} owner uid {st.st_uid}, expected {_OWNER_UID}")
+    if st.st_mode & 0o077:
+        die(3, f"{TRUST_DIR!r} mode {oct(st.st_mode & 0o777)} grants group/other access")
+
+
+def _install(raw: bytes) -> None:
+    """Atomic, root-owned installation (0600; narrowest readability: only root
+    ever reads the store -- the verifier runs as root in the apply path)."""
+    _assert_trust_dir()
+    try:
+        cur = os.lstat(TRUST_PATH)
+    except FileNotFoundError:
+        cur = None
+    if cur is not None:
+        if not stat.S_ISREG(cur.st_mode):
+            die(3, f"existing {TRUST_PATH!r} is not a regular file (refusing)")
+        with open(TRUST_PATH, "rb") as fh:
+            if fh.read() == raw:
+                print("trust anchor already installed and identical (preserved)")
+                return
+        die(2, "a DIFFERENT trust anchor is already installed; refusing to replace "
+               "(remove it explicitly via an Owner ceremony first -- no --force exists)")
+    fd, tmp = tempfile.mkstemp(prefix=".anchor-", dir=TRUST_DIR)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+            fh.flush()
+            os.fsync(fh.fileno())
+            os.fchmod(fh.fileno(), 0o600)
+            if os.geteuid() == 0:
+                os.fchown(fh.fileno(), 0, 0)
+        os.replace(tmp, TRUST_PATH)
+        dfd = os.open(TRUST_DIR, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def cmd_install(args) -> int:
+    raw = _read_candidate(args.frm)
+    principal, fp = _validate(raw, args.fingerprint)
+    _install(raw)
+    # Post-install on-device verification through the verifier's OWN reader.
+    if read_trust_store(TRUST_PATH) is None:
+        die(3, "post-install verification failed: verifier cannot read the anchor")
+    print(f"trust anchor installed: principal={principal} fingerprint={fp}")
+    print(f"path={TRUST_PATH} (root:root 0600, dir 0700; survives update/rollback "
+          f"-- deploy/rollback never touch {TRUST_DIR})")
+    return 0
+
+
+def cmd_verify(_args) -> int:
+    if not _VERIFY_AVAILABLE:
+        die(2, "backend.update_verify unavailable")
+    raw_entries = read_trust_store(TRUST_PATH)
+    if raw_entries is None:
+        die(2, f"no usable trust anchor at {TRUST_PATH!r} (verification would REJECT)")
+    if len(raw_entries) != 1:
+        die(2, f"trust store must hold exactly one entry, found {len(raw_entries)}")
+    principal, _b64, fp = _parse_anchor_line(raw_entries[0])
+    if principal != PUBLISHER_IDENTITY:
+        die(2, f"installed principal {principal!r} != expected {PUBLISHER_IDENTITY!r}")
+    print(f"trust anchor OK: principal={principal} fingerprint={fp}")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="ccc-provision-trust-anchor")
+    sub = ap.add_subparsers(dest="mode", required=True)
+    ins = sub.add_parser("install")
+    ins.add_argument("--from", dest="frm", required=True,
+                     help="Owner-supplied OUT-OF-BAND allowed_signers candidate file")
+    ins.add_argument("--fingerprint", required=True,
+                     help="independently supplied expected 'SHA256:...' Ed25519 fingerprint")
+    ins.add_argument("--target", default=None,
+                     help="EXACT installed app root (/opt/conduit-cc). Used by the "
+                          "bootstrap ceremony, which runs this tool from the verified "
+                          "SNAPSHOT: implementation source = snapshot, mutation "
+                          "target = the installed tree. Any other value fails closed.")
+    ver = sub.add_parser("verify")
+    ver.add_argument("--target", default=None)
+    args = ap.parse_args(argv)
+    if getattr(args, "target", None):
+        if args.target != "/opt/conduit-cc":
+            die(2, f"--target must be exactly '/opt/conduit-cc', got {args.target!r}")
+        global TRUST_DIR, TRUST_PATH
+        TRUST_DIR = f"{args.target}/trust"
+        TRUST_PATH = f"{TRUST_DIR}/allowed_signers"
+    if args.mode == "install":
+        return cmd_install(args)
+    return cmd_verify(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

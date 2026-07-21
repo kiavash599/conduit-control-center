@@ -82,7 +82,9 @@ def _target(tmp_path, *, with_env=True, with_config=True, with_sidecars=False):
     con.commit()
     con.close()
     if with_env:
-        (d / ".env").write_text(_ENV_LIVE)
+        env_path = d / ".env"
+        env_path.write_text(_ENV_LIVE)
+        env_path.chmod(0o600)
     if with_config:
         (d / "config.json").write_text('{"old": true}')
     if with_sidecars:
@@ -290,7 +292,9 @@ def test_permissions(tmp_path):
     d = _target(tmp_path)
     restore_backup(_opened(tmp_path), ccc_dir=str(d))
     assert (os.stat(d / "ccc.db").st_mode & 0o777) == 0o600
-    assert (os.stat(d / ".env").st_mode & 0o777) == 0o640
+    # Epic-1 (F7): .env is canonically 0600 everywhere (install/restore/rollback);
+    # config.json keeps its wider 0640 contract.
+    assert (os.stat(d / ".env").st_mode & 0o777) == 0o600
     assert (os.stat(d / "config.json").st_mode & 0o777) == 0o640
 
 

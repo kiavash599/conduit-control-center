@@ -457,7 +457,7 @@ Now you know:
 
 ### One-Click Update and rollback
 
-Day-to-day upgrades use dashboard One-Click Update; manual `update.sh` over SSH is retained for initial install, recovery, and emergency maintenance. If an update auto-rolls-back, your node keeps the previous version — diagnose via the worker log (`/var/lib/conduit-cc/update-worker.log`) and the status file (`/var/lib/conduit-cc/update-status.json`), then retry. Full flow: **[Software Updates & Signed Releases](software-updates-and-signed-releases.md)**.
+Day-to-day upgrades use dashboard One-Click Update; manual `update.sh` over SSH is retained for initial install, recovery, and emergency maintenance. If an update auto-rolls-back, your node keeps the previous version — diagnose via the root-only worker log (`/var/lib/ccc-update/update-worker.log`) and the published status file (`/var/lib/ccc-status/update-status.json`), then retry. Full flow: **[Software Updates & Signed Releases](software-updates-and-signed-releases.md)**.
 
 **Next chapter**
 

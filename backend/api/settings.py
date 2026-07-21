@@ -53,6 +53,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from backend.env_file import set_env_key
 from backend.auth.cookies import (
     VALID_THEMES,
     clear_session_cookie,
@@ -186,8 +187,8 @@ def _write_password_hash(new_hash: str) -> None:
     Write new_hash to the ADMIN_PASSWORD_HASH key in the active .env file.
 
     Strategy: read the file, find and replace the ADMIN_PASSWORD_HASH= line,
-    write back.  If the key is absent (bare dev environment with no .env),
-    it is appended.
+    atomically rewrite (backend/env_file.py canonical 0600 contract).  If the
+    key is absent (bare dev environment with no .env), it is appended.
 
     Parameters
     ----------
@@ -205,28 +206,11 @@ def _write_password_hash(new_hash: str) -> None:
     # pydantic-settings strips surrounding single quotes before loading the value.
     new_line   = f"{target_key}'{new_hash}'\n"
 
-    try:
-        existing = env_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # No .env yet (bare dev clone). Create it with just the hash key.
-        existing = ""
-
-    lines    = existing.splitlines(keepends=True)
-    replaced = False
-
-    for i, line in enumerate(lines):
-        if line.startswith(target_key):
-            lines[i] = new_line
-            replaced  = True
-            break
-
-    if not replaced:
-        # Key missing -- append it.
-        if lines and not lines[-1].endswith("\n"):
-            lines.append("\n")
-        lines.append(new_line)
-
-    env_path.write_text("".join(lines), encoding="utf-8")
+    # Epic-1 canonical .env contract (F7): regular-file-only, 0600, ATOMIC
+    # replacement (mkstemp + fsync + os.replace + parent fsync) via the single
+    # shared writer -- a crash mid-write can no longer truncate the only copy
+    # of the admin hash, and a symlinked .env is refused before any write.
+    set_env_key(str(env_path), target_key, new_line)
     logger.info("ADMIN_PASSWORD_HASH updated in %s", env_path)
 
 

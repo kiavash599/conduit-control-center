@@ -1,0 +1,198 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-runtime -- root-only CLI over the immutable versioned runtime store
+(backend/runtime_store.py). Epic 2 B1/B3/B4.
+
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime <op> [...]
+
+Operations (exact allowlist):
+    validate-selector            -- run the full selector gate; prints the id
+    convert-legacy               -- one-time legacy dir -> store conversion
+    rollback-conversion          -- restore the pre-conversion real directory
+    activate <runtime-id>        -- atomic selector flip to a validated runtime
+    rollback-activation          -- flip back to the recorded previous runtime
+    reserve-ready <attempt>      -- bind bootstrap reserve to update success
+    reserve-accept <attempt> <commit> <tag>
+                                 -- explicit record-authorized reserve cleanup
+    reconcile-candidate <id> <attempt>
+                                 -- recover an interrupted candidate publication
+    gc                           -- manifest-authorized retention cleanup
+    diagnose                     -- read-only classification of transition state
+
+Root-only (no sudo grant). App root derived from the installed self-location
+(<app-root>/bin/ccc-runtime); private state at /var/lib/ccc-update.
+Exit codes: 0 ok; 2 validation refusal; 3 filesystem/layout.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import NoReturn
+
+_SELF_REAL = os.path.realpath(__file__)
+_BIN_DIR = os.path.dirname(_SELF_REAL)
+_LAYOUT_OK = os.path.basename(_BIN_DIR) == "bin"
+APP_DIR = os.path.dirname(_BIN_DIR) if _LAYOUT_OK else "/invalid-helper-layout"
+PRIVATE_DIR = "/var/lib/ccc-update"
+
+
+def die(code: int, msg: str) -> NoReturn:
+    sys.stderr.write(f"ccc-runtime: ERROR: {msg}\n")
+    sys.exit(code)
+
+
+def _import_store():
+    if not _LAYOUT_OK:
+        die(3, "invalid installed layout (expected <app-root>/bin/ccc-runtime)")
+    if APP_DIR not in sys.path:
+        sys.path.insert(0, APP_DIR)
+    try:
+        from backend import runtime_store
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        die(3, f"runtime store module unavailable: {type(exc).__name__}")
+    return runtime_store
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    rs = _import_store()
+    try:
+        if len(argv) == 5 and argv[0] == "attempt-begin":
+            doc = rs.begin_update_attempt(
+                PRIVATE_DIR, argv[1], target_version=argv[2],
+                source_commit=argv[3], source_tag=argv[4])
+            print("UPDATE_ATTEMPT=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) >= 3 and argv[0] == "attempt-mark":
+            facts = {}
+            for kv in argv[3:]:
+                key, sep, value = kv.partition("=")
+                if not key or not sep:
+                    die(2, f"bad transaction fact {kv!r}")
+                facts[key] = (value == "true" if value in ("true", "false") else value)
+            doc = rs.mark_update_attempt(PRIVATE_DIR, argv[1], argv[2], facts=facts)
+            print("UPDATE_ATTEMPT=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 2 and argv[0] == "attempt-show":
+            print("UPDATE_ATTEMPT=" + json.dumps(
+                rs.read_update_attempt(PRIVATE_DIR, argv[1]), sort_keys=True))
+            return 0
+        if argv == ["attempt-incomplete"]:
+            print("UPDATE_INCOMPLETE=" + json.dumps(
+                rs.incomplete_update_attempts(PRIVATE_DIR), sort_keys=True))
+            return 0
+        if argv == ["attempt-backups"]:
+            print("UPDATE_BACKUPS=" + json.dumps(
+                rs.completed_update_backups(PRIVATE_DIR), sort_keys=True))
+            return 0
+        if len(argv) == 2 and argv[0] == "reserve-ready":
+            doc = rs.mark_bootstrap_reserve_ready(PRIVATE_DIR, argv[1])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 4 and argv[0] == "reserve-accept":
+            doc = rs.accept_bootstrap_reserve(
+                PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if argv == ["validate-selector"]:
+            print(f"RUNTIME_SELECTOR=OK id={rs.validate_selector(APP_DIR)}")
+            return 0
+        if argv == ["convert-legacy"]:
+            rid = rs.convert_legacy(APP_DIR, PRIVATE_DIR)
+            print(f"RUNTIME_CONVERT=OK id={rid}")
+            return 0
+        if argv == ["rollback-conversion"]:
+            rs.rollback_conversion(APP_DIR, PRIVATE_DIR)
+            print("RUNTIME_CONVERT_ROLLBACK=OK")
+            return 0
+        if len(argv) == 2 and argv[0] == "activate":
+            prev = rs.activate(APP_DIR, PRIVATE_DIR, argv[1])
+            print(f"RUNTIME_ACTIVATE=OK previous={prev}")
+            return 0
+        if len(argv) == 2 and argv[0] == "activate-initial":
+            rid = rs.activate_initial(APP_DIR, argv[1])
+            print(f"RUNTIME_INITIAL_ACTIVATE=OK id={rid}")
+            return 0
+        if argv == ["rollback-activation"]:
+            rid = rs.rollback_activation(APP_DIR, PRIVATE_DIR)
+            print(f"RUNTIME_ROLLBACK=OK id={rid}")
+            return 0
+        if argv and argv[0] == "candidate-id" and len(argv) == 8:
+            (_, appv, commit, arch, pyver, abi, dkind, dig) = argv
+            print(rs.compute_candidate_id(app_version=appv, commit=commit, arch=arch,
+                                          python_version=pyver, abi=abi,
+                                          input_digest_kind=dkind, input_digest=dig))
+            return 0
+        if len(argv) == 3 and argv[0] == "stage-candidate":
+            py = rs.stage_candidate(APP_DIR, argv[1], argv[2])
+            print(py)
+            return 0
+        if argv and argv[0] == "finalize-candidate" and len(argv) >= 3:
+            fields = {}
+            for kv in argv[3:]:
+                k, _, v = kv.partition("=")
+                if not k or not _:
+                    die(2, f"bad manifest field {kv!r} (expected key=value)")
+                fields[k] = v
+            rid = rs.finalize_candidate(APP_DIR, argv[1], argv[2],
+                                        manifest_fields=fields)
+            print(f"RUNTIME_FINALIZE=OK id={rid}")
+            return 0
+        if len(argv) == 2 and argv[0] == "validate-target":
+            rs.validate_target(APP_DIR, argv[1])
+            print(f"RUNTIME_TARGET=OK id={argv[1]}")
+            return 0
+        if len(argv) == 2 and argv[0] == "revalidate":
+            rs.revalidate_runtime(APP_DIR, argv[1])
+            print(f"RUNTIME_REVALIDATE=OK id={argv[1]}")
+            return 0
+        if len(argv) == 2 and argv[0] == "discard-staging":
+            removed = rs.discard_candidate_staging(APP_DIR, argv[1])
+            print(f"RUNTIME_STAGING_DISCARD=OK removed={str(removed).lower()}")
+            return 0
+        if len(argv) == 3 and argv[0] == "reconcile-candidate":
+            result = rs.reconcile_candidate_attempt(APP_DIR, argv[1], argv[2])
+            print(f"RUNTIME_CANDIDATE_RECONCILE=OK result={result}")
+            return 0
+        if argv == ["validate-legacy-shape"]:
+            rs.validate_legacy_shape(APP_DIR)
+            print("RUNTIME_LEGACY_SHAPE=OK")
+            return 0
+        if argv == ["validate-legacy"]:
+            rs.validate_legacy_runtime(APP_DIR)
+            print("RUNTIME_LEGACY=OK")
+            return 0
+        if argv == ["gc"]:
+            removed = rs.gc(APP_DIR, PRIVATE_DIR)
+            print(f"RUNTIME_GC=OK removed={','.join(removed) or 'none'}")
+            return 0
+        if argv == ["diagnose"]:
+            rec = None
+            try:
+                rec = rs._read_json(os.path.join(PRIVATE_DIR, rs.TRANSITION_RECORD))
+            except rs.RuntimeStoreError as exc:
+                print(f"RUNTIME_DIAGNOSE=corrupt-record {exc}")
+                return 2
+            sel = os.path.join(APP_DIR, rs.SELECTOR_NAME)
+            state = ("symlink" if os.path.islink(sel)
+                     else "real-dir" if os.path.isdir(sel) else "absent")
+            print("RUNTIME_DIAGNOSE=" + json.dumps(
+                {"selector": state, "transition_record": rec}, sort_keys=True))
+            return 0
+    except rs.RuntimeStoreError as exc:
+        die(2, f"refused: {exc}")
+    except OSError as exc:
+        die(3, f"filesystem error: {exc}")
+    die(2, "usage: ccc-runtime validate-selector|convert-legacy|rollback-conversion|"
+           "activate <id>|activate-initial <id>|validate-target <id>|revalidate <id>|"
+           "rollback-activation|gc|diagnose|"
+           "attempt-begin|attempt-mark|attempt-show|attempt-incomplete|attempt-backups|"
+           "reserve-ready <attempt>|reserve-accept <attempt> <commit> <tag>|"
+           "discard-staging <attempt>|reconcile-candidate <id> <attempt>|"
+           "validate-legacy-shape|validate-legacy")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -9,8 +9,10 @@ unsupported host fails closed. Linux + ssh-keygen only.
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
@@ -89,3 +91,28 @@ def test_accepts_matching_host_and_rejects_mismatch(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "_host_platform", lambda: "x86_64")                 # unsupported host
     assert mod.main(args + ["--artifact", res["artifacts"]["aarch64"]]) == 2
+
+
+def test_verified_wrapper_writes_install_identity_once(tmp_path, monkeypatch):
+    mod = _load()
+    res, store = _release(tmp_path)
+    identity = tmp_path / "verified-install-identity.json"
+    monkeypatch.setattr(mod, "_host_platform", lambda: "aarch64")
+    args = [
+        "--manifest", res["manifest"],
+        "--signature", res["signature"],
+        "--artifact", res["artifacts"]["aarch64"],
+        "--trust-store", store,
+        "--write-install-identity", str(identity),
+    ]
+    assert mod.main(args) == 0
+    doc = json.loads(identity.read_text())
+    manifest = json.loads(pathlib.Path(res["manifest"]).read_text())
+    assert doc["schema"] == 1
+    assert doc["source_commit"] == manifest["source"]["commit"]
+    assert doc["source_tag"] == "v0.3.16"
+    assert doc["artifact_name"] == pathlib.Path(
+        res["artifacts"]["aarch64"]).name
+    assert stat.S_IMODE(identity.stat().st_mode) == 0o600
+    # O_EXCL: a second verification cannot replace evidence selected earlier.
+    assert mod.main(args) == 3

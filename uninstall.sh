@@ -426,7 +426,13 @@ phase4b_conduit_remove() {
 phase5_appdir() {
     section "Phase 5 — Removing application directory"
 
-    step "5a — Removing ${APP_DIR}"
+    step "5a0 — Removing Epic-1 privileged state (/var/lib/ccc-update, /var/lib/ccc-status)"
+    rm -rf /var/lib/ccc-update /var/lib/ccc-status
+    info "privileged updater state removed"
+
+    # Uninstall IS the explicit Owner-authorized trust-removal policy: no other
+    # lifecycle path (backup/deploy/rollback/GC) may delete ${APP_DIR}/trust.
+    step "5a — Removing ${APP_DIR} (includes the trust anchor by explicit policy)"
     if rm -rf "${APP_DIR}"; then
         _APP_DIR_REMOVED=true
         info "${APP_DIR} removed"

@@ -13,13 +13,13 @@ unit tests without pulling the backend package.
 Flow
 ----
   1. Read a framed payload (ciphertext + passphrase) from STDIN only.
-  2. PRE-FLIGHT, while still attached to the caller: validate the frame, take an
-     exclusive lock, and open_backup() to verify passphrase + compatibility +
-     key-exclusion. Any failure exits non-zero with a generic message and the
-     target is untouched (nothing has changed; no detach).
-  3. On success: print an "accepted <id>" ack, then DOUBLE-FORK + setsid to
-     detach a worker that outlives conduit-cc.
-  4. WORKER (detached): write in_progress -> stop conduit-cc -> take a
+  2. Under the shared lifecycle lock, create an attempt-recorded root-only FIFO
+     handoff and launch this exact helper's internal worker in a fixed transient
+     systemd unit. Ciphertext/passphrase cross only the FIFO (never disk/argv/env).
+  3. WORKER: re-parse and pre-flight the frame, acquire the lifecycle lock, then
+     return the "accepted <id>" ack through a second root-only FIFO. No target
+     mutation or service stop occurs before this ack.
+  4. WORKER (transient unit): write in_progress -> stop conduit-cc -> take a
      worker-owned checkpoint -> restore_backup() -> start conduit-cc -> require
      systemctl active AND an HTTP health probe. On restore failure OR an
      unhealthy restart, roll back to the worker checkpoint and restart. Write a
@@ -27,8 +27,8 @@ Flow
 
 Security
 --------
-  * Secrets (passphrase, ciphertext, decrypted bytes) arrive on stdin only and
-    live in memory; never in argv, env, the outcome file, or logs.
+  * Secrets (passphrase, ciphertext, decrypted bytes) arrive on stdin/FIFO only
+    and live in memory; never in argv, env, regular files, outcome, or logs.
   * Outcome/logs carry generic messages only.
   * STATE_DIR is NOT created here (provisioning is deferred to S4B-2.4): if it is
     missing the helper fails cleanly.
@@ -37,10 +37,13 @@ Security
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -52,19 +55,40 @@ except ImportError:                       # Linux-only in production; see _acqui
     fcntl = None
 
 # --- Locked constants (never overridable from argv/env) ---------------------
-VENV_PYTHON = "/opt/conduit-cc/venv/bin/python3"
-APP_DIR = "/opt/conduit-cc"               # sys.path root for `import backend...`
+# ---- Installed-location bootstrap (A5) --------------------------------------
+# The application root is DERIVED from this helper's own validated real
+# location (<app-root>/bin/<helper> -> <app-root>), never assumed from a
+# hardcoded absolute path. Installed at /opt/conduit-cc/bin/... this yields
+# exactly /opt/conduit-cc; under the repository layout it yields
+# .../deployment (harmless: tests import backend from the repo root). A
+# helper executed from a layout whose parent directory is not `bin/` fails
+# closed at first privileged use.
+_SELF_REAL = os.path.realpath(__file__)
+_BIN_DIR = os.path.dirname(_SELF_REAL)
+_LAYOUT_OK = os.path.basename(_BIN_DIR) == "bin"
+APP_DIR = os.path.dirname(_BIN_DIR) if _LAYOUT_OK else "/invalid-helper-layout"
+VENV_PYTHON = f"{APP_DIR}/venv/bin/python3"
 CCC_DIR = "/etc/conduit-cc"               # restore target (conduit-cc owned)
-STATE_DIR = "/var/lib/conduit-cc"         # must pre-exist (provisioned in S4B-2.4)
-OUTCOME_PATH = "/var/lib/conduit-cc/restore-status.json"
-LOCK_PATH = "/var/lib/conduit-cc/.restore.lock"
+# Epic-1 state boundary (F2-class): the restore lock lives in the ROOT-ONLY
+# private dir (service cannot delete/replace it to defeat root's mutex); the
+# outcome document is PUBLISHED to the service-readable dir whose parent is
+# root-owned and not service-writable.
+PRIVATE_DIR = "/var/lib/ccc-update"                    # root:root 0700
+ATTEMPTS_DIR = f"{PRIVATE_DIR}/attempts"                # root:root 0700
+PUBLIC_STATUS_DIR = "/var/lib/ccc-status"              # root:root 0755
+OUTCOME_PATH = f"{PUBLIC_STATUS_DIR}/restore-status.json"   # root:conduit-cc 0640
+LOCK_PATH = f"{PRIVATE_DIR}/lifecycle.lock"             # shared update/restore mutex
+_OWNER_UID = 0                                          # expected state owner (tests inject)
 UNIT = "conduit-cc"
 HEALTH_URL = "http://127.0.0.1:8000/api/health"
 SYSTEMCTL = "/usr/bin/systemctl"
+SYSTEMD_RUN = "/usr/bin/systemd-run"
+RESTORE_UNIT = "ccc-restore.service"
+UPDATE_UNIT = "ccc-update.service"
 # S4B-2.6: existing M2 helper used to re-apply the backup's Conduit settings.
 # The worker is already root, so it execs this directly (no sudo, no new grant);
 # the helper remains the single validation source for the settings values.
-APPLY_HELPER_PATH = "/opt/conduit-cc/bin/ccc-apply-conduit-config"
+APPLY_HELPER_PATH = f"{APP_DIR}/bin/ccc-apply-conduit-config"
 
 # Checkpoint set (mirrors the S3 worker checkpoint; covers restart-health failure).
 CHECKPOINT_FILES = ("ccc.db", "ccc.db-wal", "ccc.db-shm", ".env", "config.json")
@@ -80,6 +104,7 @@ STOP_TIMEOUT_S = 30
 START_TIMEOUT_S = 45
 HEALTH_TIMEOUT_S = 30
 POLL_INTERVAL_S = 0.5
+HANDOFF_TIMEOUT_S = 30
 
 # Grace delay (S4B-2.5c) between the worker writing in_progress and stopping
 # conduit-cc, so the API's 202 response has time to flush over the socket before
@@ -88,7 +113,7 @@ GRACE_BEFORE_STOP_S = 2
 
 _RESTORE_ID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{7,63}$")
 
-# --- Exit codes (PRE-DETACH only; post-detach uses the outcome file) ---------
+# --- Exit codes (pre-handoff; post-ack uses the outcome file) ----------------
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_FS = 3
@@ -113,7 +138,7 @@ def _utcnow() -> str:
 
 
 def _fail(code: int, message: str) -> None:
-    """Log a generic message and exit with a structured code (pre-detach)."""
+    """Log a generic message and exit with a structured code (pre-ack)."""
     _log(message)
     raise SystemExit(code)
 
@@ -175,27 +200,76 @@ def parse_frame(stream):
 # --------------------------------------------------------------------------- #
 # state dir + lock                                                            #
 # --------------------------------------------------------------------------- #
+def _ensure_app_dir_on_path() -> bool:
+    """Establish `import backend...` from the DERIVED application root (A5).
+    Returns False (fail closed) if the installed layout is invalid."""
+    if not _LAYOUT_OK:
+        sys.stderr.write("ccc-restore-apply: MARKER=BAD_LAYOUT invalid installed "
+                         "layout (expected <app-root>/bin/<helper>)\n")
+        return False
+    if APP_DIR not in sys.path:
+        sys.path.insert(0, APP_DIR)
+    return True
+
+
 def _state_dir_ok() -> bool:
-    """True iff STATE_DIR exists and is a real directory. We never create it."""
+    """True iff BOTH Epic-1 state dirs exist with correct ownership/mode
+    (root-only private dir, root-owned non-service-writable public dir).
+    We never create them here: provisioning is install/update's job.
+    Emits DISTINCT stderr markers so an import failure can never be mistaken
+    for a state failure (installed-layout proof depends on this)."""
+    if not _ensure_app_dir_on_path():
+        return False
     try:
-        return os.path.isdir(STATE_DIR) and not os.path.islink(STATE_DIR)
-    except OSError:
+        from backend.priv_state import (assert_private_dir, assert_public_dir,
+                                        PrivStateError)
+    except Exception:  # noqa: BLE001 - fail closed without the library
+        sys.stderr.write("ccc-restore-apply: MARKER=PRIV_STATE_IMPORT_FAILED\n")
+        return False
+    sys.stderr.write("ccc-restore-apply: MARKER=PRIV_STATE_IMPORT_OK\n")
+    try:
+        assert_private_dir(PRIVATE_DIR, _OWNER_UID)
+        assert_private_dir(ATTEMPTS_DIR, _OWNER_UID)
+        assert_public_dir(PUBLIC_STATUS_DIR, _OWNER_UID)
+        return True
+    except (PrivStateError, OSError) as exc:
+        sys.stderr.write(f"ccc-restore-apply: MARKER=STATE_DIRS_INVALID {exc}\n")
         return False
 
 
-def acquire_lock():
+def acquire_lock(*, blocking: bool = False):
     """Open + flock LOCK_PATH exclusively (non-blocking). Returns the fd.
 
     Raises SystemExit(EXIT_BUSY) if held, SystemExit(EXIT_FS) on fs/locking error.
-    The fd is intentionally inheritable so the detached worker keeps the lock."""
+    The public apply path uses a nonblocking acquisition. The already-launched
+    transient worker uses a blocking acquisition for the lock handoff."""
     if fcntl is None:
         _fail(EXIT_FS, "file locking unavailable (fcntl missing) -- Linux required")
     try:
-        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        if not _ensure_app_dir_on_path():
+            _fail(EXIT_FS, "invalid installed layout")
+        from backend.priv_state import assert_private_dir, PrivStateError
+        assert_private_dir(PRIVATE_DIR, _OWNER_UID)
+        fd = os.open(
+            LOCK_PATH,
+            os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        import stat as _stat
+        fst = os.fstat(fd)
+        cur = os.lstat(LOCK_PATH)
+        if (not _stat.S_ISREG(fst.st_mode) or fst.st_uid != _OWNER_UID
+                or fst.st_nlink != 1
+                or (cur.st_dev, cur.st_ino) != (fst.st_dev, fst.st_ino)):
+            os.close(fd)
+            _fail(EXIT_FS, "restore lock failed identity/ownership validation")
+    except PrivStateError as exc:
+        _fail(EXIT_FS, f"private state dir invalid: {exc}")
     except OSError as exc:
         _fail(EXIT_FS, f"cannot open lock file (rc={exc.errno})")
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        fcntl.flock(fd, flags)
     except OSError:
         os.close(fd)
         _fail(EXIT_BUSY, "another restore is already in progress")
@@ -209,8 +283,8 @@ def _load_backend():
     """Import the frozen restore engine. Returns
     (open_backup, restore_backup, (BackupCryptoError, BackupArchiveError, KeyExclusionError)).
     Raises ImportError if the venv/package is unavailable."""
-    if APP_DIR not in sys.path:
-        sys.path.insert(0, APP_DIR)
+    if not _ensure_app_dir_on_path():
+        raise ImportError("invalid installed layout (bin/ parent required)")
     from backend.backup.archiver import open_backup
     from backend.backup.restore import restore_backup
     from backend.backup.crypto import BackupCryptoError
@@ -237,6 +311,20 @@ def make_checkpoint(ccc_dir: str):
     captured = {}
     for name in CHECKPOINT_FILES:
         src = os.path.join(ccc_dir, name)
+        # A3: checkpoint reads must not follow symlinks either -- a symlinked
+        # checkpoint member (esp. .env) would let root copy an arbitrary host
+        # file into service-readable state. Regular files only; anything else
+        # is skipped exactly like an absent file (fail-safe, recorded below).
+        if os.path.islink(src) or (os.path.exists(src) and not os.path.isfile(src)):
+            continue
+        if name == ".env" and os.path.exists(src):
+            # .env is snapshotted IN MEMORY via the canonical reader; restored
+            # via the canonical atomic writer (exact conduit-cc 0600).
+            if not _ensure_app_dir_on_path():
+                raise OSError("invalid installed layout for env snapshot")
+            from backend.env_file import read_env_text
+            captured[name] = ("__env_text__", read_env_text(src))
+            continue
         if os.path.exists(src):
             dst = os.path.join(ckpt, name)
             shutil.copy2(src, dst)
@@ -247,6 +335,12 @@ def make_checkpoint(ccc_dir: str):
 
 def restore_checkpoint(ccc_dir: str, captured: dict) -> None:
     for name, ckpt_path in captured.items():
+        if isinstance(ckpt_path, tuple) and ckpt_path[0] == "__env_text__":
+            if not _ensure_app_dir_on_path():
+                raise OSError("invalid installed layout for env restore")
+            from backend.env_file import write_env_text
+            write_env_text(os.path.join(ccc_dir, name), ckpt_path[1])
+            continue
         os.replace(ckpt_path, os.path.join(ccc_dir, name))
     for side in DB_SIDECARS:
         if side not in captured:
@@ -343,30 +437,20 @@ def write_outcome(state, restore_id, started_utc, finished_utc, restart_ok, mess
         "pid": os.getpid() if state == "in_progress" else None,
         "conduit_settings_state": conduit_settings_state,
     }
-    payload = json.dumps(data).encode("utf-8")
-    out_dir = os.path.dirname(OUTCOME_PATH)
-    fd, tmp = tempfile.mkstemp(prefix=".restore-status-", dir=out_dir)
+    # Epic-1: publish through the shared SAFE writer (parent/ownership invariants,
+    # unpredictable mkstemp, no symlink following, fsync + atomic replace + parent
+    # fsync; failure preserves the previous valid outcome document).
+    from backend.priv_state import publish_status
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.chmod(tmp, 0o640)
-        try:
-            shutil.chown(tmp, "conduit-cc", "conduit-cc")
-        except (LookupError, PermissionError, OSError):
-            pass                          # account absent (tests) / insufficient priv
-        os.replace(tmp, OUTCOME_PATH)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        import grp as _grp
+        _gid = _grp.getgrnam("conduit-cc").gr_gid
+    except (KeyError, OSError):
+        _gid = None                       # account absent (tests); root keeps gid 0
+    publish_status(OUTCOME_PATH, data, owner_uid=_OWNER_UID, group_gid=_gid)
 
 
 # --------------------------------------------------------------------------- #
-# worker (detached)                                                           #
+# restore worker (fixed transient systemd unit)                              #
 # --------------------------------------------------------------------------- #
 def _hhmm_to_min(value) -> int:
     """Convert an "HH:MM" (UTC, 24h) string to minutes-since-midnight. Raises
@@ -515,93 +599,400 @@ def _finish(restore_id, started_utc, state, restart_ok, message,
 
 
 # --------------------------------------------------------------------------- #
-# detach                                                                      #
+# transient-unit FIFO handoff                                                 #
 # --------------------------------------------------------------------------- #
-def _redirect_worker_std() -> None:
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    if devnull > 2:
-        os.close(devnull)
+def _priv_state_module():
+    if not _ensure_app_dir_on_path():
+        raise RuntimeError("invalid installed layout")
+    from backend import priv_state
+    return priv_state
+
+
+def _frame_bytes(restore_id: str, blob: bytes, passphrase: bytes) -> bytes:
+    header = (
+        "CCC-RESTORE/1\n"
+        f"restore_id: {restore_id}\n"
+        f"blob_len: {len(blob)}\n"
+        f"passphrase_len: {len(passphrase)}\n\n"
+    ).encode("ascii")
+    return header + blob + passphrase
+
+
+def _unit_busy(unit: str) -> bool:
+    import subprocess
     try:
-        os.chdir("/")
+        proc = subprocess.run(
+            [SYSTEMCTL, "is-active", unit],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        return (proc.stdout or "").strip() in {
+            "active", "activating", "reloading", "deactivating"
+        }
+    except OSError:
+        return False
+
+
+def _cleanup_attempt(attempt_id: str, work: str | None = None) -> bool:
+    try:
+        return _priv_state_module().cleanup_attempt(
+            PRIVATE_DIR,
+            ATTEMPTS_DIR,
+            attempt_id,
+            _OWNER_UID,
+            argv_work=work,
+        )
+    except Exception:
+        return False
+
+
+def _prepare_handoff(attempt_id: str) -> tuple[str, str, str]:
+    pstate = _priv_state_module()
+    work = os.path.join(PRIVATE_DIR, f"ccc-restore-{attempt_id}")
+    pstate.record_attempt(
+        ATTEMPTS_DIR, attempt_id, work, _OWNER_UID, kind="restore")
+    try:
+        os.mkdir(work, 0o700)
+        os.chmod(work, 0o700)
+        payload_fifo = os.path.join(work, "payload.fifo")
+        ack_fifo = os.path.join(work, "ack.fifo")
+        os.mkfifo(payload_fifo, 0o600)
+        os.mkfifo(ack_fifo, 0o600)
+        return work, payload_fifo, ack_fifo
+    except BaseException:
+        _cleanup_attempt(attempt_id, work)
+        raise
+
+
+def _launch_restore_unit(attempt_id: str, restore_id: str, work: str) -> int:
+    import subprocess
+    cmd = [
+        SYSTEMD_RUN, "--collect", "--no-block", "--quiet",
+        f"--unit={RESTORE_UNIT}",
+        "--description=Conduit Control Center restore",
+        _SELF_REAL, "__run-worker",
+        "--attempt", attempt_id,
+        "--restore-id", restore_id,
+        "--work", work,
+    ]
+
+    def _try():
+        try:
+            return subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+
+    proc = _try()
+    if proc is not None and proc.returncode == 0:
+        return 0
+    try:
+        subprocess.run(
+            [SYSTEMCTL, "reset-failed", RESTORE_UNIT],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        pass
+    proc = _try()
+    return 3 if proc is None else (proc.returncode or 1)
+
+
+def _validate_fifo(path: str) -> None:
+    st = os.lstat(path)
+    if not stat.S_ISFIFO(st.st_mode) or st.st_uid != _OWNER_UID \
+            or stat.S_IMODE(st.st_mode) != 0o600 or st.st_nlink != 1:
+        raise OSError("restore handoff FIFO failed identity/ownership validation")
+
+
+def _validate_open_fifo(path: str, fd: int) -> None:
+    """Prove the opened FIFO is still the exact path object we validated."""
+    fst = os.fstat(fd)
+    cur = os.lstat(path)
+    if not stat.S_ISFIFO(fst.st_mode) or fst.st_uid != _OWNER_UID \
+            or stat.S_IMODE(fst.st_mode) != 0o600 or fst.st_nlink != 1 \
+            or (fst.st_dev, fst.st_ino) != (cur.st_dev, cur.st_ino):
+        raise OSError("opened restore FIFO failed identity/ownership validation")
+
+
+def _open_fifo_writer(path: str, deadline: float) -> int:
+    while time.monotonic() < deadline:
+        try:
+            fd = os.open(
+                path,
+                os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            try:
+                _validate_open_fifo(path, fd)
+            except BaseException:
+                os.close(fd)
+                raise
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+            return fd
+        except OSError as exc:
+            if exc.errno not in (errno.ENXIO, errno.ENOENT):
+                raise
+            time.sleep(0.05)
+    raise TimeoutError("restore worker did not open the payload FIFO")
+
+
+def _stop_restore_unit() -> None:
+    import subprocess
+    try:
+        subprocess.run(
+            [SYSTEMCTL, "stop", RESTORE_UNIT],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
     except OSError:
         pass
 
 
-def _detach_and_run(opened, restore_backup, restore_id, started_utc, lockfd) -> None:
-    """Double-fork + setsid so the worker is reparented to PID 1 and survives
-    conduit-cc stopping. The foreground returns to main (which exits EXIT_OK).
-    Stubbed in unit tests; the real fork path is exercised only on the Pi."""
-    pid = os.fork()
-    if pid > 0:
-        return                            # foreground -> main returns EXIT_OK
-    os.setsid()
-    if os.fork() > 0:
-        os._exit(0)                       # intermediate exits
-    _redirect_worker_std()                # grandchild = worker (keeps lockfd)
+def _handoff_and_wait(frame: bytes, restore_id: str, attempt_id: str,
+                      work: str, payload_fifo: str, ack_fifo: str,
+                      lockfd: int) -> tuple[int, str]:
+    import select
+    deadline = time.monotonic() + HANDOFF_TIMEOUT_S
+    ackfd = -1
+    lock_open = True
+    launched = False
     try:
-        run_worker(opened, restore_backup, restore_id, started_utc, lockfd)
+        _validate_fifo(payload_fifo)
+        _validate_fifo(ack_fifo)
+        ackfd = os.open(
+            ack_fifo,
+            os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        _validate_open_fifo(ack_fifo, ackfd)
+        if _launch_restore_unit(attempt_id, restore_id, work) != 0:
+            return EXIT_SYSTEMCTL, ""
+        launched = True
+        payloadfd = _open_fifo_writer(payload_fifo, deadline)
+        try:
+            with os.fdopen(payloadfd, "wb", buffering=0) as out:
+                out.write(frame)
+        finally:
+            payloadfd = -1
+        # Unit is registered and owns the frame. Release the launch mutex; the
+        # worker acquires it before preflight/ack and holds it through restore.
+        os.close(lockfd)
+        lock_open = False
+        data = bytearray()
+        while time.monotonic() < deadline and b"\n" not in data:
+            remaining = max(0.0, deadline - time.monotonic())
+            readable, _, _ = select.select([ackfd], [], [], remaining)
+            if not readable:
+                continue
+            chunk = os.read(ackfd, 256)
+            if chunk:
+                data.extend(chunk)
+        if b"\n" not in data:
+            _stop_restore_unit()
+            return EXIT_INTERNAL, ""
+        line = bytes(data).split(b"\n", 1)[0].decode("ascii", "replace")
+        if line == f"accepted {restore_id}":
+            return EXIT_OK, line
+        if re.fullmatch(r"error [2-7]", line):
+            return int(line.split()[1]), line
+        # An unrecognised acknowledgement is not a terminal worker result.  The
+        # unit may still be running with ownership of this attempt, so fail
+        # closed by stopping the complete transient-unit cgroup before the
+        # public caller returns an internal error.
+        _stop_restore_unit()
+        return EXIT_INTERNAL, line
+    except BaseException:
+        if launched:
+            _stop_restore_unit()
+        raise
     finally:
-        os._exit(0)
+        if lock_open:
+            os.close(lockfd)
+        if ackfd >= 0:
+            os.close(ackfd)
+
+
+def _worker_ack(ack_fifo: str, line: str) -> None:
+    _validate_fifo(ack_fifo)
+    fd = os.open(
+        ack_fifo,
+        os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        _validate_open_fifo(ack_fifo, fd)
+        with os.fdopen(fd, "wb", buffering=0) as out:
+            fd = -1
+            out.write((line + "\n").encode("ascii"))
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _run_worker_entry(attempt_id: str, restore_id: str, argv_work: str) -> int:
+    pstate = _priv_state_module()
+    ack_fifo = None
+    try:
+        work = pstate.attempt_work(
+            PRIVATE_DIR,
+            ATTEMPTS_DIR,
+            attempt_id,
+            kind="restore",
+            owner_uid=_OWNER_UID,
+            argv_work=argv_work,
+        )
+        payload_fifo = os.path.join(work, "payload.fifo")
+        ack_fifo = os.path.join(work, "ack.fifo")
+        _validate_fifo(payload_fifo)
+        _validate_fifo(ack_fifo)
+        payloadfd = os.open(
+            payload_fifo,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            _validate_open_fifo(payload_fifo, payloadfd)
+            with os.fdopen(payloadfd, "rb", buffering=0) as stream:
+                payloadfd = -1
+                framed_id, blob, passphrase = parse_frame(stream)
+        finally:
+            if payloadfd >= 0:
+                os.close(payloadfd)
+        if framed_id != restore_id:
+            _worker_ack(ack_fifo, f"error {EXIT_USAGE}")
+            return EXIT_USAGE
+        try:
+            lockfd = acquire_lock(blocking=True)
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else EXIT_INTERNAL
+            if rc not in {
+                    EXIT_USAGE, EXIT_FS, EXIT_SYSTEMCTL, EXIT_BUSY,
+                    EXIT_PREFLIGHT, EXIT_INTERNAL}:
+                rc = EXIT_INTERNAL
+            _worker_ack(ack_fifo, f"error {rc}")
+            return rc
+        try:
+            open_backup, restore_backup, validation_errors = _load_backend()
+            try:
+                opened = open_backup(blob, passphrase)
+            except validation_errors:
+                _worker_ack(ack_fifo, f"error {EXIT_PREFLIGHT}")
+                return EXIT_PREFLIGHT
+            except Exception:
+                _worker_ack(ack_fifo, f"error {EXIT_INTERNAL}")
+                return EXIT_INTERNAL
+            finally:
+                passphrase = None
+                blob = None
+            started_utc = _utcnow()
+            _worker_ack(ack_fifo, f"accepted {restore_id}")
+            run_worker(opened, restore_backup, restore_id, started_utc)
+            return EXIT_OK
+        finally:
+            os.close(lockfd)
+    except (FrameError, OSError, RuntimeError):
+        if ack_fifo is not None:
+            try:
+                _worker_ack(ack_fifo, f"error {EXIT_FS}")
+            except Exception:
+                pass
+        return EXIT_FS
+    except Exception:
+        if ack_fifo is not None:
+            try:
+                _worker_ack(ack_fifo, f"error {EXIT_INTERNAL}")
+            except Exception:
+                pass
+        return EXIT_INTERNAL
+    finally:
+        _cleanup_attempt(attempt_id, argv_work)
 
 
 # --------------------------------------------------------------------------- #
 # entry point                                                                 #
 # --------------------------------------------------------------------------- #
 def main(argv=None, stdin=None) -> int:
-    parser = argparse.ArgumentParser(prog="ccc-restore-apply", add_help=True)
-    parser.add_argument("command", choices=["apply"])
-    try:
-        args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    except SystemExit:
-        return EXIT_USAGE
-
+    args = list(sys.argv[1:] if argv is None else argv)
     os.umask(0o077)
-    stream = stdin if stdin is not None else sys.stdin.buffer
 
+    if args[:1] == ["__run-worker"]:
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--attempt", required=True)
+        parser.add_argument("--restore-id", required=True)
+        parser.add_argument("--work", required=True)
+        try:
+            ns = parser.parse_args(args[1:])
+        except SystemExit:
+            return EXIT_USAGE
+        if not re.fullmatch(r"[0-9a-f]{12}", ns.attempt) \
+                or not _RESTORE_ID_RE.fullmatch(ns.restore_id):
+            return EXIT_USAGE
+        return _run_worker_entry(ns.attempt, ns.restore_id, ns.work)
+
+    if args != ["apply"]:
+        return EXIT_USAGE
+    stream = stdin if stdin is not None else sys.stdin.buffer
     if not _state_dir_ok():
         _log("state directory missing; provisioning is deferred to deployment")
         return EXIT_FS
-
     try:
         restore_id, blob, passphrase = parse_frame(stream)
     except FrameError as exc:
         _log("invalid input frame: " + str(exc))
         return EXIT_USAGE
-
     try:
-        lockfd = acquire_lock()           # raises SystemExit(EXIT_BUSY/EXIT_FS) on failure
+        lockfd = acquire_lock()
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else EXIT_INTERNAL
-
+    if _unit_busy(RESTORE_UNIT) or _unit_busy(UPDATE_UNIT):
+        os.close(lockfd)
+        return EXIT_BUSY
+    pstate = _priv_state_module()
+    if pstate.sweep_stale_attempts(
+            PRIVATE_DIR, ATTEMPTS_DIR, _OWNER_UID):
+        os.close(lockfd)
+        _log("stale attempt cleanup requires Owner diagnosis")
+        return EXIT_FS
+    attempt_id = secrets.token_hex(6)
     try:
-        open_backup, restore_backup, validation_errors = _load_backend()
-    except Exception:
-        os.close(lockfd)
-        _log("restore engine unavailable")
-        return EXIT_INTERNAL
-
-    started_utc = _utcnow()
-    try:
-        opened = open_backup(blob, passphrase)
-    except validation_errors:
-        os.close(lockfd)
-        _log("backup failed pre-flight validation")
-        return EXIT_PREFLIGHT
-    except Exception:
-        os.close(lockfd)
-        _log("unexpected error during validation")
-        return EXIT_INTERNAL
-    finally:
-        # Drop secret references as soon as validation is done; `opened` holds the
-        # decrypted staging that the worker needs.
-        passphrase = None
+        work, payload_fifo, ack_fifo = _prepare_handoff(attempt_id)
+        frame = _frame_bytes(restore_id, blob, passphrase)
         blob = None
-
-    _emit_ack(restore_id)
-    _detach_and_run(opened, restore_backup, restore_id, started_utc, lockfd)
-    return EXIT_OK
+        passphrase = None
+        try:
+            rc, ack = _handoff_and_wait(
+                frame, restore_id, attempt_id, work, payload_fifo, ack_fifo, lockfd)
+        finally:
+            # _handoff_and_wait owns and closes the launch lock on every path.
+            lockfd = -1
+        frame = b""
+        if rc == EXIT_OK:
+            sys.stdout.write(ack + "\n")
+            sys.stdout.flush()
+            return EXIT_OK
+        if not _unit_busy(RESTORE_UNIT):
+            _cleanup_attempt(attempt_id, work)
+        return rc
+    except Exception:
+        if lockfd >= 0:
+            os.close(lockfd)
+        if not _unit_busy(RESTORE_UNIT):
+            _cleanup_attempt(attempt_id)
+        _log("restore worker handoff failed")
+        return EXIT_INTERNAL
 
 
 if __name__ == "__main__":

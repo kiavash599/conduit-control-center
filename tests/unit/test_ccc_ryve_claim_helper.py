@@ -97,8 +97,14 @@ def test_install_wires_helper_and_sudoers_grant():
     assert GRANT in txt               # (conduit) sudoers grant present
 
 
-def test_update_appends_helper_grant_if_missing():
+def test_update_renders_then_revalidates_helper_grant_without_m2_mutation():
     txt = UPDATE.read_text(encoding="utf-8")
+    phase3 = txt.split('3b2 - Re-provisioning', 1)[1].split('phase_m2_config_write_artifacts', 1)[0]
+    m2 = txt.split('phase_m2_config_write_artifacts() {', 1)[1].split(
+        'Phase BS1 guard', 1)[0]
+    grant = '${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-ryve-claim'
+    assert grant in phase3
     assert "_rv_helper_dst" in txt
-    assert 'grep -qF "(conduit) NOPASSWD: ${_rv_helper_dst}"' in txt
+    assert 'grep -Fxq "${_app_user} ALL=(conduit) NOPASSWD: ${_rv_helper_dst}"' in m2
+    assert ">>" not in m2
     assert HELPER_DST in txt

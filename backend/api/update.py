@@ -60,9 +60,12 @@ _ALLOWED_DL_HOSTS = {
 }
 _HELPER_ARGV = ["sudo", "/opt/conduit-cc/bin/ccc-update-apply", "apply"]
 
-_STATE_DIR = "/var/lib/conduit-cc"
-_CHECK_CACHE = f"{_STATE_DIR}/update-check.json"
-_STATUS_PATH = f"{_STATE_DIR}/update-status.json"
+_STATE_DIR = "/var/lib/conduit-cc"                 # service-owned runtime state (cache only)
+_CHECK_CACHE = f"{_STATE_DIR}/update-check.json"   # written BY the service (its own cache)
+# Epic-1 state boundary: the update status is PUBLISHED BY ROOT into the
+# service-READABLE public dir (parent root-owned, not service-writable). The
+# service only ever reads it; the private updater state is not visible here.
+_STATUS_PATH = "/var/lib/ccc-status/update-status.json"
 _INSTALLED_CORE = "/opt/conduit/version"
 
 _CACHE_TTL_S = 24 * 3600

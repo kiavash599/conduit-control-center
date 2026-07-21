@@ -8,9 +8,13 @@ Security contract (DO NOT WEAKEN):
     `apply` NEVER accepts a tag, ref, branch, version, path, URL, or command.
   * The update PAYLOAD (a CCC release SOURCE tarball, .tar.gz) is read from
     STDIN ONLY -- never a filesystem path argument (mirrors ccc-restore-apply).
-  * Hardcoded action and nothing else: extract the payload to a temp tree under
-    the StateDirectory, validate it, then run the HARDCODED, INSTALLED updater
+  * Hardcoded action and nothing else: extract the payload to a recorded work
+    tree under the ROOT-ONLY private state dir (/var/lib/ccc-update; Epic-1
+    boundary -- never the service-writable StateDirectory), validate it, then
+    run the HARDCODED, INSTALLED updater
         /opt/conduit-cc/update.sh --ccc-only --non-interactive --source <tree>
+            --authorized-source-commit <signed-commit>
+            --authorized-source-tag <signed-tag>
     The helper NEVER executes any script contained in the payload; the payload
     is treated as DATA only (rsynced in by the trusted installed update.sh).
   * Refuses anything that is not a strict version INCREASE over the installed
@@ -19,8 +23,11 @@ Security contract (DO NOT WEAKEN):
 
 Execution model (Option B1):
   `apply` runs inside the conduit-cc.service mount namespace (ProtectSystem=strict),
-  where deploy targets (/opt, /var/backups, ...) are read-only. It therefore only
-  ingests the payload into the writable StateDirectory, then launches a fixed-name
+  where deploy targets (/opt, /var/backups, ...) are read-only. It ingests the
+  payload into the ROOT-ONLY private state dir (writable in-namespace via the
+  unit's ReadWritePaths grant; the service ACCOUNT is still excluded by 0700
+  root ownership -- Unix ownership is the boundary, the namespace is
+  defense-in-depth), then launches a fixed-name
   systemd TRANSIENT unit (ccc-update.service) that runs THIS trusted helper's
   internal `__run-worker` subcommand in the HOST mount namespace, where update.sh
   can write. Status / logging / cleanup / rollback remain owned by this helper.
@@ -36,43 +43,66 @@ from __future__ import annotations
 import argparse
 import datetime
 import fcntl
-import json
 import os
 import re
 import shutil
-import stat
 import struct
 import subprocess
 import sys
 import tarfile
-import tempfile
 import time
 import uuid
+from typing import NoReturn
 
 # ---- Hardcoded, non-overridable constants ----------------------------------
-STATE_DIR = "/var/lib/conduit-cc"
-STATUS_PATH = f"{STATE_DIR}/update-status.json"
-LOCK_PATH = f"{STATE_DIR}/.update.lock"   # StateDirectory: writable under ProtectSystem=strict
-WORKER_LOG = f"{STATE_DIR}/update-worker.log"   # update.sh stdout/stderr (root 0600); for diagnosis
-INSTALLED_UPDATE_SH = "/opt/conduit-cc/update.sh"          # trusted, installed
-INSTALLED_VERSION_PY = "/opt/conduit-cc/backend/_version.py"
-SELF_PATH = "/opt/conduit-cc/bin/ccc-update-apply"   # trusted installed helper; ExecStart of the transient unit
+# Epic-1 state boundary (F2): privileged state lives in a ROOT-ONLY directory the
+# service account cannot touch; only the minimal status document is published to a
+# separate service-READABLE location whose parent is root-owned. The service can
+# read the public status but cannot create/replace/rename/symlink/lock/delete
+# anything on either side. The unit grants ReadWritePaths for BOTH dirs so that
+# root-in-namespace (sudo apply) can write; Unix 0700/0755 root ownership is the
+# security boundary, ProtectSystem=strict stays defense-in-depth.
+PRIVATE_DIR = "/var/lib/ccc-update"                 # root:root 0700 (locks/work/log/records)
+ATTEMPTS_DIR = f"{PRIVATE_DIR}/attempts"            # per-attempt ownership records
+PUBLIC_STATUS_DIR = "/var/lib/ccc-status"           # root:root 0755 (published status)
+STATUS_PATH = f"{PUBLIC_STATUS_DIR}/update-status.json"   # root:conduit-cc 0640
+LOCK_PATH = f"{PRIVATE_DIR}/lifecycle.lock"          # shared update/restore mutex
+WORKER_LOG = f"{PRIVATE_DIR}/update-worker.log"     # update.sh stdout/stderr (root 0600)
+_OWNER_UID = 0                                      # expected owner of ALL state (tests inject)
+# ---- Installed-location bootstrap (A5): the app root is DERIVED from this
+# helper's own validated real location (<app-root>/bin/<helper> -> <app-root>),
+# never assumed from a hardcoded absolute path. Invalid layouts fail closed.
+_SELF_REAL = os.path.realpath(__file__)
+_BIN_DIR = os.path.dirname(_SELF_REAL)
+_LAYOUT_OK = os.path.basename(_BIN_DIR) == "bin"
+_APP_DIR = os.path.dirname(_BIN_DIR) if _LAYOUT_OK else "/invalid-helper-layout"
+INSTALLED_UPDATE_SH = f"{_APP_DIR}/update.sh"              # trusted, installed
+INSTALLED_VERSION_PY = f"{_APP_DIR}/backend/_version.py"
+SELF_PATH = _SELF_REAL                               # trusted installed helper; ExecStart of the transient unit
 UPDATE_UNIT = "ccc-update.service"                    # fixed name -> systemd serializes the run phase
+RESTORE_UNIT = "ccc-restore.service"                  # mutually exclusive lifecycle operation
 SYSTEMD_RUN = "/usr/bin/systemd-run"
 SYSTEMCTL = "/usr/bin/systemctl"
 PAYLOAD_VERSION_REL = "backend/_version.py"
 PAYLOAD_UPDATE_REL = "update.sh"
 MAX_PAYLOAD_BYTES = 200 * 1024 * 1024                      # 200 MiB hard cap
 _ACTIVE_WAIT_S = 10                                        # apply waits this long for the unit to register
+_IN_FLIGHT_UNIT_STATES = frozenset({
+    "active", "activating", "reloading", "deactivating",
+})
+_DEFINITELY_INACTIVE_UNIT_STATES = frozenset({"inactive", "failed"})
 _VERSION_RE = re.compile(r'APP_VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
 _VER_ARG_RE = re.compile(r'^\d+\.\d+\.\d+$')
-TRUST_STORE = "/opt/conduit-cc/trust/allowed_signers"   # ADR-0003 M2 trust store (root; service-read-only)
+TRUST_STORE = f"{_APP_DIR}/trust/allowed_signers"   # ADR-0003 M2 trust store (root-only)
 _FRAME_MAGIC = b"CCCU\x01"                               # payload frame header (MUST match backend/api/update.py)
 
 # ADR-0003 verifier (trusted, installed, stdlib-only). Imported fail-closed:
 # if it cannot be loaded, verification cannot proceed and the update is rejected.
 try:
-    sys.path.insert(0, "/opt/conduit-cc")
+    if not _LAYOUT_OK:
+        raise ImportError("invalid installed layout (bin/ parent required)")
+    if _APP_DIR not in sys.path:
+        sys.path.insert(0, _APP_DIR)
     from backend.update_verify import (  # noqa: E402
         verify_release, cross_check_version, product_scope_ok,
         # E1/E1.1 frozen outcome codes consumed by the audit writer (no literals):
@@ -83,6 +113,15 @@ try:
     _VERIFY_AVAILABLE = True
 except Exception:  # noqa: BLE001 - fail-closed on any import problem
     _VERIFY_AVAILABLE = False
+
+# Epic-1 privileged-state primitives (symlink-safe publication, private locks,
+# attempt-ownership records). Imported FAIL-CLOSED like the verifier: without
+# them no status can be published safely, so the helper refuses to run.
+try:
+    from backend import priv_state as _pstate  # noqa: E402
+    _PSTATE_AVAILABLE = True
+except Exception:  # noqa: BLE001 - fail-closed on any import problem
+    _PSTATE_AVAILABLE = False
 
 # ADR-0003 Phase B: E3 audit writer (best-effort, NON-fatal). Imported SEPARATELY
 # from the fail-closed verifier import: if the audit library is unavailable, audit
@@ -112,7 +151,7 @@ def log(msg: str) -> None:
     sys.stderr.write(f"ccc-update-apply: {msg}\n")
 
 
-def die(code: int, msg: str) -> "NoReturn":  # type: ignore[name-defined]
+def die(code: int, msg: str) -> NoReturn:
     log(msg)
     sys.exit(code)
 
@@ -177,14 +216,15 @@ def _version_str(v: tuple[int, int, int]) -> str:
 
 
 def write_status(state: str, **fields) -> None:
+    """Publish the service-readable status document via the SAFE publisher
+    (unpredictable mkstemp, parent/ownership invariants, no symlink following,
+    fsync + atomic replace + parent fsync). A publication failure preserves the
+    previous valid status file. See backend/priv_state.py (F2)."""
+    if not _PSTATE_AVAILABLE:
+        die(3, "MARKER=PRIV_STATE_IMPORT_FAILED privileged state library unavailable (fail closed)")
     doc = {"schema": 1, "state": state, "updated_at": _now()}
     doc.update(fields)
-    tmp = f"{STATUS_PATH}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, STATUS_PATH)
+    _pstate.publish_status(STATUS_PATH, doc, owner_uid=_OWNER_UID, group_gid=_CCC_GID)
 
 
 MAX_UNCOMPRESSED_BYTES = 400 * 1024 * 1024                 # source + wheelhouse ceiling
@@ -365,43 +405,65 @@ def _ingest_payload(work: str) -> tuple[str, tuple[int, int, int]]:
 
 
 def _sweep_stale_workdirs() -> None:
-    """Best-effort removal of leftover 'ccc-update-*' extraction dirs from prior
-    runs (e.g. an interrupted/killed update). Called ONLY while holding the apply
-    flock AND with no active update unit, so any match is an orphan. Hardening:
-    matches ONLY the 'ccc-update-' prefix; uses os.lstat and removes ONLY real
-    directories (symlinks skipped, never followed); never raises."""
+    """Clean leftover work trees from prior interrupted runs. Deletion authority
+    is the per-attempt OWNERSHIP RECORD (backend/priv_state.py), never a name
+    prefix: only recorded, validated, contained paths are removed; anything
+    unrecorded or substituted inside the private dir is PRESERVED (diagnosable
+    foreign object) and reported. Called only while holding the apply flock with
+    no active update unit. Never raises."""
     try:
-        names = os.listdir(STATE_DIR)
+        failed = _pstate.sweep_stale_attempts(PRIVATE_DIR, ATTEMPTS_DIR, _OWNER_UID)
+        for attempt_id in failed:
+            log(f"sweep: preserved undeletable/foreign attempt state: {attempt_id}")
+    except _pstate.PrivStateError as exc:
+        log(f"sweep skipped (state invariant): {exc}")
     except OSError:
-        return
-    for name in names:
-        if not name.startswith("ccc-update-"):
-            continue
-        path = os.path.join(STATE_DIR, name)
-        try:
-            st = os.lstat(path)            # lstat: do NOT follow symlinks
-        except OSError:
-            continue
-        if not stat.S_ISDIR(st.st_mode):   # real directories only
-            continue
-        shutil.rmtree(path, ignore_errors=True)
+        pass
+
+
+def _cleanup_attempt_quiet(attempt_id: str, argv_work: "str | None" = None) -> None:
+    """THE only deletion path in this helper (A2): record-authorized cleanup of
+    THIS attempt's work tree via backend.priv_state.cleanup_attempt (identity
+    tuple: id, record, argv/record path equality, containment, real-directory
+    type, current dev/ino). Anything invalid is PRESERVED and logged. Never
+    raises."""
+    try:
+        _pstate.cleanup_attempt(PRIVATE_DIR, ATTEMPTS_DIR, attempt_id, _OWNER_UID,
+                                argv_work=argv_work)
+    except (_pstate.PrivStateError, OSError) as exc:
+        log(f"cleanup preserved attempt state {attempt_id}: {exc}")
+
+
+def _unit_state(unit: str) -> "str | None":
+    """Return systemd's exact state, or None when it cannot be determined."""
+    try:
+        r = subprocess.run(
+            [SYSTEMCTL, "is-active", unit],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    state = (r.stdout or "").strip()
+    return state or None
 
 
 def _unit_busy() -> bool:
-    """True if the fixed update unit is currently active/activating (run in flight)."""
-    try:
-        r = subprocess.run([SYSTEMCTL, "is-active", UPDATE_UNIT],
-                           stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False)
-    except OSError:
-        return False
-    return (r.stdout or "").strip() in ("active", "activating", "reloading", "deactivating")
+    """True when either fixed privileged lifecycle unit is in flight."""
+    return any(
+        _unit_state(unit) in _IN_FLIGHT_UNIT_STATES
+        for unit in (UPDATE_UNIT, RESTORE_UNIT)
+    )
 
 
 # --------------------------------------------------------------------------- #
 #  Worker  (runs INSIDE the transient unit, in the HOST mount namespace)       #
 # --------------------------------------------------------------------------- #
 def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
-                update_id: str, work: str) -> int:
+                update_id: str, work: str, source_commit: str,
+                source_tag: str) -> int:
     """in_progress -> run installed update.sh -> terminal status -> cleanup.
     update.sh stdout/stderr are captured to WORKER_LOG. Returns a process exit code."""
     write_status("in_progress", id=update_id, pid=os.getpid(),
@@ -410,9 +472,9 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
 
     # Capture update.sh output to a per-run worker log (root 0600, O_NOFOLLOW).
     try:
-        logfd = os.open(WORKER_LOG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        logfd = _pstate.open_private_log(WORKER_LOG, _OWNER_UID)
         logf = os.fdopen(logfd, "w")
-    except OSError:
+    except (OSError, _pstate.PrivStateError):
         logf = None
     try:
         if logf is not None:
@@ -429,7 +491,10 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
         try:
             proc = subprocess.run(
                 ["bash", INSTALLED_UPDATE_SH,
-                 "--ccc-only", "--non-interactive", "--source", tree],
+                 "--ccc-only", "--non-interactive", "--source", tree,
+                 "--update-attempt-id", update_id,
+                 "--authorized-source-commit", source_commit,
+                 "--authorized-source-tag", source_tag],
                 check=False,
                 env=_env,
                 stdin=subprocess.DEVNULL,
@@ -443,7 +508,7 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
                          message=f"could not launch updater: {exc}")
             _audit(OUTCOME_LAUNCH_FAILED, "deploy",
                    from_version=_version_str(frm), target_version=_version_str(to))
-            shutil.rmtree(work, ignore_errors=True)
+            _cleanup_attempt_quiet(update_id, argv_work=work)
             return 3
     finally:
         if logf is not None:
@@ -468,18 +533,23 @@ def _run_update(tree: str, frm: tuple[int, int, int], to: tuple[int, int, int],
                      message=f"Update ended in an unexpected state (rc={rc}); see /var/backups/conduit-cc")
         _audit(OUTCOME_APPLY_FAILED, "deploy",
                from_version=_version_str(frm), target_version=_version_str(to))
-    # Terminal status written above -> now remove the current extraction dir.
-    shutil.rmtree(work, ignore_errors=True)
+    # Terminal status written above -> record-authorized removal of the current
+    # extraction dir and its ownership record (A2: single deletion authority).
+    _cleanup_attempt_quiet(update_id, argv_work=work)
     return 0
 
 
 def run_worker_cmd(argv) -> None:
     """Internal entrypoint executed by the transient unit. NOT a public action."""
+    if not _PSTATE_AVAILABLE:
+        die(3, "privileged attempt-state library unavailable")
     p = argparse.ArgumentParser(prog="ccc-update-apply __run-worker", add_help=False)
     p.add_argument("--work", required=True)
     p.add_argument("--from", dest="frm", required=True)
     p.add_argument("--to", dest="to", required=True)
     p.add_argument("--id", dest="uid", required=True)
+    p.add_argument("--source-commit", required=True)
+    p.add_argument("--source-tag", required=True)
     try:
         a = p.parse_args(argv)
     except SystemExit:
@@ -488,32 +558,42 @@ def run_worker_cmd(argv) -> None:
     frm = _parse_ver_arg(a.frm)
     to = _parse_ver_arg(a.to)
     uid = a.uid
+    source_commit = a.source_commit
+    source_tag = a.source_tag
 
-    global _ATTEMPT_ID
-    _ATTEMPT_ID = uid   # worker audit records correlate with the apply-side run
-
-    def _fail(code: int, msg: str, outcome: "str | None" = None) -> "NoReturn":  # type: ignore[name-defined]
+    def _fail(code: int, msg: str, outcome: "str | None" = None) -> NoReturn:
         if outcome is None and _VERIFY_AVAILABLE:
             outcome = OUTCOME_REJECT_PAYLOAD_SHAPE
         if outcome:
             _audit(outcome, "deploy", from_version=_version_str(frm), target_version=_version_str(to))
         write_status("failed", id=uid, from_version=_version_str(frm),
                      to_version=_version_str(to), finished_at=_now(), message=msg)
-        shutil.rmtree(a.work, ignore_errors=True)
+        # A2: NEVER delete the raw --work argument. Record-authorized cleanup
+        # only; invalid/outside/unrecorded/mismatched objects survive for
+        # diagnosis (the sweep handles recorded orphans later).
+        _cleanup_attempt_quiet(uid, argv_work=a.work)
         sys.exit(code)
 
-    # Defensive work-dir validation (path is engine-generated; re-check anyway).
-    work_abs = os.path.realpath(a.work)
-    if not (work_abs == STATE_DIR or work_abs.startswith(STATE_DIR + os.sep)):
-        _fail(3, "work directory is outside the state directory")
-    if not os.path.basename(work_abs).startswith("ccc-update-"):
-        _fail(3, "work directory is not a ccc-update work directory")
+    # The transient-unit argv identifies the attempt but never authorizes its
+    # filesystem path.  Execution authority comes from the exact, kind-bound
+    # ownership record created before ingest.  On an authorization failure no
+    # cleanup is permitted: the object may belong to another operation kind.
     try:
-        st = os.lstat(work_abs)
-    except OSError as exc:
-        _fail(3, f"work directory missing: {exc}")
-    if not stat.S_ISDIR(st.st_mode):
-        _fail(3, "work directory is not a real directory")
+        work_abs = _pstate.attempt_work(
+            PRIVATE_DIR,
+            ATTEMPTS_DIR,
+            uid,
+            kind="update",
+            owner_uid=_OWNER_UID,
+            argv_work=a.work,
+        )
+    except (_pstate.PrivStateError, OSError):
+        # The attempt id/path are not trusted until the record authorizes them.
+        # Do not publish status, audit as this attempt, or delete anything.
+        die(3, "work directory is not authorized by this update attempt")
+
+    global _ATTEMPT_ID
+    _ATTEMPT_ID = uid   # authorized worker records correlate with this attempt
 
     tree = _derive_tree(work_abs)
     if not (os.path.isfile(os.path.join(tree, PAYLOAD_UPDATE_REL)) and
@@ -526,6 +606,10 @@ def run_worker_cmd(argv) -> None:
         _fail(3, f"cannot read payload version: {exc}")
     if pv != to:
         _fail(3, f"work tree version {pv} does not match expected {_version_str(to)}")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        _fail(3, "verified source commit is malformed")
+    if source_tag != f"v{_version_str(to)}":
+        _fail(3, "verified source tag does not match the target version")
 
     installed = _read_installed_version()
     if not (to > installed and installed == frm):
@@ -533,14 +617,16 @@ def run_worker_cmd(argv) -> None:
                  f"from {_version_str(frm)}, to {_version_str(to)}",
               outcome=(OUTCOME_REJECT_NON_UPGRADE if _VERIFY_AVAILABLE else None))
 
-    sys.exit(_run_update(tree, installed, to, uid, work_abs))
+    sys.exit(_run_update(tree, installed, to, uid, work_abs,
+                         source_commit, source_tag))
 
 
 # --------------------------------------------------------------------------- #
 #  apply  (runs INSIDE conduit-cc.service ns: ingest only, then launch unit)   #
 # --------------------------------------------------------------------------- #
 def _launch_update_unit(work: str, frm: tuple[int, int, int],
-                        to: tuple[int, int, int], update_id: str) -> int:
+                        to: tuple[int, int, int], update_id: str,
+                        source_commit: str, source_tag: str) -> int:
     """Start the fixed-name transient unit running THIS helper's worker subcommand
     in the host namespace. Returns 0 on success."""
     cmd = [
@@ -552,6 +638,8 @@ def _launch_update_unit(work: str, frm: tuple[int, int, int],
         "--from", _version_str(frm),
         "--to", _version_str(to),
         "--id", update_id,
+        "--source-commit", source_commit,
+        "--source-tag", source_tag,
     ]
 
     def _try():
@@ -583,14 +671,42 @@ def _launch_update_unit(work: str, frm: tuple[int, int, int],
     return 0
 
 
+def _ensure_state_dirs() -> None:
+    if _PSTATE_AVAILABLE:
+        # positive import-success marker (installed-layout proof observes this;
+        # never inferred from an ambiguous exit code)
+        sys.stderr.write("ccc-update-apply: MARKER=PRIV_STATE_IMPORT_OK\n")
+    """Create/normalize the Epic-1 state boundary, then ASSERT its invariants
+    (fail-closed). Modes are re-applied every run so drift cannot persist."""
+    if not _PSTATE_AVAILABLE:
+        die(3, "MARKER=PRIV_STATE_IMPORT_FAILED privileged state library unavailable (fail closed)")
+    try:
+        for d, m in ((PRIVATE_DIR, 0o700), (ATTEMPTS_DIR, 0o700), (PUBLIC_STATUS_DIR, 0o755)):
+            os.makedirs(d, exist_ok=True)
+            os.chmod(d, m)
+            if os.geteuid() == 0:
+                os.chown(d, 0, 0)
+    except OSError as exc:
+        die(3, f"MARKER=STATE_DIRS_INVALID cannot provision state dirs: {exc}")
+    try:
+        _pstate.assert_private_dir(PRIVATE_DIR, _OWNER_UID)
+        _pstate.assert_private_dir(ATTEMPTS_DIR, _OWNER_UID)
+        _pstate.assert_public_dir(PUBLIC_STATUS_DIR, _OWNER_UID)
+    except _pstate.PrivStateError as exc:
+        die(3, f"MARKER=STATE_DIRS_INVALID state boundary invariant failed: {exc}")
+
+
 def apply_cmd() -> None:
     global _ATTEMPT_ID
-    os.makedirs(STATE_DIR, exist_ok=True)
+    _ensure_state_dirs()
     # Correlation id generated EARLY so pre-ack rejects are auditable. It is the
     # SAME value later surfaced by the ack and the status `id` (format/semantics
     # unchanged); pre-ack rejects still emit no status/ack, only an audit record.
     _ATTEMPT_ID = update_id = uuid.uuid4().hex[:12]
-    lock_fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        lock_fd = _pstate.open_private_lock(LOCK_PATH, _OWNER_UID)
+    except _pstate.PrivStateError as exc:
+        die(3, f"cannot open private update lock: {exc}")
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -599,22 +715,44 @@ def apply_cmd() -> None:
     # Run-phase mutex: if the transient unit is already active, refuse and do NOT
     # sweep (the active run owns a work dir). Held flock serializes apply calls.
     if _unit_busy():
-        die(2, "another update is already in progress")
+        die(2, "another update or restore is already in progress")
 
     # Flock held + no active unit -> any leftover ccc-update-* dir is an orphan.
     _sweep_stale_workdirs()
 
     installed = _read_installed_version()
-    work = tempfile.mkdtemp(prefix="ccc-update-", dir=STATE_DIR)
+    # OWNERSHIP RECORD FIRST, then the directory: an interruption at any point
+    # leaves either nothing or a recorded path, never an unowned orphan. The
+    # deterministic name is safe inside the root-only 0700 private dir.
+    work = os.path.join(PRIVATE_DIR, f"ccc-update-{update_id}")
+    try:
+        _pstate.record_attempt(
+            ATTEMPTS_DIR, update_id, work, _OWNER_UID, kind="update")
+    except _pstate.PrivStateError as exc:
+        die(3, f"cannot record attempt ownership: {exc}")
+    os.mkdir(work, 0o700)
     tree, payload_v = _ingest_payload(work)
 
     if payload_v <= installed:
         _audit(OUTCOME_REJECT_NON_UPGRADE, "authorize",
                from_version=_version_str(installed), target_version=_version_str(payload_v),
                signing_principal=(_LAST_META or {}).get("signing_principal"))
-        shutil.rmtree(work, ignore_errors=True)
+        _cleanup_attempt_quiet(update_id)
         die(2, f"refusing non-upgrade: payload {_version_str(payload_v)} "
                f"<= installed {_version_str(installed)} (no downgrade/reinstall)")
+
+    # Source identity is part of worker authorization, so validate it BEFORE
+    # emitting the accepted ack. A source-binding failure must remain a
+    # synchronous rejection, never a false "scheduled" API response.
+    source = (_LAST_META or {}).get("source") or {}
+    source_commit = source.get("commit")
+    source_tag = source.get("tag")
+    if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        _cleanup_attempt_quiet(update_id)
+        die(2, "verified manifest source commit is unavailable")
+    if source_tag != f"v{_version_str(payload_v)}":
+        _cleanup_attempt_quiet(update_id)
+        die(2, "verified manifest source tag/version binding is unavailable")
 
     sys.stdout.write(f"accepted {update_id}\n")
     sys.stdout.flush()
@@ -626,15 +764,28 @@ def apply_cmd() -> None:
     # Launch the trusted worker in a fixed-name systemd transient unit, which runs
     # in the HOST mount namespace (outside conduit-cc.service's ProtectSystem=strict),
     # so update.sh can write /opt, /var/backups, etc.
-    rc = _launch_update_unit(work, installed, payload_v, update_id)
+    rc = _launch_update_unit(work, installed, payload_v, update_id,
+                             source_commit, source_tag)
     if rc != 0:
+        # systemd-run can report failure even when the fixed unit was registered
+        # and is already starting.  Only publish a terminal launch failure and
+        # delete the attempt after proving the unit is definitely not running.
+        # Active, transitional, unknown, empty, or unqueryable states preserve
+        # both the worker-owned attempt and its future status authority.
+        unit_state = _unit_state(UPDATE_UNIT)
+        if unit_state not in _DEFINITELY_INACTIVE_UNIT_STATES:
+            log(
+                "systemd-run returned nonzero but update-unit state is "
+                f"{unit_state or 'unavailable'}; preserving attempt ownership"
+            )
+            os._exit(0)  # ack already sent; worker or Owner diagnosis owns state
         _audit(OUTCOME_LAUNCH_FAILED, "deploy",
                from_version=_version_str(installed), target_version=_version_str(payload_v),
                signing_principal=(_LAST_META or {}).get("signing_principal"))
         write_status("failed", id=update_id, from_version=_version_str(installed),
                      to_version=_version_str(payload_v), finished_at=_now(),
                      message="Could not launch the update unit; no changes were made.")
-        shutil.rmtree(work, ignore_errors=True)
+        _cleanup_attempt_quiet(update_id)
         os._exit(0)   # ack already sent; status reflects the failure
 
     # Hold the flock until the unit registers as active, closing the launch gap so

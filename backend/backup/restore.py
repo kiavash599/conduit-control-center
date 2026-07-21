@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import stat
 import sqlite3
 import tempfile
 from dataclasses import dataclass, field
@@ -42,7 +43,10 @@ _REQUIRED_ITEMS = ("ccc.db", "env.subset")
 # worker (ccc-restore-apply) and never written under ccc_dir. It is therefore
 # absent from _TARGET_NAME, and the path-guard / apply loops skip non-target names.
 _OPTIONAL_ITEMS = ("config.json", "conduit_settings.json")
-_MODE = {"ccc.db": 0o600, ".env": 0o640, "config.json": 0o640}
+# Epic-1 (F7): .env is canonically 0600 -- install already wrote 0600 and a
+# restore must not silently WIDEN it to group-readable (the old 0640 here was
+# a real install-vs-restore contract mismatch, corrected in v0.3.19).
+_MODE = {"ccc.db": 0o600, ".env": 0o600, "config.json": 0o640}
 _DB_SIDECARS = ("ccc.db-wal", "ccc.db-shm")
 _CHECKPOINT_FILES = ("ccc.db", "ccc.db-wal", "ccc.db-shm", ".env", "config.json")
 
@@ -172,16 +176,31 @@ def _merge_env(target_text: str, subset_text: str) -> str:
 
 # --------------------------- checkpoint / apply / rollback ---------------------------
 def _make_checkpoint(ccc_dir: str):
+    """Checkpoint the replaceable config set. A-.env hardening:
+    * every member is lstat-gated -- a symlink or non-regular object is SKIPPED
+      exactly like an absent file (never followed; a symlinked .env can no
+      longer make root read an arbitrary host file into the checkpoint);
+    * .env itself is snapshotted IN MEMORY through the canonical reader
+      (backend/env_file.py) -- canonical bytes, no pathname copy at all."""
+    from backend import env_file as _envf
     ckpt = tempfile.mkdtemp(prefix=".ccc-restore-ckpt-", dir=ccc_dir)
     os.chmod(ckpt, 0o700)
     captured = {}
     for fname in _CHECKPOINT_FILES:
         src = os.path.join(ccc_dir, fname)
-        if os.path.exists(src):
-            dst = os.path.join(ckpt, fname)
-            shutil.copy2(src, dst)
-            os.chmod(dst, 0o600)
-            captured[fname] = dst
+        try:
+            st = os.lstat(src)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue                        # symlink/foreign object: never followed
+        if fname == ".env":
+            captured[fname] = ("__env_text__", _envf.read_env_text(src))
+            continue
+        dst = os.path.join(ckpt, fname)
+        shutil.copy2(src, dst)
+        os.chmod(dst, 0o600)
+        captured[fname] = dst
     return ckpt, captured
 
 
@@ -202,12 +221,15 @@ def _apply(ccc_dir: str, items: dict) -> list:
             pass
     restored.append("ccc.db")
     env_path = os.path.join(ccc_dir, ".env")
-    target_text = ""
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8", errors="replace") as fh:
-            target_text = fh.read()
+    # Epic-1 A3: ALL .env I/O goes through the single canonical implementation
+    # (backend/env_file.py). The read refuses live/dangling symlinks and any
+    # non-regular object BEFORE opening (a service-created symlink can no longer
+    # make the root restore helper read an arbitrary host file); the write is
+    # the canonical atomic 0600 exact-ownership writer. Merge policy unchanged.
+    from backend import env_file as _envf
+    target_text = _envf.read_env_text(env_path)
     merged = _merge_env(target_text, items["env.subset"].decode("utf-8", "replace"))
-    _atomic_write(env_path, merged.encode("utf-8"), _MODE[".env"])
+    _envf.write_env_text(env_path, merged)
     restored.append(".env")
     return restored
 
@@ -229,7 +251,15 @@ def _post_validate(ccc_db_path: str) -> None:
 
 
 def _rollback(ccc_dir: str, captured: dict) -> None:
+    from backend import env_file as _envf
     for fname, ckpt_path in captured.items():
+        if isinstance(ckpt_path, tuple) and ckpt_path[0] == "__env_text__":
+            # .env restore goes exclusively through the canonical atomic writer:
+            # exact conduit-cc:conduit-cc 0600, symlink-refusing, byte-preserving
+            # (in-memory snapshot -- a root-owned checkpoint copy can no longer
+            # leave .env root-owned/unreadable to the service).
+            _envf.write_env_text(os.path.join(ccc_dir, fname), ckpt_path[1])
+            continue
         os.replace(ckpt_path, os.path.join(ccc_dir, fname))
     for side in _DB_SIDECARS:
         if side not in captured:                 # original had none -> ensure none linger

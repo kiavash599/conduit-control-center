@@ -89,24 +89,26 @@ _MAX_INSPECT_BYTES = 10 * 1024 * 1024  # 10 MiB
 # The restore *execution* runs out-of-process in the root helper
 # ccc-restore-apply (committed 1bf5ac7): the API pre-validates, then streams the
 # encrypted blob + passphrase to the helper over stdin and returns 202 as soon as
-# the helper acks + detaches. The actual stop/restore/restart happens in the
-# detached worker; its result is read back from the outcome file (the source of
-# truth), never from this request.
+# the fixed transient systemd worker has accepted the root-only FIFO handoff.
+# The actual stop/restore/restart happens in that independent unit; its result is
+# read back from the outcome file (the source of truth), never from this request.
 #
-# NOTE: the sudoers grant for the helper, the nginx body-limit raise, and
-# /var/lib/conduit-cc provisioning are deferred to S4B-2.4, so this path is not
-# end-to-end on the Pi yet. The unit tests stub the helper invocation.
+# The exact sudoers `apply` grant, nginx body limit and two-directory privileged
+# state boundary are provisioned by install/update. Unit tests stub the helper;
+# real systemd/FIFO/service behavior remains device-authoritative.
 _HELPER_PATH = "/opt/conduit-cc/bin/ccc-restore-apply"
 # Invocation seam: overridable in tests to point at a no-sudo stub.
 _HELPER_ARGV = ["sudo", _HELPER_PATH, "apply"]
-_OUTCOME_PATH = "/var/lib/conduit-cc/restore-status.json"
+# Epic-1 state boundary: the restore outcome is PUBLISHED BY ROOT into the
+# service-READABLE public dir (parent root-owned, not service-writable).
+_OUTCOME_PATH = "/var/lib/ccc-status/restore-status.json"
 _MAX_RESTORE_BYTES = _MAX_INSPECT_BYTES          # mirror the inspect cap
 _CONFIRM_TOKEN = "RESTORE"
 # Deadline applied to the ACK read only (NOT the whole restore). Covers Pi
 # scrypt pre-flight + draining a ≤10 MiB frame.
 _ACK_DEADLINE_S = 30
 
-# Helper foreground (pre-detach) exit codes -- mirror of ccc-restore-apply.
+# Helper foreground (pre-ack) exit codes -- mirror of ccc-restore-apply.
 _EXIT_OK = 0
 _EXIT_USAGE = 2
 _EXIT_FS = 3
@@ -414,18 +416,18 @@ def _build_restore_frame(restore_id: str, blob: bytes, passphrase: bytes) -> byt
 
 def _invoke_restore_helper(frame: bytes):
     """Launch the privileged helper and return AS SOON AS it acks, WITHOUT
-    waiting for the (detached) restore to complete.
+    waiting for the transient restore unit to complete.
 
     Returns one of:
-        ("ack", line)        -- helper printed "accepted <id>"; restore detached
-        ("exit", returncode) -- foreground exited before acking (pre-flight fail)
+        ("ack", line)        -- fixed transient unit accepted the FIFO handoff
+        ("exit", returncode) -- foreground helper exited before the worker ack
         ("mismatch", line)   -- 2xx-ish but the ack line was unexpected
         ("timeout", None)    -- no ack within the deadline (foreground killed)
 
     The frame (ciphertext + passphrase) is written on stdin only. stderr is
     inherited so helper logs reach journald and no stderr pipe can fill and
-    deadlock the helper before it detaches. A daemon thread reaps the short-lived
-    foreground; the detached worker is reparented to PID 1 (reaped by init).
+    deadlock the helper before it hands off. A daemon thread reaps the short-lived
+    foreground helper; systemd owns and reaps the independent restore worker.
     Stubbed/seamed in unit tests; real end-to-end requires the S4B-2.4 grant."""
     proc = subprocess.Popen(
         list(_HELPER_ARGV),
@@ -458,7 +460,7 @@ def _invoke_restore_helper(frame: bytes):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             try:
-                proc.kill()                  # pre-ack => pre-detach => pre-stop: safe
+                proc.kill()              # pre-ack => worker has not stopped CCC
             finally:
                 try:
                     proc.wait(timeout=5)
@@ -484,7 +486,7 @@ def _invoke_restore_helper(frame: bytes):
 
     if text.startswith("accepted "):
         # Reap the short-lived foreground off the request path; do NOT wait for
-        # the detached restore worker.
+        # the independent transient restore unit.
         threading.Thread(target=lambda: proc.wait(), daemon=True).start()
         return ("ack", text)
 
@@ -494,10 +496,10 @@ def _invoke_restore_helper(frame: bytes):
 
 
 def _map_helper_exit(returncode: int) -> HTTPException:
-    """Map a helper FOREGROUND (pre-detach) exit code to an HTTP error.
+    """Map a foreground helper (pre-ack) exit code to an HTTP error.
 
-    EXIT_SYSTEMCTL never appears here -- service control happens in the detached
-    worker and is surfaced via the outcome file, not this response."""
+    A systemd launch failure can appear before ack; post-ack service/restore
+    failures are surfaced via the outcome file, not this response."""
     if returncode == _EXIT_BUSY:
         return HTTPException(status_code=status.HTTP_409_CONFLICT,
                              detail="A restore is already in progress.")
@@ -610,8 +612,9 @@ async def restore_backup_endpoint(
 ) -> dict:
     """Destructive restore. Pre-validates the upload in memory, then hands the
     encrypted blob + passphrase to the privileged helper and returns 202 the
-    moment the helper acks + detaches. The real stop/restore/restart runs in the
-    detached worker; its outcome is read later via GET /api/backup/restore/status.
+    moment the fixed transient unit acknowledges the FIFO handoff. The real
+    stop/restore/restart runs in that unit; its outcome is read later via
+    GET /api/backup/restore/status.
 
     The passphrase is never logged, never placed in argv/env, and never echoed."""
     if confirm != _CONFIRM_TOKEN:
@@ -662,7 +665,7 @@ async def restore_backup_endpoint(
         blob = None
 
     if result == "exit":
-        # Foreground exited before acking -> pre-flight failure; map the code.
+        # Foreground exited before the worker acked; map the code.
         raise _map_helper_exit(payload)
     if result == "timeout":
         logger.error("backup/restore helper timed out before ack")
@@ -678,8 +681,8 @@ async def restore_backup_endpoint(
             detail="Could not start the restore.",
         )
 
-    # Returned as soon as the helper acked + detached; the restore runs out of
-    # band and reports via the outcome file (GET /api/backup/restore/status).
+    # Returned as soon as the transient worker acked; restore continues out of
+    # band under systemd and reports via GET /api/backup/restore/status.
     return {
         "restore_id": restore_id,
         "state": "scheduled",

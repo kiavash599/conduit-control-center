@@ -223,9 +223,10 @@ The installer must be run from inside the repository root.
 
 Starting the installation process.
 
-Run as Root:
+Run as Root only after the release has passed the verify-before-extract runbook
+and `verified-install-identity.json` exists outside the extracted tree:
 
-sudo ./install.sh
+sudo ./install.sh --authorized-identity-file /absolute/path/verified-install-identity.json
 
 **Warning**
 

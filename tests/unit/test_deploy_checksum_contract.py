@@ -32,9 +32,17 @@ def test_both_rsync_invocations_use_checksum():
 
 def test_exclude_semantics_unchanged():
     s = _read("update.sh")
-    # deploy excludes preserved
-    for pat in ("--exclude 'venv/'", "--exclude 'ccc.db'", "--exclude '__pycache__/'",
-                "--exclude '.git/'", "--exclude '.env'", "--exclude '/bin/'"):
+    shared_match = re.search(
+        r"readonly -a CCC_LIFECYCLE_EXCLUDES=\(\n(.*?)\n\)", s, re.S)
+    assert shared_match, "shared lifecycle exclude contract vanished"
+    shared = set(re.findall(r"--exclude=([^\s]+)", shared_match.group(1)))
+    assert shared == {"/venv", "/.venvs", "/trust", "/bin"}
+    deploy = s.split("phase3_deploy()", 1)[1]
+    deploy = deploy.split("rsync -a --checksum --delete", 1)[1]
+    deploy = deploy.split("${SOURCE_DIR}/", 1)[0]
+    assert '"${CCC_LIFECYCLE_EXCLUDES[@]}"' in deploy
+    for pat in ("--exclude 'ccc.db'", "--exclude '__pycache__/'",
+                "--exclude '.git/'", "--exclude '.env'"):
         assert pat in s, f"deploy exclude vanished: {pat}"
     # rollback restore still purges bytecode after restore (unchanged behaviour)
     assert "5c1 - Purging stale Python bytecode (post-restore)" in s

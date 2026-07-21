@@ -38,6 +38,16 @@ from importlib.machinery import SourceFileLoader
 
 import pytest
 
+_SOURCE_COMMIT = "a" * 40
+_SOURCE_TAG = "v0.3.9"
+
+
+def _worker_args(work, *, frm="0.3.8", to="0.3.9", attempt_id=None,
+                 commit=_SOURCE_COMMIT, tag=_SOURCE_TAG):
+    return ["--work", str(work), "--from", frm, "--to", to,
+            "--id", attempt_id or _WID,
+            "--source-commit", commit, "--source-tag", tag]
+
 # fcntl/flock + O_NOFOLLOW semantics make the helper POSIX/Linux-only.
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux",
@@ -110,21 +120,33 @@ def _stub_verify_boundary(mod, monkeypatch):
     monkeypatch.setattr(
         mod, "verify_release",
         lambda **k: types.SimpleNamespace(
-            ok=True, reason="accepted",
-            metadata={"version": "0.3.9", "signing_principal": "test-signer",
-                      "product": "ccc",
+             ok=True, reason="accepted",
+             metadata={"version": "0.3.9", "signing_principal": "test-signer",
+                       "product": "ccc",
+                       "source": {"vcs": "git", "commit": _SOURCE_COMMIT,
+                                  "tag": _SOURCE_TAG},
                       # the signed top-level allowlist the payloads use in these tests
                       "top_level": ["ccc-src-top", "ccc-top"]}))
     monkeypatch.setattr(mod, "product_scope_ok", lambda meta: True)
     monkeypatch.setattr(mod, "cross_check_version", lambda meta, vs: True)
 
 
+_WID = "abcdefabcdef"        # canonical 12-hex attempt id used by worker tests
+
+
 def _make_work(mod, version: str = "0.3.9", top: str = "ccc-src-top",
-               valid_tree: bool = True) -> tuple[str, str]:
-    """Create a STATE_DIR/ccc-update-XXXX/src/<top>/ tree, mimicking a post-ingest
-    work dir. Returns (work_abs, tree_abs)."""
-    import tempfile
-    work = tempfile.mkdtemp(prefix="ccc-update-", dir=mod.STATE_DIR)
+               valid_tree: bool = True, attempt_id: str = _WID,
+               record: bool = True) -> tuple[str, str]:
+    """Create a RECORDED PRIVATE_DIR/ccc-update-<id>/src/<top>/ tree, mimicking a
+    post-ingest work dir (A2: worker deletion is record-authorized, so the
+    fixture creates the real ownership record too). Returns (work_abs, tree_abs)."""
+    from backend import priv_state as P
+    work = os.path.join(mod.PRIVATE_DIR, f"ccc-update-{attempt_id}")
+    if record:
+        P.record_attempt(
+            mod.ATTEMPTS_DIR, attempt_id, work, os.getuid(), kind="update")
+    os.makedirs(work, mode=0o700)
+    os.chmod(work, 0o700)
     tree = os.path.join(work, "src", top)
     os.makedirs(os.path.join(tree, "backend"), exist_ok=True)
     if valid_tree:
@@ -140,14 +162,29 @@ def _make_work(mod, version: str = "0.3.9", top: str = "ccc-src-top",
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def mod(tmp_path, monkeypatch):
-    """Load the helper and redirect all hardcoded constants to tmp paths."""
+    """Load the helper and redirect all hardcoded constants to tmp paths.
+
+    Epic-1: the state boundary is two directories -- a root-only PRIVATE dir
+    (locks/work/log/records) and a service-readable PUBLIC status dir. Tests
+    inject their own uid as the expected owner so the invariants run unprivileged
+    while exercising the exact production checks."""
     m = _load()
-    state = tmp_path / "state"
-    state.mkdir()
-    monkeypatch.setattr(m, "STATE_DIR", str(state))
-    monkeypatch.setattr(m, "STATUS_PATH", str(state / "update-status.json"))
-    monkeypatch.setattr(m, "LOCK_PATH", str(state / ".update.lock"))
-    monkeypatch.setattr(m, "WORKER_LOG", str(state / "update-worker.log"))
+    private = tmp_path / "priv"
+    private.mkdir(mode=0o700)
+    os.chmod(str(private), 0o700)
+    attempts = private / "attempts"
+    attempts.mkdir(mode=0o700)
+    os.chmod(str(attempts), 0o700)
+    public = tmp_path / "pub"
+    public.mkdir(mode=0o755)
+    os.chmod(str(public), 0o755)
+    monkeypatch.setattr(m, "PRIVATE_DIR", str(private))
+    monkeypatch.setattr(m, "ATTEMPTS_DIR", str(attempts))
+    monkeypatch.setattr(m, "PUBLIC_STATUS_DIR", str(public))
+    monkeypatch.setattr(m, "STATUS_PATH", str(public / "update-status.json"))
+    monkeypatch.setattr(m, "LOCK_PATH", str(private / "update.lock"))
+    monkeypatch.setattr(m, "WORKER_LOG", str(private / "update-worker.log"))
+    monkeypatch.setattr(m, "_OWNER_UID", os.getuid())
 
     installed = tmp_path / "installed_version.py"
     installed.write_text('APP_VERSION = "0.3.8"\n')
@@ -256,29 +293,27 @@ def test_ingest_rejects_symlink_member(mod, monkeypatch):
 # --------------------------------------------------------------------------- #
 #  Stale work-dir sweep (safety)                                              #
 # --------------------------------------------------------------------------- #
-def test_sweep_removes_only_real_workdirs(mod):
-    state = mod.STATE_DIR
-    # Real orphan work dirs (should be removed).
-    os.makedirs(os.path.join(state, "ccc-update-a"))
-    os.makedirs(os.path.join(state, "ccc-update-b", "sub"))
-    # A regular file with the prefix (not a dir -> must be skipped).
-    open(os.path.join(state, "ccc-update-file"), "w").close()
-    # A non-matching dir (must be untouched).
-    os.makedirs(os.path.join(state, "keep-me"))
-    # A symlink with the prefix pointing OUTSIDE state (must not be followed).
-    outside = os.path.join(state, "outside_target")
-    os.makedirs(outside)
-    open(os.path.join(outside, "precious"), "w").close()
-    os.symlink(outside, os.path.join(state, "ccc-update-link"))
+def test_sweep_removes_only_recorded_workdirs(mod):
+    """Epic-1: sweep authority is the ownership RECORD, never a name prefix.
+    A recorded orphan is removed; an unrecorded prefix-matching dir survives."""
+    from backend import priv_state as P
+    uid = os.getuid()
+    priv, att = mod.PRIVATE_DIR, mod.ATTEMPTS_DIR
+    # Recorded orphan (should be removed).
+    recorded = os.path.join(priv, "ccc-update-aaaaaaaaaaaa")
+    P.record_attempt(att, "aaaaaaaaaaaa", recorded, uid)
+    os.makedirs(recorded)
+    # UNRECORDED dir with the very same prefix (must survive -- no prefix authority).
+    foreign = os.path.join(priv, "ccc-update-bbbbbbbbbbbb")
+    os.makedirs(foreign)
+    # A non-matching dir (untouched).
+    os.makedirs(os.path.join(priv, "keep-me"))
 
     mod._sweep_stale_workdirs()
 
-    assert not os.path.exists(os.path.join(state, "ccc-update-a"))
-    assert not os.path.exists(os.path.join(state, "ccc-update-b"))
-    assert os.path.exists(os.path.join(state, "ccc-update-file"))
-    assert os.path.isdir(os.path.join(state, "keep-me"))
-    assert os.path.islink(os.path.join(state, "ccc-update-link"))
-    assert os.path.exists(os.path.join(outside, "precious"))  # not followed
+    assert not os.path.exists(recorded)                       # recorded -> removed
+    assert os.path.isdir(foreign)                             # unrecorded -> preserved
+    assert os.path.isdir(os.path.join(priv, "keep-me"))
 
 
 # --------------------------------------------------------------------------- #
@@ -316,7 +351,8 @@ def test_launch_builds_trusted_execstart(mod, monkeypatch):
         return types.SimpleNamespace(returncode=0, stdout="")
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    rc = mod._launch_update_unit("/var/lib/conduit-cc/ccc-update-x", (0, 3, 8), (0, 3, 9), "id123")
+    rc = mod._launch_update_unit("/var/lib/conduit-cc/ccc-update-x", (0, 3, 8),
+                                 (0, 3, 9), "id123", _SOURCE_COMMIT, _SOURCE_TAG)
     assert rc == 0
     cmd = captured["cmd"]
     assert cmd[0] == mod.SYSTEMD_RUN
@@ -330,6 +366,8 @@ def test_launch_builds_trusted_execstart(mod, monkeypatch):
     assert cmd[cmd.index("--from") + 1] == "0.3.8"
     assert cmd[cmd.index("--to") + 1] == "0.3.9"
     assert cmd[cmd.index("--id") + 1] == "id123"
+    assert cmd[cmd.index("--source-commit") + 1] == _SOURCE_COMMIT
+    assert cmd[cmd.index("--source-tag") + 1] == _SOURCE_TAG
 
 
 def test_launch_retries_after_reset_failed(mod, monkeypatch):
@@ -343,7 +381,8 @@ def test_launch_retries_after_reset_failed(mod, monkeypatch):
         return types.SimpleNamespace(returncode=0, stdout="")
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    rc = mod._launch_update_unit("/var/lib/conduit-cc/ccc-update-x", (0, 3, 8), (0, 3, 9), "id")
+    rc = mod._launch_update_unit("/var/lib/conduit-cc/ccc-update-x", (0, 3, 8),
+                                 (0, 3, 9), "id", _SOURCE_COMMIT, _SOURCE_TAG)
     assert rc != 0
     run_attempts = [c for c in calls if c[0] == mod.SYSTEMD_RUN]
     reset_calls = [c for c in calls if c[0] == mod.SYSTEMCTL and "reset-failed" in c]
@@ -354,42 +393,93 @@ def test_launch_retries_after_reset_failed(mod, monkeypatch):
 # --------------------------------------------------------------------------- #
 #  Worker (__run-worker) defensive validation                                 #
 # --------------------------------------------------------------------------- #
+def test_worker_fails_closed_without_attempt_state_library(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_PSTATE_AVAILABLE", False)
+    with pytest.raises(SystemExit) as exc:
+        mod.run_worker_cmd([])
+    assert exc.value.code == 3
+
+
 def test_worker_rejects_workdir_outside_state(mod, tmp_path):
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", str(outside), "--from", "0.3.8",
-                            "--to", "0.3.9", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(outside))
     assert exc.value.code == 3
-    assert json.loads(pathlib.Path(mod.STATUS_PATH).read_text())["state"] == "failed"
+    assert not os.path.exists(mod.STATUS_PATH)
 
 
 def test_worker_rejects_wrong_prefix(mod):
-    bad = os.path.join(mod.STATE_DIR, "notwork")
+    bad = os.path.join(mod.PRIVATE_DIR, "notwork")
     os.makedirs(bad)
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", bad, "--from", "0.3.8", "--to", "0.3.9", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(bad))
     assert exc.value.code == 3
 
 
 def test_worker_rejects_missing_workdir(mod):
-    ghost = os.path.join(mod.STATE_DIR, "ccc-update-ghost")
+    ghost = os.path.join(mod.PRIVATE_DIR, "ccc-update-ghost")
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", ghost, "--from", "0.3.8", "--to", "0.3.9", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(ghost))
     assert exc.value.code == 3
+
+
+def test_worker_refuses_unrecorded_work_before_update_execution(
+        mod, monkeypatch):
+    work, _ = _make_work(mod, record=False)
+    called = []
+    monkeypatch.setattr(
+        mod, "_run_update", lambda *args, **kwargs: called.append(args) or 0)
+    with pytest.raises(SystemExit) as exc:
+        mod.run_worker_cmd(_worker_args(work))
+    assert exc.value.code == 3
+    assert called == []
+    assert os.path.isdir(work)  # no record -> no execution and no deletion authority
+
+
+def test_update_worker_refuses_and_preserves_restore_attempt(mod):
+    from backend import priv_state as P
+    attempt_id = "123456abcdef"
+    work = os.path.join(mod.PRIVATE_DIR, f"ccc-restore-{attempt_id}")
+    P.record_attempt(
+        mod.ATTEMPTS_DIR,
+        attempt_id,
+        work,
+        os.getuid(),
+        kind="restore",
+    )
+    os.mkdir(work, 0o700)
+    os.chmod(work, 0o700)
+    with pytest.raises(SystemExit) as exc:
+        mod.run_worker_cmd(_worker_args(work, attempt_id=attempt_id))
+    assert exc.value.code == 3
+    assert os.path.isdir(work)
+    assert os.path.isfile(
+        os.path.join(mod.ATTEMPTS_DIR, f"{attempt_id}.json"))
 
 
 def test_worker_rejects_non_ccc_tree(mod):
     work, _ = _make_work(mod, valid_tree=False)
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", work, "--from", "0.3.8", "--to", "0.3.9", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(work))
     assert exc.value.code == 3
 
 
 def test_worker_rejects_version_mismatch(mod):
     work, _ = _make_work(mod, version="0.3.9")
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", work, "--from", "0.3.8", "--to", "0.4.0", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(work, to="0.4.0", tag="v0.4.0"))
+    assert exc.value.code == 3
+
+
+@pytest.mark.parametrize(
+    ("commit", "tag"),
+    [("not-a-commit", _SOURCE_TAG), (_SOURCE_COMMIT, "v0.3.8")],
+)
+def test_worker_rejects_unbound_source_identity(mod, commit, tag):
+    work, _ = _make_work(mod, version="0.3.9")
+    with pytest.raises(SystemExit) as exc:
+        mod.run_worker_cmd(_worker_args(work, commit=commit, tag=tag))
     assert exc.value.code == 3
 
 
@@ -397,7 +487,7 @@ def test_worker_rejects_non_upgrade(mod):
     work, _ = _make_work(mod, version="0.3.9")
     _set_installed(mod, "0.3.9")  # installed == to -> not a strict increase
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", work, "--from", "0.3.8", "--to", "0.3.9", "--id", "w"])
+        mod.run_worker_cmd(_worker_args(work))
     assert exc.value.code == 2
 
 
@@ -418,7 +508,7 @@ def test_worker_happy_path_runs_installed_update_sh(mod, monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
     with pytest.raises(SystemExit) as exc:
-        mod.run_worker_cmd(["--work", work, "--from", "0.3.8", "--to", "0.3.9", "--id", "w1"])
+        mod.run_worker_cmd(_worker_args(work))
     assert exc.value.code == 0
 
     cmd = seen["cmd"]
@@ -431,7 +521,7 @@ def test_worker_happy_path_runs_installed_update_sh(mod, monkeypatch):
     assert doc["state"] == "success"
     assert not os.path.exists(work)  # work dir cleaned up
     logtext = pathlib.Path(mod.WORKER_LOG).read_text()
-    assert "ccc-update-apply worker w1" in logtext
+    assert f"ccc-update-apply worker {_WID}" in logtext
     assert "update.sh ran" in logtext
 
 
@@ -447,7 +537,8 @@ def test_run_update_rolled_back(mod, monkeypatch):
         return types.SimpleNamespace(returncode=1)
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), "w2", work)
+    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), "w2", work,
+                         _SOURCE_COMMIT, _SOURCE_TAG)
     assert rc == 0
     assert json.loads(pathlib.Path(mod.STATUS_PATH).read_text())["state"] == "rolled_back"
 
@@ -461,7 +552,8 @@ def test_run_update_unexpected_state(mod, monkeypatch):
         return types.SimpleNamespace(returncode=1)
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), "w3", work)
+    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), "w3", work,
+                         _SOURCE_COMMIT, _SOURCE_TAG)
     assert rc == 0
     assert json.loads(pathlib.Path(mod.STATUS_PATH).read_text())["state"] == "failed"
 
@@ -474,7 +566,8 @@ def test_run_update_oserror_launching_updater(mod, monkeypatch):
         raise OSError("bash not found")
     monkeypatch.setattr(mod.subprocess, "run", _boom)
 
-    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), "w4", work)
+    rc = mod._run_update(tree, (0, 3, 8), (0, 3, 9), _WID, work,
+                         _SOURCE_COMMIT, _SOURCE_TAG)
     assert rc == 3
     assert json.loads(pathlib.Path(mod.STATUS_PATH).read_text())["state"] == "failed"
     assert not os.path.exists(work)
@@ -598,7 +691,8 @@ def test_run_update_pins_wheelhouse_env_on_armv7(mod, monkeypatch):
         return types.SimpleNamespace(returncode=0)
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wpin", work)
+    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wpin", work,
+                    _SOURCE_COMMIT, _SOURCE_TAG)
     env = seen["env"]
     assert env is not None
     assert env["CCC_WHEELHOUSE_DIR"] == os.path.join(tree, "wheelhouse-armhf")
@@ -619,7 +713,8 @@ def test_run_update_strips_wheelhouse_env_on_aarch64(mod, monkeypatch):
         return types.SimpleNamespace(returncode=0)
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
 
-    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wstrip", work)
+    mod._run_update(tree, (0, 3, 8), (0, 3, 9), "wstrip", work,
+                    _SOURCE_COMMIT, _SOURCE_TAG)
     assert "CCC_WHEELHOUSE_DIR" not in seen["env"]
 
 
@@ -652,7 +747,7 @@ def test_apply_refuses_non_upgrade(mod, monkeypatch):
         mod.apply_cmd()
     assert exc.value.code == 2
     # no leftover work dirs
-    assert not [n for n in os.listdir(mod.STATE_DIR) if n.startswith("ccc-update-")]
+    assert not [n for n in os.listdir(mod.PRIVATE_DIR) if n.startswith("ccc-update-")]
 
 
 def test_apply_happy_path_launches_unit(mod, monkeypatch, capsys):
@@ -665,8 +760,8 @@ def test_apply_happy_path_launches_unit(mod, monkeypatch, capsys):
 
     launched = {}
 
-    def _fake_launch(work, frm, to, uid):
-        launched["args"] = (work, frm, to, uid)
+    def _fake_launch(work, frm, to, uid, source_commit, source_tag):
+        launched["args"] = (work, frm, to, uid, source_commit, source_tag)
         return 0
     monkeypatch.setattr(mod, "_launch_update_unit", _fake_launch)
 
@@ -676,8 +771,9 @@ def test_apply_happy_path_launches_unit(mod, monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert out.startswith("accepted ")
-    work, frm, to, uid = launched["args"]
+    work, frm, to, uid, source_commit, source_tag = launched["args"]
     assert frm == (0, 3, 8) and to == (0, 3, 9)
+    assert source_commit == _SOURCE_COMMIT and source_tag == _SOURCE_TAG
     assert os.path.basename(work).startswith("ccc-update-")
     assert os.path.isdir(work)  # not cleaned up on success (worker owns it)
     # apply itself writes no terminal status on success; the worker does.
@@ -686,6 +782,7 @@ def test_apply_happy_path_launches_unit(mod, monkeypatch, capsys):
 
 def test_apply_marks_failed_when_launch_fails(mod, monkeypatch, capsys):
     monkeypatch.setattr(mod, "_unit_busy", lambda: False)
+    monkeypatch.setattr(mod, "_unit_state", lambda unit: "inactive")
     _patch_exit(mod, monkeypatch)
     _set_installed(mod, "0.3.8")
     _set_stdin(monkeypatch, _valid_payload("0.3.9"))
@@ -699,7 +796,31 @@ def test_apply_marks_failed_when_launch_fails(mod, monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("accepted ")
     doc = json.loads(pathlib.Path(mod.STATUS_PATH).read_text())
     assert doc["state"] == "failed"
-    assert not [n for n in os.listdir(mod.STATE_DIR) if n.startswith("ccc-update-")]
+    assert not [n for n in os.listdir(mod.PRIVATE_DIR) if n.startswith("ccc-update-")]
+
+
+@pytest.mark.parametrize("unit_state", ["active", "activating", None])
+def test_apply_preserves_attempt_when_failed_launch_state_is_ambiguous(
+        mod, monkeypatch, capsys, unit_state):
+    monkeypatch.setattr(mod, "_unit_busy", lambda: False)
+    monkeypatch.setattr(mod, "_unit_state", lambda unit: unit_state)
+    _patch_exit(mod, monkeypatch)
+    _set_installed(mod, "0.3.8")
+    _set_stdin(monkeypatch, _valid_payload("0.3.9"))
+    _stub_verify_boundary(mod, monkeypatch)
+    monkeypatch.setattr(mod, "_launch_update_unit", lambda *a, **k: 3)
+
+    with pytest.raises(SystemExit) as exc:
+        mod.apply_cmd()
+    assert exc.value.code == 0  # public ack was already emitted
+    assert capsys.readouterr().out.startswith("accepted ")
+    assert not os.path.exists(mod.STATUS_PATH)  # no false terminal failure
+    workdirs = [
+        n for n in os.listdir(mod.PRIVATE_DIR) if n.startswith("ccc-update-")
+    ]
+    records = list(pathlib.Path(mod.ATTEMPTS_DIR).glob("*.json"))
+    assert len(workdirs) == 1
+    assert len(records) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -732,3 +853,66 @@ def test_main_rejects_bad_argv(mod, monkeypatch, argv):
     with pytest.raises(SystemExit) as exc:
         mod.main()
     assert exc.value.code == 2
+
+
+# --------------------------------------------------------------------------- #
+#  A2 survival matrix: rejection must NEVER delete the rejected object         #
+# --------------------------------------------------------------------------- #
+def test_worker_rejection_preserves_outside_directory(mod, tmp_path):
+    """The F-A2 exploit shape: an OUTSIDE path passed to __run-worker must be
+    rejected AND survive (the old _fail deleted its raw --work argument)."""
+    outside = tmp_path / "victim-outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("keep me")
+    with pytest.raises(SystemExit) as exc:
+        mod.run_worker_cmd(_worker_args(outside))
+    assert exc.value.code == 3
+    assert outside.is_dir() and (outside / "precious.txt").read_text() == "keep me"
+
+
+def test_worker_rejection_preserves_unrecorded_workdir(mod):
+    """A prefix-matching but UNRECORDED work dir survives its own rejection."""
+    work, _ = _make_work(mod, valid_tree=False, attempt_id="eeeeeeeeeeee", record=False)
+    with pytest.raises(SystemExit):
+        mod.run_worker_cmd(_worker_args(work, attempt_id="eeeeeeeeeeee"))
+    assert os.path.isdir(work)          # no record -> no deletion authority
+
+
+def test_worker_rejection_preserves_argv_record_mismatch(mod):
+    """A recorded attempt whose argv names a DIFFERENT path deletes nothing."""
+    work, _ = _make_work(mod, valid_tree=True, attempt_id=_WID)   # recorded
+    other, _ = _make_work(mod, valid_tree=False, attempt_id="ffffffffffff",
+                          record=False)
+    with pytest.raises(SystemExit):
+        # id _WID but argv points at `other`: version-check fails -> _fail path;
+        # cleanup must refuse (argv != recorded) and BOTH dirs survive.
+        mod.run_worker_cmd(_worker_args(other))
+    assert os.path.isdir(work) and os.path.isdir(other)
+
+
+def test_cleanup_refuses_post_validation_swap(mod, monkeypatch):
+    """Identity re-check: the recorded dir swapped between validation and
+    removal is refused (dev/ino mismatch)."""
+    from backend import priv_state as P
+    work, _ = _make_work(mod, attempt_id=_WID)
+    real_lstat = os.lstat
+    seen = {"n": 0}
+
+    def swapping_lstat(path):
+        st = real_lstat(path)
+        if path == work:
+            seen["n"] += 1
+            if seen["n"] == 2:            # second lstat = the pre-removal identity check
+                class FakeSt:
+                    st_mode = st.st_mode
+                    st_dev, st_ino = st.st_dev, st.st_ino + 1   # swapped inode
+                    st_uid, st_nlink = st.st_uid, st.st_nlink
+                return FakeSt()
+        return st
+
+    monkeypatch.setattr(os, "lstat", swapping_lstat)
+    with pytest.raises(P.PrivStateError, match="swapped"):
+        P.cleanup_attempt(mod.PRIVATE_DIR, mod.ATTEMPTS_DIR, _WID, os.getuid(),
+                          argv_work=work)
+    monkeypatch.undo()
+    assert os.path.isdir(work)

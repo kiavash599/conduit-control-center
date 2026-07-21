@@ -28,7 +28,10 @@ On success the canonical artifact filename to extract is printed to stdout.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import stat
 import sys
 
 
@@ -52,6 +55,54 @@ def _load_verifier():
     return V
 
 
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _write_install_identity(path: str, metadata: dict, *, manifest: str,
+                            signature: str, artifact: str) -> None:
+    """Publish the verified source identity once, without re-parsing later.
+
+    The file is created O_EXCL/NOFOLLOW at mode 0600. It is deliberately
+    outside the extracted artifact tree and is the recommended input to
+    ``install.sh --authorized-identity-file``.
+    """
+    source = metadata["source"]
+    doc = {
+        "schema": 1,
+        "product": metadata["product"],
+        "version": metadata["version"],
+        "platform": metadata["platform"],
+        "artifact_name": metadata["artifact_name"],
+        "source_commit": source["commit"],
+        "source_tag": source["tag"],
+        "manifest_sha256": _sha256_file(manifest),
+        "signature_sha256": _sha256_file(signature),
+        "artifact_sha256": _sha256_file(artifact),
+    }
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise OSError("identity output is not a single-link regular file")
+        payload = (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
 def main(argv=None) -> int:
     V = _load_verifier()
     ap = argparse.ArgumentParser(prog="ccc-verify-release", add_help=True)
@@ -60,6 +111,10 @@ def main(argv=None) -> int:
     ap.add_argument("--artifact", required=True)
     ap.add_argument("--trust-store", required=True,
                     help="publisher allowed_signers file (obtain OUT-OF-BAND; never from the artifact)")
+    ap.add_argument(
+        "--write-install-identity",
+        help="create a mode-0600 verified identity JSON for install.sh (refuses overwrite)",
+    )
     a = ap.parse_args(argv)
 
     platform = _host_platform()
@@ -71,6 +126,16 @@ def main(argv=None) -> int:
         sys.stderr.write(
             f"ccc-verify-release: VERIFIED {m['product']} {m['version']} "
             f"platform={m['platform']} signed-by={m['signing_principal']}\n")
+        if a.write_install_identity:
+            try:
+                _write_install_identity(
+                    a.write_install_identity, m, manifest=a.manifest,
+                    signature=a.signature, artifact=a.artifact,
+                )
+            except OSError as exc:
+                sys.stderr.write(
+                    f"ccc-verify-release: cannot write install identity: {exc}\n")
+                return 3
         print(m["artifact_name"])   # the canonical file the operator should extract
         return 0
     sys.stderr.write(

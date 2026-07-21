@@ -11,13 +11,212 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.19] — 2026-07-21
+
+**Combined Epic 1+2 — privilege, ownership, immutable runtime, and transactional lifecycle.**
+
+> **IMPLEMENTATION IN PROGRESS — NOT YET QUALIFIED, TAGGED, SIGNED, OR RELEASED.** This entry
+> records the combined Epic 1+2 implementation unit. No `v0.3.19`
+> tag, signed asset, or GitHub Release exists, and neither Raspberry Pi device has run the
+> full install/update/rollback lifecycle for this architecture. The immutable `v0.3.18` tag and
+> all its evidence are unchanged; v0.3.18 remains unreleased.
+
+### Security — privileged trust boundary (F1, F2, F5, F6)
+- **Deployed code under `/opt/conduit-cc` is now root-owned and non-service-writable.** The broad
+  recursive `chown -R conduit-cc /opt/conduit-cc` is removed from install, update-deploy, and
+  rollback; `rsync` normalizes ownership explicitly (`--chown=root:root --chmod=D0755,F0644`) and
+  an ownership-verification pass fails closed on any non-root or setuid file. The legacy `venv`
+  used by the root restore helper is secured root-owned in a bounded, one-time, symlink-checked
+  transition into the immutable `.venvs/` store.
+- **Privileged updater state moved out of the service-writable StateDirectory** into a root-only
+  `/var/lib/ccc-update` (0700: locks, work trees, worker log, attempt-ownership records) with the
+  minimal status document PUBLISHED into a separate service-readable `/var/lib/ccc-status` (0755;
+  files root:conduit-cc 0640). New `backend/priv_state.py` provides a symlink-safe, atomic status
+  publisher (mkstemp + fsync + `os.replace` + parent fsync; parent/regular-file invariants
+  checked first), fixing the fixed-name `update-status.json.tmp` symlink/file-clobber gap.
+- **Cleanup authority is now an ownership record, never a filename prefix**: only recorded,
+  contained, real-directory attempt paths are removed; foreign/unrecorded objects are preserved.
+
+### Security — `.env` contract (F7)
+- Single canonical contract everywhere: `conduit-cc:conduit-cc`, mode `0600`, regular-file-only,
+  **atomic** replacement. Restore no longer widens `.env` to `0640`; the password-change endpoint
+  now writes through the shared atomic writer (`backend/env_file.py`) so a crash cannot truncate
+  the only copy of the admin hash. Install/reinstall reassert the contract.
+
+### Security — publisher trust anchor (F12)
+- New out-of-band Owner ceremony tool `ccc-provision-trust-anchor` validates and atomically
+  installs `/opt/conduit-cc/trust/allowed_signers` (canonical syntax, exact principal, independent
+  fingerprint check, byte hygiene, root-owned 0700 dir / 0600 file), and **refuses any candidate
+  that resolves inside the application or updater-state tree** (circular-trust prevention). The
+  anchor is never shipped in, downloaded from, or derived from a release.
+
+### Tests / tooling
+- New Linux-authoritative suites: `test_priv_state.py`, `test_env_file.py`,
+  `test_provision_trust_anchor.py`, and the cross-platform static gate
+  `test_epic1_ownership_contract.py`, each with symlink/attack-matrix and non-vacuity coverage.
+- New cumulative invariant-suite entry point `tests/invariant_suite.py` (exact module list,
+  platform split, fail-closed on a missing module).
+
+### Epic 2 — immutable versioned runtime store (combined acceptance unit with Epic 1)
+- **Runtime store + selector**: root-owned `/opt/conduit-cc/.venvs/<runtime-id>` immutable
+  runtimes with per-runtime manifests; `/opt/conduit-cc/venv` becomes the SELECTOR (single-hop
+  symlink whose link text must be exactly `.venvs/<id>`; real-directory termination, containment,
+  ownership, `pyvenv.cfg`/interpreter checks, and a VALIDATED manifest are all required before a
+  runtime can be active). New `backend/runtime_store.py` + root CLI `ccc-runtime`
+  (validate-selector / convert-legacy / rollback-conversion / activate / rollback-activation /
+  gc / diagnose).
+- **One-time legacy conversion** (write-ahead recorded in `/var/lib/ccc-update`, idempotent,
+  resumable at every interruption boundary, locally reversible) runs inside the stopped-service
+  window only for the v0.3.18 transition. Fresh installs never create a legacy runtime: they
+  publish their first validated candidate directly with `activate-initial`.
+- **One shared lifecycle filter contract** (`CCC_LIFECYCLE_EXCLUDES`: anchored `/venv`, `/.venvs`,
+  `/trust`, `/bin`) consumed by every backup/deploy/rollback rsync, the manual-recovery text and
+  the bytecode purges — the trust anchor can no longer enter ordinary backups nor be deleted by
+  `--delete`, and byte-identity assertions run after deploy and rollback.
+- **Interpreter-bound execution (B5)**: the systemd unit starts
+  `venv/bin/python3 -m uvicorn`; all lifecycle pip operations run as
+  `venv/bin/python3 -m pip` (standalone `pip`/`uvicorn` resolution eliminated; Epic-3 dependency
+  policy unchanged).
+- **Sudoers exact public surface (A1)**: the service grants are now exactly
+  `ccc-update-apply apply` and `ccc-restore-apply apply`; `__run-worker` is reachable only via
+  the root transient unit; `ccc-apply-conduit-config` keeps its bare-path grant as an explicitly
+  reviewed, contract-tested exception (fixed verbs, bounded integers, no path/string arguments).
+- **Record-authorized deletion everywhere (A2)**: `_fail()` no longer deletes its raw `--work`
+  argument (the rejection-deletes-the-evidence primitive is gone); every worker/launch/sweep
+  removal goes through the identity-tuple `cleanup_attempt` (id, record/argv equality,
+  containment, real-directory type, current dev/ino).
+- **Restore/update lifecycle serialization and process containment**: update and restore now share
+  one root-only `lifecycle.lock` and mutually reject either fixed transient unit while it is in
+  flight. Restore no longer double-forks from the web-service control group: the public helper
+  launches a fixed `ccc-restore.service`, transfers ciphertext/passphrase only through
+  attempt-recorded root-owned FIFOs, and returns only after the worker's exact ack. The main
+  service is restored to `KillMode=control-group`, so stopping it cannot leave service-created
+  descendants running across the root trust-transition window.
+- **No false lifecycle acknowledgement**: updater source commit/tag binding is now checked before
+  the public `accepted` line. An invalid or incomplete signed source identity remains a synchronous
+  rejection and can no longer be reported by the API as a scheduled update with no worker.
+- **Canonical `.env` everywhere (A3)**: new root-only `ccc-env` CLI (write values via bounded
+  stdin — never argv/environment; reads restricted to the explicit non-secret
+  `CF_RECORD_NAME` allowlist); install/reinstall/password-hash writes, updater preflight reads,
+  and restore/checkpoint reads all flow through `backend/env_file.py`. Reads bind lstat/open
+  inode identity and require a single regular 0600 canonical-owner file; live/dangling symlinks,
+  hardlinks, duplicate assignments and secret-key reads fail closed. The v0.3.18 bootstrap
+  stages a byte-verified root-owned CLI/module closure from the verified source snapshot.
+- **Installed-location bootstrap (A5)**: privileged helpers derive their app root from their own
+  validated real location (`<root>/bin/<helper>`), proven by a `python -I` fake-root regression
+  with observable import markers.
+- **Complete ownership validators (A6)**: group/other-write bits, setuid/setgid and foreign
+  symlinks now fail the executable-closure check; separate validators for venv/store/trust/bin
+  run after deploy and rollback.
+- **Authoritative invariant gate (A7)**: `tests/invariant_suite.py` — PASS only for
+  platform-complete conftest-enabled runs (anything weakened is capped at SMOKE), full unweakened
+  Linux discovery + bash/ShellCheck gates, and a committed required-invariant inventory
+  (`tests/invariant_inventory.txt`) as the deletion guard; wired into CI and
+  `docs/runbooks/v0.3.19-invariant-gate.md`.
+
+### Combined Epic 1+2 correction pass (bootstrap, transactional runtime, hardened proofs)
+- **v0.3.18 -> v0.3.19 bootstrap ceremony** (`deployment/bootstrap/ccc-bootstrap.sh` +
+  stdlib-only `ccc-bootstrap-runtime`): root-owned full-candidate snapshot with per-file SHA-256
+  and exact-set verification (TOCTOU closed), a runner that imports its implementation ONLY from
+  the verified snapshot while its mutation target is fixed to `/opt/conduit-cc`, and execution of
+  the STAGED engine — the installed v0.3.18 updater is never used for the first transition.
+- **Integrated candidate-runtime lifecycle**: `backend/runtime_store.py` gains full 64-hex
+  deterministic IDs, `validate_target` (pre-flip validation with post-flip selector restore),
+  `stage_candidate`/`finalize_candidate`/`build_candidate` (fresh venv built in attempt-owned
+  staging, validated, atomically published, then marked `validated`), and `revalidate_runtime`
+  (live dist-record/pip-check/import/ABI re-validation for candidate-ID collisions). The active
+  and previous runtimes are never mutated; pip never runs against them.
+- **update.sh** now builds the candidate before downtime, activates by atomic selector flip in the
+  downtime window, and rolls back state-aware (none/converted/activated) with the selector restored
+  FIRST via the runtime tool (rollback reserve), then exact helper/sudoers/unit restoration
+  (the complete helper directory is rebuilt from recorded bytes or removed when previously
+  absent; sudoers is presence-aware and `visudo`-validated) — no dependency reinstall/network.
+- **Pip policy**: unconditional `pip install --upgrade pip` removed on both arches;
+  `PIP_DISABLE_PIP_VERSION_CHECK=1`/`PIP_NO_INPUT=1` on every invocation; RPi2 stays offline, RPi4
+  hash-locked online.
+- **Transactional trust anchor**: during the bootstrap downtime the legacy service-writable anchor
+  is quarantined (never promoted) and the authorized anchor is provisioned + verified before service
+  start; rollback preserves the authorized anchor as a recorded security transition.
+- **`.env`**: excluded in BOTH tar directions; checkpoint/restore is an in-memory canonical snapshot
+  (symlink-refusing, exact 0600) in both restore engines; `ccc-env assert-contract` compares mode
+  exactly to 0600. Installer-provided values are single-quoted with fail-closed scalar/username
+  grammar, and the canonical CLI rejects quote breakout or malformed bcrypt/username values before
+  replacing the file consumed by the shell-based DDNS job.
+- **Validators/proofs strengthened**: selector-aware venv validator (no symlink false-fail),
+  lstat-gated trust dir/anchor, real `/proc/<pid>` secret observation, recursive inventory
+  discovery, fail-closed unparseable counts, positive import-success markers.
+- **Per-attempt write-ahead update transaction**: signed source identity,
+  ordered phase history and immutable backup/candidate/conversion/trust/
+  activation facts are atomically persisted before and after shared mutations.
+  Startup reconciles one interrupted transaction before a new attempt; rollback
+  is checkpointed/resumable and requires the exact previous version to become
+  healthy.
+- **Crash-window refinements**: durable `success` outranks the process-local trap flag; backup
+  retention runs only after terminal success; selector rollback recognizes candidate, exact
+  previous-selector, and already-restored real-directory disk states so every rollback checkpoint
+  is replay-safe. Backup creation has an attempt-bound write-ahead intent and fresh-only path;
+  partial-backup cleanup and post-success retention delete only transaction-record-authorized,
+  revalidated directories. The v0.3.18 service-owned app root is tightened before `.venvs`
+  creation under its own intent/completion checkpoints.
+- **Crash-safe candidate publication**: the attempt-bound validated manifest is durably written
+  before the final-directory rename, after non-following durability flush of every candidate file
+  and directory. Startup reconciliation retains a complete live-validated candidate for
+  deterministic reuse, removes exact attempt-owned staging/orphan output, and refuses to delete
+  foreign, ambiguous, or selector-referenced runtimes.
+- **Pre-downtime failure cleanup remains recoverable**: candidate staging/partial publication is
+  reconciled by the exact candidate id + attempt id before the WAL becomes terminal. An ambiguous
+  cleanup leaves the transaction nonterminal for startup recovery instead of stranding an
+  unauthorised `.staging-*` tree behind a `diagnostic_failure` record.
+- **Host-independent candidate modes**: install and update pin `umask 022`, so identical signed
+  inputs cannot pass or fail the recursive trust-closure gate merely because the invoking Owner or
+  sudo policy supplied a different ambient umask.
+- **Legacy-runtime trust closure before execution**: the v0.3.18 real-directory venv now passes a
+  non-mutating hardlink/type/symlink shape gate while the service runs. The diagnostic legacy
+  `pip freeze` was removed entirely: it was never a rollback input and executing the service-owned
+  interpreter as root created needless risk. Mutation now occurs only after the service is stopped
+  and conversion intent is durable, followed by the full recursive gate before conversion.
+- **Single transactional systemd writer**: Phase 2 and the legacy M2 seam no longer rewrite
+  `conduit.service`. Phase 3 atomically publishes both managed units only after `deploy_intent`;
+  M2 is verification-only, and rollback restores the exact recorded bytes or recorded absence
+  of `conduit.service` plus the prior drop-in-directory state before daemon reload.
+- **Attempt-isolated invariant execution**: the authoritative runner owns a unique pytest
+  `--basetemp` per invocation (a stale per-user temp ACL cannot create a false product failure),
+  and its terminal marker reports setup/collection `errors` independently from test failures.
+- **Exact platform authority**: the invariant marker now requires an exact Windows/Windows or
+  Linux/Linux host match; macOS and every other non-Windows host are no longer able to satisfy the
+  Linux-authoritative branch merely by being “not Windows”.
+- **Fresh install uses the candidate lifecycle**: dependencies install only in
+  attempt staging; finalize performs the full runtime gate; `activate-initial`
+  publishes the first selector only after success. The verified release wrapper
+  can emit a mode-0600 install-identity record, so install identity is passed
+  from the already-verified signed manifest without Git or payload self-claims.
+- **Bootstrap reserve acceptance is explicit and record-authorized**: the
+  v0.3.18 ceremony records staging before creation, binds it to the successful
+  update transaction, preserves it through qualification, and deletes exactly
+  that directory only after identity-bound `reserve-accept` writes a durable
+  acceptance intent. Crash-resume and substitution negatives are regression-
+  tested.
+- **Executable integration proofs**: every forward transaction phase has a
+  terminalization matrix, and a real-filesystem v0.3.18-layout model builds
+  the candidate before downtime, converts/activates/deploys, injects a health
+  failure, then restores the real legacy venv and exact old code/helper bytes.
+  This model does not replace the exact tagged-v0.3.18 device rehearsal.
+
+### Remaining release gates (not implementation claims)
+- Authoritative full Linux invariant-suite PASS; clean-device RPi2 and RPi4
+  install/update/failure/rollback qualification; then immutable v0.3.19 tag,
+  SRT, four signed assets and GitHub Release. None is authorized by this entry.
+
+---
+
 ## [0.3.18] — 2026-07-20
 
 **Compressor-independent wheelhouse identity (manifest format 3) + mandatory transfer-manifest contract.**
 
-> **NOT YET RELEASED.** This entry records implemented code only. Hardware qualification (Phase A/B
-> on RPi2), tagging, signing, and GitHub Release publication are still **pending**. No `v0.3.18` tag,
-> signed asset, or Release exists.
+> **UNRELEASED IMMUTABLE ATTEMPT.** The annotated `v0.3.18` tag exists and its
+> post-tag CI passed, but device qualification exposed the installer/update
+> lifecycle defects corrected in v0.3.19. No signed asset or GitHub Release was
+> published. The tag and all failure evidence remain unchanged.
 
 ### Changed
 - **Wheelhouse identity is now the Logical Tree Digest v1** (`release/logical_tree.py`): a

@@ -44,15 +44,11 @@ Type=simple
 User=conduit-cc
 Group=conduit-cc
 
-# KillMode=process (S4B-2.5c): on stop/restart, signal ONLY the main uvicorn
-# process, not the whole control group. The restore helper (ccc-restore-apply)
-# double-forks a detached worker that itself runs `systemctl stop conduit-cc`;
-# under the default KillMode=control-group that worker would be cgroup-killed by
-# the very stop it issued, leaving the service down and restore-status.json stuck
-# at in_progress. With KillMode=process the detached worker survives the stop and
-# completes restore -> start. The app's other children are short-lived sudo
-# helpers, so leaving them un-cgroup-killed is acceptable (and safer mid-write).
-KillMode=process
+# Restore and update workers run in their own fixed transient systemd units,
+# outside this service's cgroup. Therefore stopping CCC can and must terminate
+# the ENTIRE service cgroup: no compromised or stale child may survive the stop
+# and race the legacy-runtime trust transition or configuration restore.
+KillMode=control-group
 
 WorkingDirectory=/opt/conduit-cc
 
@@ -63,7 +59,9 @@ EnvironmentFile=/etc/conduit-cc/.env
 # the Contribution Advisor's in-memory state assume one process, and the traffic
 # collector is a single-writer (file-locked) background task. Do not increase
 # --workers; multiple workers would fragment in-memory state.
-ExecStart=/opt/conduit-cc/venv/bin/uvicorn backend.main:app \
+# B5: interpreter-bound module execution -- the selector's python3 runs uvicorn
+# as a module, so console-script shebangs never matter across runtime switches.
+ExecStart=/opt/conduit-cc/venv/bin/python3 -m uvicorn backend.main:app \
     --host 127.0.0.1 \
     --port 8000 \
     --workers 1
@@ -84,14 +82,22 @@ RestartSec=5s
 ProtectSystem=strict
 ReadWritePaths=/etc/conduit-cc
 
-# Restore outcome state (S4B-2.4). systemd creates /var/lib/conduit-cc owned
-# conduit-cc:conduit-cc 0750 on start (and re-creates it if missing), surviving
-# restarts. The privileged restore helper (ccc-restore-apply, run via sudo and
-# detached to PID 1, OUTSIDE this namespace) writes restore-status.json there as
-# root and chowns it to conduit-cc; the web process only READS it for
-# GET /api/backup/restore/status. StateDirectory also makes the path writable by
-# the service under ProtectSystem=strict, which is harmless (the app never writes
-# it) and avoids a manual install -d.
+# Epic-1 privileged state boundary. BOTH paths are granted here ONLY so that
+# root-in-namespace (sudo ccc-update-apply / ccc-restore-apply `apply`) can
+# write them; the SERVICE ACCOUNT is excluded by Unix ownership regardless:
+#   /var/lib/ccc-update  root:root 0700 -- locks, work trees, worker log,
+#                        attempt-ownership records (service cannot even read);
+#   /var/lib/ccc-status  root:root 0755 -- published status documents
+#                        (root:conduit-cc 0640; service READS only).
+# Unix ownership is the boundary; ProtectSystem=strict stays defense-in-depth
+# and is NOT a substitute for it.
+ReadWritePaths=/var/lib/ccc-update
+ReadWritePaths=/var/lib/ccc-status
+
+# Service-owned non-authoritative runtime cache. Privileged lifecycle state and
+# restore/update outcomes do NOT live here: they are rooted in the separate
+# /var/lib/ccc-update and /var/lib/ccc-status ownership boundaries above.
+# StateDirectory remains only for bounded service cache/audit-view state.
 StateDirectory=conduit-cc
 StateDirectoryMode=0750
 
@@ -189,8 +195,10 @@ ProtectHome=yes
 #   ProtectSystem=strict, ReadWritePaths=, UMask=0077, PrivateTmp=yes,
 #   ProtectHome=yes.
 #
-# Residual risk: a compromised conduit-cc process could invoke sudo, but only
-# the three systemctl commands allowed by /etc/sudoers.d/conduit-cc.
+# Residual risk: a compromised conduit-cc process may invoke only the exact
+# reviewed sudoers surface: the three fixed Conduit systemctl commands, the
+# exact update/restore `apply` entry points, and the separately constrained
+# configuration/personal-mode helpers. Internal worker verbs are not granted.
 #
 # TODO (v1.x): replace sudo with polkit + systemd D-Bus control. systemctl
 # over D-Bus needs no setuid, so it is compatible with NoNewPrivileges=yes,

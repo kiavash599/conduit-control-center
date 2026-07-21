@@ -232,7 +232,7 @@ cd conduit-control-center
 
 اجرا به صورت Root:
 
-sudo ./install.sh
+sudo ./install.sh --authorized-identity-file /absolute/path/verified-install-identity.json
 
 **هشدار**
 

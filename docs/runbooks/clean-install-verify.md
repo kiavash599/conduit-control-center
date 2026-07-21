@@ -18,13 +18,27 @@ was extracted from an unverified artifact (that is circular). Use `ccc-verify-re
        --manifest ccc-X.Y.Z.manifest.json \
        --signature ccc-X.Y.Z.manifest.json.sig \
        --artifact  ccc-X.Y.Z-$(uname -m).tar.gz \
-       --trust-store allowed_signers
+       --trust-store allowed_signers \
+       --write-install-identity "$PWD/verified-install-identity.json"
    ```
    Exit 0 prints the canonical filename to extract. Any non-zero exit = STOP (do not extract/install).
    Stock-tools fallback (no wrapper): `ssh-keygen -Y verify -f allowed_signers -I
    conduit-control-center-publisher -n ccc-update-manifest -s ccc-X.Y.Z.manifest.json.sig <
    ccc-X.Y.Z.manifest.json` then confirm `sha256sum ccc-X.Y.Z-$(uname -m).tar.gz` equals the value in
    the manifest entry for your platform.
-4. ONLY after a clean verify, extract the artifact and run `sudo bash install.sh` from the extracted
-   tree. On armv7l the embedded `wheelhouse-armhf/` is used automatically; never side-load an
-   unsigned wheelhouse.
+4. ONLY after a clean verify, preserve the absolute path of the verifier-created
+   identity file, extract the canonical artifact named on stdout, and run:
+   ```bash
+   IDENTITY="$PWD/verified-install-identity.json"
+   mkdir ccc-install
+   tar -xzf "ccc-X.Y.Z-$(uname -m).tar.gz" -C ccc-install
+   cd ccc-install
+   sudo bash install.sh --authorized-identity-file "$IDENTITY"
+   ```
+   The identity file is created once at mode 0600 and contains the source
+   commit/tag obtained from the verified signed manifest plus digests of the
+   three verified inputs. The installer rejects symlinks, wrong ownership/mode,
+   duplicate/malformed JSON, a version/tag mismatch, and any attempt to combine
+   this file with caller-supplied identity flags. Do not copy the identity file
+   into the extracted artifact tree. On armv7l the embedded `wheelhouse-armhf/`
+   is used automatically; never side-load an unsigned wheelhouse.

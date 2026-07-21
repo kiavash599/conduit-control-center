@@ -1,0 +1,194 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+ccc-bootstrap-runtime -- dedicated stdlib-only FIRST-TRANSITION runtime runner.
+
+Why this exists (accepted blocker 1): the ordinary `ccc-runtime` helper derives
+its application root from its own installed location. During the v0.3.18 ->
+v0.3.19 bootstrap that is wrong twice over: installed, it would import
+`backend.runtime_store` from the OLD tree (which lacks it); staged, it would
+target the STAGING directory as the store. This runner separates the two
+explicitly and immutably:
+
+  * IMPLEMENTATION SOURCE: the verified root-owned bootstrap staging snapshot
+    (this file's own tree: <staging>/source/deployment/bootstrap/... ->
+    <staging>/source). Nothing is ever imported from the old application tree.
+  * MUTATION TARGET: fixed to /opt/conduit-cc. An explicit --target must equal
+    that constant; anything else fails closed.
+
+It is executed only from root-owned staging, is passed to the staged engine via
+`update.sh --runtime-tool`, never installs/overwrites the ordinary
+/opt/conduit-cc/bin/ccc-runtime, and remains in staging as the GC-protected
+ROLLBACK RESERVE until the final acceptance marker.
+
+Operations: identical surface to ccc-runtime (candidate-id, stage-candidate,
+finalize-candidate, validate-target, revalidate, validate-selector,
+convert-legacy, rollback-conversion, activate, rollback-activation, gc,
+diagnose, reserve-ready, reserve-accept, discard-staging,
+reconcile-candidate).
+Transaction evidence also exposes ``attempt-backups`` for record-authorized
+post-success backup retention.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import NoReturn
+
+_SELF_REAL = os.path.realpath(__file__)
+# <staging>/source/deployment/bootstrap/ccc-bootstrap-runtime -> <staging>/source
+SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_SELF_REAL)))
+FIXED_TARGET = "/opt/conduit-cc"
+PRIVATE_DIR = "/var/lib/ccc-update"
+
+
+def die(code: int, msg: str) -> NoReturn:
+    sys.stderr.write(f"ccc-bootstrap-runtime: ERROR: {msg}\n")
+    sys.exit(code)
+
+
+def _import_store():
+    """Import runtime_store ONLY from the verified staging snapshot."""
+    if not os.path.isfile(os.path.join(SOURCE_ROOT, "backend", "runtime_store.py")):
+        die(3, f"staging snapshot lacks backend/runtime_store.py under {SOURCE_ROOT!r}")
+    sys.path.insert(0, SOURCE_ROOT)
+    try:
+        from backend import runtime_store
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        die(3, f"cannot import runtime_store from staging: {type(exc).__name__}")
+    if not os.path.realpath(runtime_store.__file__).startswith(
+            os.path.realpath(SOURCE_ROOT) + os.sep):
+        die(3, "runtime_store resolved OUTSIDE the staging snapshot (refusing)")
+    return runtime_store
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    target = FIXED_TARGET
+    if argv[:1] == ["--target"]:
+        if len(argv) < 2 or argv[1] != FIXED_TARGET:
+            die(2, f"--target must be exactly {FIXED_TARGET!r}")
+        target = argv[1]
+        argv = argv[2:]
+    rs = _import_store()
+    try:
+        if len(argv) == 5 and argv[0] == "attempt-begin":
+            doc = rs.begin_update_attempt(
+                PRIVATE_DIR, argv[1], target_version=argv[2],
+                source_commit=argv[3], source_tag=argv[4])
+            print("UPDATE_ATTEMPT=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) >= 3 and argv[0] == "attempt-mark":
+            facts = {}
+            for kv in argv[3:]:
+                key, sep, value = kv.partition("=")
+                if not key or not sep:
+                    die(2, f"bad transaction fact {kv!r}")
+                facts[key] = (value == "true" if value in ("true", "false") else value)
+            doc = rs.mark_update_attempt(PRIVATE_DIR, argv[1], argv[2], facts=facts)
+            print("UPDATE_ATTEMPT=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 2 and argv[0] == "attempt-show":
+            print("UPDATE_ATTEMPT=" + json.dumps(
+                rs.read_update_attempt(PRIVATE_DIR, argv[1]), sort_keys=True))
+            return 0
+        if argv == ["attempt-incomplete"]:
+            print("UPDATE_INCOMPLETE=" + json.dumps(
+                rs.incomplete_update_attempts(PRIVATE_DIR), sort_keys=True))
+            return 0
+        if argv == ["attempt-backups"]:
+            print("UPDATE_BACKUPS=" + json.dumps(
+                rs.completed_update_backups(PRIVATE_DIR), sort_keys=True))
+            return 0
+        if len(argv) == 2 and argv[0] == "reserve-ready":
+            doc = rs.mark_bootstrap_reserve_ready(PRIVATE_DIR, argv[1])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 4 and argv[0] == "reserve-accept":
+            doc = rs.accept_bootstrap_reserve(
+                PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if argv and argv[0] == "candidate-id" and len(argv) == 8:
+            (_, appv, commit, arch, pyver, abi, dkind, dig) = argv
+            print(rs.compute_candidate_id(app_version=appv, commit=commit, arch=arch,
+                                          python_version=pyver, abi=abi,
+                                          input_digest_kind=dkind, input_digest=dig))
+            return 0
+        if len(argv) == 3 and argv[0] == "stage-candidate":
+            print(rs.stage_candidate(target, argv[1], argv[2]))
+            return 0
+        if argv and argv[0] == "finalize-candidate" and len(argv) >= 3:
+            fields = {}
+            for kv in argv[3:]:
+                k, _, v = kv.partition("=")
+                if not k or not _:
+                    die(2, f"bad manifest field {kv!r}")
+                fields[k] = v
+            print(f"RUNTIME_FINALIZE=OK id="
+                  f"{rs.finalize_candidate(target, argv[1], argv[2], manifest_fields=fields)}")
+            return 0
+        if argv == ["validate-selector"]:
+            print(f"RUNTIME_SELECTOR=OK id={rs.validate_selector(target)}")
+            return 0
+        if len(argv) == 2 and argv[0] == "validate-target":
+            rs.validate_target(target, argv[1])
+            print(f"RUNTIME_TARGET=OK id={argv[1]}")
+            return 0
+        if len(argv) == 2 and argv[0] == "revalidate":
+            rs.revalidate_runtime(target, argv[1])
+            print(f"RUNTIME_REVALIDATE=OK id={argv[1]}")
+            return 0
+        if len(argv) == 2 and argv[0] == "discard-staging":
+            removed = rs.discard_candidate_staging(target, argv[1])
+            print(f"RUNTIME_STAGING_DISCARD=OK removed={str(removed).lower()}")
+            return 0
+        if len(argv) == 3 and argv[0] == "reconcile-candidate":
+            result = rs.reconcile_candidate_attempt(target, argv[1], argv[2])
+            print(f"RUNTIME_CANDIDATE_RECONCILE=OK result={result}")
+            return 0
+        if argv == ["validate-legacy-shape"]:
+            rs.validate_legacy_shape(target)
+            print("RUNTIME_LEGACY_SHAPE=OK")
+            return 0
+        if argv == ["validate-legacy"]:
+            rs.validate_legacy_runtime(target)
+            print("RUNTIME_LEGACY=OK")
+            return 0
+        if argv == ["convert-legacy"]:
+            print(f"RUNTIME_CONVERT=OK id={rs.convert_legacy(target, PRIVATE_DIR)}")
+            return 0
+        if argv == ["rollback-conversion"]:
+            rs.rollback_conversion(target, PRIVATE_DIR)
+            print("RUNTIME_CONVERT_ROLLBACK=OK")
+            return 0
+        if len(argv) == 2 and argv[0] == "activate":
+            print(f"RUNTIME_ACTIVATE=OK previous={rs.activate(target, PRIVATE_DIR, argv[1])}")
+            return 0
+        if len(argv) == 2 and argv[0] == "activate-initial":
+            print(f"RUNTIME_INITIAL_ACTIVATE=OK id={rs.activate_initial(target, argv[1])}")
+            return 0
+        if argv == ["rollback-activation"]:
+            print(f"RUNTIME_ROLLBACK=OK id={rs.rollback_activation(target, PRIVATE_DIR)}")
+            return 0
+        if argv == ["gc"]:
+            print(f"RUNTIME_GC=OK removed={','.join(rs.gc(target, PRIVATE_DIR)) or 'none'}")
+            return 0
+        if argv == ["diagnose"]:
+            rec = rs._read_json(os.path.join(PRIVATE_DIR, rs.TRANSITION_RECORD))
+            sel = os.path.join(target, rs.SELECTOR_NAME)
+            state = ("symlink" if os.path.islink(sel)
+                     else "real-dir" if os.path.isdir(sel) else "absent")
+            print("RUNTIME_DIAGNOSE=" + json.dumps(
+                {"selector": state, "transition_record": rec}, sort_keys=True))
+            return 0
+    except rs.RuntimeStoreError as exc:
+        die(2, f"refused: {exc}")
+    except OSError as exc:
+        die(3, f"filesystem error: {exc}")
+    die(2, "usage: ccc-bootstrap-runtime [--target /opt/conduit-cc] <op> [...]")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

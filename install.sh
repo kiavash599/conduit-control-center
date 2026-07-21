@@ -3,7 +3,7 @@
 # ==============================================
 # Installs the CCC dashboard on Ubuntu 22.04 ARM64 behind a Cloudflare proxy.
 #
-# Usage:   sudo bash install.sh
+# Usage:   sudo bash install.sh --authorized-identity-file <verified-identity.json>
 # Docs:    docs/pre-install.md
 #          docs/tls-setup.md
 #
@@ -25,6 +25,10 @@
 #   - sudoers rule created for adapter.py sudo systemctl calls
 
 set -euo pipefail
+# Deterministic root-owned runtime/code modes on every host, independent of the
+# invoking Owner/sudo policy. The recursive runtime gate rejects g/o-writable
+# entries; candidate creation must not inherit an ambient 0002 umask.
+umask 022
 
 # --------------------------------------------------------------------------- #
 #  Constants                                                                   #
@@ -66,6 +70,9 @@ TLS_KEY_PATH=""
 HTTPS_PORT=""       # selected Cloudflare-supported public HTTPS port (Feature 1)
 ADMIN_USERNAME=""
 ADMIN_PASSWORD=""   # cleared immediately after hashing in Phase 2g
+INSTALL_SOURCE_COMMIT=""
+INSTALL_SOURCE_TAG=""
+INSTALL_IDENTITY_FILE=""
 
 # Set by phase1_validate step 1x; consumed by phase2_install step 2x-c.
 # Values: an absolute path to the binary, or the string "download".
@@ -99,9 +106,119 @@ die() {
     exit 1
 }
 
+_parse_install_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --authorized-source-commit)
+                [[ $# -ge 2 ]] || die "--authorized-source-commit requires a value."
+                INSTALL_SOURCE_COMMIT="$2"; shift 2;;
+            --authorized-source-tag)
+                [[ $# -ge 2 ]] || die "--authorized-source-tag requires a value."
+                INSTALL_SOURCE_TAG="$2"; shift 2;;
+            --authorized-identity-file)
+                [[ $# -ge 2 ]] || die "--authorized-identity-file requires a path."
+                INSTALL_IDENTITY_FILE="$2"; shift 2;;
+            --help|-h)
+                printf 'Usage: sudo bash install.sh --authorized-identity-file <verified-identity.json>\n'
+                exit 0;;
+            *) die "Unknown installer argument: $1";;
+        esac
+    done
+    if [[ -n "${INSTALL_IDENTITY_FILE}" ]]; then
+        [[ -z "${INSTALL_SOURCE_COMMIT}" && -z "${INSTALL_SOURCE_TAG}" ]] \
+            || die "Use either --authorized-identity-file or direct source identity, never both."
+        local _identity _expected_uid="${SUDO_UID:-0}"
+        [[ "${_expected_uid}" =~ ^[0-9]+$ ]] \
+            || die "Cannot determine the verified identity-file owner."
+        if ! _identity="$(/usr/bin/python3 -I - "${INSTALL_IDENTITY_FILE}" \
+                "${_expected_uid}" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, expected_uid = sys.argv[1], int(sys.argv[2])
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+fd = os.open(path, flags)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        raise ValueError("not a single-link regular file")
+    if st.st_uid != expected_uid or stat.S_IMODE(st.st_mode) != 0o600:
+        raise ValueError("wrong owner or mode (expected invoking owner, 0600)")
+    raw = os.read(fd, 64 * 1024 + 1)
+finally:
+    os.close(fd)
+if len(raw) > 64 * 1024:
+    raise ValueError("identity file too large")
+
+def unique(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate JSON key")
+        out[key] = value
+    return out
+
+doc = json.loads(
+    raw.decode("utf-8"), object_pairs_hook=unique,
+    parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+)
+required = {
+    "schema", "product", "version", "platform", "artifact_name",
+    "source_commit", "source_tag", "manifest_sha256", "signature_sha256",
+    "artifact_sha256",
+}
+if not isinstance(doc, dict) or set(doc) != required or doc.get("schema") != 1:
+    raise ValueError("identity schema mismatch")
+print(doc["source_commit"])
+print(doc["source_tag"])
+PY
+        )"; then
+            die "Verified install identity file is invalid or unsafe."
+        fi
+        INSTALL_SOURCE_COMMIT="${_identity%%$'\n'*}"
+        INSTALL_SOURCE_TAG="${_identity#*$'\n'}"
+        [[ "${INSTALL_SOURCE_COMMIT}" != "${INSTALL_SOURCE_TAG}" \
+           && "${INSTALL_SOURCE_TAG}" != *$'\n'* ]] \
+            || die "Verified install identity output is malformed."
+    fi
+    [[ "${INSTALL_SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Fresh install requires the source commit from the verified signed release manifest."
+    local _version
+    _version="$(_read_version_file "${SCRIPT_DIR}/backend/_version.py" || true)"
+    [[ -n "${_version}" && "${INSTALL_SOURCE_TAG}" == "v${_version}" ]] \
+        || die "Fresh install source tag must match this verified tree (v${_version:-unknown})."
+}
+
 # Assign a value to a named variable without nameref.
 # Usage: assign VARNAME "value"
 assign() { printf -v "$1" '%s' "$2"; }
+
+# Values written to the shell-sourced canonical .env are serialized inside
+# single quotes. Refuse the only quote terminator plus line-framing controls;
+# no user input may become shell syntax when cloudflare-ddns.sh sources it.
+_require_env_scalar() {
+    local _label="$1" _value="$2"
+    [[ "${_value}" != *"'"* && "${_value}" != *$'\n'* && "${_value}" != *$'\r'* ]] \
+        || die "${_label} contains a character that cannot be represented safely in .env."
+}
+
+# Parse the single exact APP_VERSION assignment as data; never execute a
+# candidate's Python source merely to discover its version.
+_read_version_file() {
+    local _f="$1"
+    [[ ! -L "${_f}" && -f "${_f}" ]] || return 1
+    awk '
+        /^APP_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
+            value=$0
+            sub(/^APP_VERSION = "/, "", value)
+            sub(/"$/, "", value)
+            count++
+        }
+        END { if (count != 1) exit 2; print value }
+    ' "${_f}"
+}
 
 # Prompt for a plain-text value.  Result is stored in the named variable.
 # Usage: prompt VARNAME "Prompt text" ["default"]
@@ -175,8 +292,163 @@ conduit_asset_for_arch() {
 #            closure (not only native-risk deps); a missing required wheel
 #            (e.g. fastapi) makes pip fail -> the install fails closed.
 # Args: <pip_bin> <requirements_file> <wheelhouse_dir>
+# --------------------------------------------------------------------------- #
+#  Epic-1 ownership invariants (F1/F6)                                        #
+#                                                                             #
+#  Deployed code under APP_DIR: root:root, dirs 0755 / files 0644 (helpers    #
+#  0755 via their explicit `install` lines). The service account may read    #
+#  execute but never write. Service-writable data lives OUTSIDE the           #
+#  executable trust closure (/etc/conduit-cc, /var/log/..., /var/lib/...).    #
+# --------------------------------------------------------------------------- #
+
+# Verify no path under APP_DIR (excluding none) is owned/writable by the
+# service account or carries setuid/setgid. Fail closed with the offenders.
+_verify_app_dir_ownership() {
+    # venv/.venvs are pruned here (verified by _verify_venv_ownership /
+    # _verify_store_ownership); everything else in the executable closure must
+    # be root:root, NOT group/other-WRITABLE (/022), no setuid/setgid (/6000),
+    # and contain no symlinks (the selector at /venv is the only sanctioned
+    # link and is pruned/validated separately).
+    local _bad
+    _bad="$(find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/.venvs" \
+                 -o -path "${APP_DIR}/ccc.db" \) -prune -o \
+                 \( -not -user root -o -not -group root -o -perm /6000 -o -perm /022 -o -type l \) \
+                 -print 2>/dev/null | head -20 || true)"
+    if [[ -n "${_bad}" ]]; then
+        echo "ERROR: APP_DIR ownership invariant violated (non-root/writable/setuid/symlink):" >&2
+        echo "${_bad}" >&2
+        exit 1
+    fi
+}
+
+# Enforce the trust-anchor boundary: dir 0700 root:root, anchor (if present)
+# regular root:root 0600.
+_verify_trust_dir() {
+    # lstat-level gates: a SYMLINKED trust dir or anchor is an attack, never a
+    # configuration (the old -d/stat checks followed links).
+    [[ -e "${APP_DIR}/trust" || -L "${APP_DIR}/trust" ]] || return 0
+    if [[ -L "${APP_DIR}/trust" ]]; then
+        echo "ERROR: ${APP_DIR}/trust is a symlink (refusing)" >&2; exit 1
+    fi
+    [[ -d "${APP_DIR}/trust" ]] || { echo "ERROR: ${APP_DIR}/trust is not a directory" >&2; exit 1; }
+    local _m
+    _m="$(stat -c '%U:%a' "${APP_DIR}/trust")"
+    [[ "${_m}" == "root:700" ]] || { echo "ERROR: trust dir must be root:700 (got ${_m})" >&2; exit 1; }
+    if [[ -e "${APP_DIR}/trust/allowed_signers" || -L "${APP_DIR}/trust/allowed_signers" ]]; then
+        [[ -L "${APP_DIR}/trust/allowed_signers" ]] && { echo "ERROR: trust anchor is a symlink" >&2; exit 1; }
+        [[ -f "${APP_DIR}/trust/allowed_signers" ]] || { echo "ERROR: trust anchor is not a regular file" >&2; exit 1; }
+        _m="$(stat -c '%U:%a' "${APP_DIR}/trust/allowed_signers")"
+        [[ "${_m}" == "root:600" ]] || { echo "ERROR: trust anchor must be root:600 (got ${_m})" >&2; exit 1; }
+    fi
+}
+
+# Enforce the helper-dir boundary: root-owned, no group/other write, no symlink.
+_verify_bin_dir() {
+    [[ -d /opt/conduit-cc/bin ]] || return 0
+    local _bad
+    _bad="$(find /opt/conduit-cc/bin \( -not -user root -o -perm /022 -o -type l \) \
+                 -print 2>/dev/null | head -10 || true)"
+    if [[ -n "${_bad}" ]]; then
+        echo "ERROR: helper dir invariant violated:" >&2
+        echo "${_bad}" >&2
+        exit 1
+    fi
+}
+
+# Enforce the runtime-store boundary (post Epic-2): root-owned, no g/o write.
+_verify_store_ownership() {
+    [[ -d "${APP_DIR}/.venvs" ]] || return 0
+    local _bad
+    _bad="$(find "${APP_DIR}/.venvs" \( -not -user root -o -perm /6022 \) \
+                 -print 2>/dev/null | head -20 || true)"
+    if [[ -n "${_bad}" ]]; then
+        echo "ERROR: runtime store invariant violated (non-root or writable/setuid):" >&2
+        echo "${_bad}" >&2
+        exit 1
+    fi
+}
+
+# ONE-TIME Epic-1 transition: make the real legacy venv root-owned and
+# non-service-writable. Recursive -- but STRICTLY bounded to the validated venv:
+#   * exact expected path only (${APP_DIR}/venv);
+#   * must be a REAL directory (symlink/non-directory rejected);
+#   * canonical path must remain inside APP_DIR (no traversal outside);
+# Idempotent: safe to re-run on every install/update.
+_secure_legacy_venv() {
+    local _venv="${APP_DIR}/venv" _real
+    [[ -e "${_venv}" || -L "${_venv}" ]] || return 0      # nothing to secure yet
+    if [[ -L "${_venv}" ]]; then
+        # Post-conversion: validate the selector via the full runtime-store gate.
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-selector \
+            || { echo "ERROR: runtime selector failed validation" >&2; exit 1; }
+        return 0
+    fi
+    if [[ ! -d "${_venv}" ]]; then
+        echo "ERROR: ${_venv} must be a real directory (found non-directory)" >&2
+        exit 1
+    fi
+    _real="$(readlink -f "${_venv}")"
+    case "${_real}" in
+        "${APP_DIR}"/*) ;;
+        *) echo "ERROR: venv resolves outside ${APP_DIR}: ${_real}" >&2; exit 1;;
+    esac
+    # Reject hardlinks, special objects and escaping symlinks before any
+    # recursive mutation.  `chown -hR` then never follows a symlink target.
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-legacy-shape \
+        || { echo "ERROR: legacy venv failed its pre-mutation shape gate" >&2; exit 1; }
+    chown -hR root:root "${_venv}"
+    chmod -R go-w "${_venv}"
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-legacy \
+        || { echo "ERROR: legacy venv failed its post-transition trust gate" >&2; exit 1; }
+    info "legacy venv secured: root-owned, non-service-writable (${_venv})"
+}
+
+# Enforce the venv half of the trust closure (root-owned, no g/o write, no setuid).
+_verify_venv_ownership() {
+    [[ -e "${APP_DIR}/venv" || -L "${APP_DIR}/venv" ]] || return 0
+    if [[ -L "${APP_DIR}/venv" ]]; then
+        # Selector layout: GNU find with default -P would evaluate the SYMLINK
+        # itself (mode 777) and false-fail /6022. The selector is validated by
+        # the FULL runtime-store gate; the recursive ownership scan applies to
+        # the store via _verify_store_ownership.
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-selector >/dev/null \
+            || { echo "ERROR: selector failed the runtime-store gate" >&2; exit 1; }
+        return 0
+    fi
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-legacy >/dev/null \
+        || { echo "ERROR: legacy venv failed the runtime-store gate" >&2; exit 1; }
+}
+
+# Epic-1 state boundary + trust-anchor directory provisioning (idempotent).
+_provision_priv_state_dirs() {
+    install -d -o root -g root -m 0700 /var/lib/ccc-update
+    install -d -o root -g root -m 0700 /var/lib/ccc-update/attempts
+    install -d -o root -g root -m 0755 /var/lib/ccc-status
+    if [[ -L "${APP_DIR}/trust" ]]; then
+        echo "ERROR: ${APP_DIR}/trust is a symlink (refusing to provision through it)" >&2
+        exit 1
+    fi
+    install -d -o root -g root -m 0700 "${APP_DIR}/trust"
+    info "privileged state dirs provisioned (/var/lib/ccc-update 0700, /var/lib/ccc-status 0755, ${APP_DIR}/trust 0700)"
+}
+
+# --------------------------------------------------------------------------- #
+#  Epic-1/2 shared lifecycle path-filter contract (A4/B2) -- MIRRORS update.sh #
+# --------------------------------------------------------------------------- #
+readonly -a CCC_LIFECYCLE_EXCLUDES=(
+    --exclude=/venv
+    --exclude=/.venvs
+    --exclude=/trust
+    --exclude=/bin
+)
+
 install_python_deps() {
-    local _pip="$1" _req="$2" _wh="$3" _arch _reqdir _lock
+    # B5: $1 is the selected runtime's PYTHON interpreter; pip runs as -m pip.
+    local _py="$1" _req="$2" _wh="$3" _arch _reqdir _lock
+    local _pip="${_py} -m pip"
+    # Accepted pip policy: never consult the live index for pip itself; no
+    # version-check chatter, no interactive prompts.
+    export PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1
     _arch="$(uname -m)"
     _reqdir="$(dirname "${_req}")"
     case "${_arch}" in
@@ -189,7 +461,7 @@ install_python_deps() {
                 warn "aarch64 dependency lock missing: ${_lock}. The signed requirements-aarch64.lock is required."
                 return 1
             fi
-            "${_pip}" install --quiet --require-hashes --only-binary=:all: -r "${_lock}" || return 1
+            ${_pip} install --quiet --require-hashes --only-binary=:all: -r "${_lock}" || return 1
             ;;
         armv7l)
             # armv7l: install ONLY from the official verified wheelhouse, OFFLINE and
@@ -212,7 +484,7 @@ install_python_deps() {
                 warn "armv7 dependency lock missing: ${_lock}. The signed requirements-armv7.lock is required."
                 return 1
             fi
-            "${_pip}" install --quiet --no-index --only-binary=:all: --require-hashes --find-links "${_wh}" -r "${_lock}" || return 1
+            ${_pip} install --quiet --no-index --only-binary=:all: --require-hashes --find-links "${_wh}" -r "${_lock}" || return 1
             ;;
         *)
             warn "Unsupported architecture '${_arch}' for dependency provisioning."
@@ -744,11 +1016,13 @@ phase1_validate() {
     printf "  The token is stored in /etc/conduit-cc/.env and never printed.\n"
     prompt_secret CF_API_TOKEN "API token"
     [[ -n "${CF_API_TOKEN}" ]] || die "API token cannot be empty."
+    _require_env_scalar "API token" "${CF_API_TOKEN}"
 
     # ---- 1e  Zone name — validates token AND Zone:Zone:Read permission ------ #
     step "1e — Cloudflare zone name"
     prompt CF_ZONE_NAME "Zone name (e.g. example.com)"
     [[ -n "${CF_ZONE_NAME}" ]] || die "Zone name cannot be empty."
+    _require_env_scalar "Zone name" "${CF_ZONE_NAME}"
 
     local zone_response zone_success
     zone_response="$(cf_api GET "/zones?name=${CF_ZONE_NAME}")"
@@ -773,6 +1047,7 @@ phase1_validate() {
     step "1f — DNS A record"
     prompt CF_RECORD_NAME "Dashboard hostname (e.g. conduit.example.com)"
     [[ -n "${CF_RECORD_NAME}" ]] || die "Hostname cannot be empty."
+    _require_env_scalar "Dashboard hostname" "${CF_RECORD_NAME}"
 
     local record_response record_count proxied
     record_response="$(cf_api GET \
@@ -844,6 +1119,9 @@ phase1_validate() {
     step "1i — Admin account"
     prompt ADMIN_USERNAME "Admin username" "admin"
     [[ -n "${ADMIN_USERNAME}" ]] || die "Username cannot be empty."
+    [[ "${ADMIN_USERNAME}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] \
+        || die "Username must be 1-64 ASCII letters, digits, dot, underscore or hyphen."
+    _require_env_scalar "Admin username" "${ADMIN_USERNAME}"
 
     local _pw1 _pw2
     prompt_secret _pw1 "Admin password (min ${MIN_PW_LEN} characters)"
@@ -957,15 +1235,32 @@ phase2_install() {
     # ---- 2b  Application files --------------------------------------------- #
     step "2b — Copying application files to ${APP_DIR}"
     mkdir -p "${APP_DIR}"
+    # Epic-1 ownership boundary (F1/F6): deployed code is ROOT-owned and never
+    # writable by the service account. rsync -a would PRESERVE source uid/gid
+    # (root execution is not an ownership invariant), so ownership and modes are
+    # normalized explicitly. The old broad recursive service-account chown of APP_DIR
+    # made root helpers execute service-writable code and is REMOVED; nothing
+    # may reintroduce it (regression-tested).
     rsync -a \
-        --exclude 'venv/' \
+        --chown=root:root \
+        --chmod=D0755,F0644 \
+        "${CCC_LIFECYCLE_EXCLUDES[@]}" \
         --exclude 'ccc.db' \
         --exclude '__pycache__/' \
         --exclude '.git/' \
         --exclude '.env' \
         "${SCRIPT_DIR}/" "${APP_DIR}/"
-    chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
-    info "Application files copied"
+    chown root:root "${APP_DIR}"
+    chmod 0755 "${APP_DIR}"
+    _verify_app_dir_ownership
+    # Epic-1 A3: the canonical .env CLI must exist BEFORE the first .env
+    # operation (2f). Root-owned 0755; it has NO sudo grant (root-only tool).
+    install -d -o root -g root -m 0755 /opt/conduit-cc/bin
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-env" /opt/conduit-cc/bin/ccc-env
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-runtime" /opt/conduit-cc/bin/ccc-runtime
+    info "Application files copied (root-owned, service read/execute only)"
 
     # ---- 2b1  Purge stale Python bytecode (reinstall-over-existing) --------- #
     # Fresh installs have an empty APP_DIR (no-op); on reinstall-over-existing
@@ -973,23 +1268,88 @@ phase2_install() {
     # source change. STRICTLY scoped to APP_DIR; venv AND its children are pruned
     # (dependency bytecode untouched); removes ONLY __pycache__ dirs and *.pyc.
     step "2b1 — Purging stale Python bytecode (reinstall-over-existing)"
-    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \
+                       -o -path "${APP_DIR}/.venvs" -o -path "${APP_DIR}/.venvs/*" \) -prune \
         -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \) -prune \
+    find "${APP_DIR}" \( -path "${APP_DIR}/venv" -o -path "${APP_DIR}/venv/*" \
+                       -o -path "${APP_DIR}/.venvs" -o -path "${APP_DIR}/.venvs/*" \) -prune \
         -o -type f -name '*.pyc' -delete 2>/dev/null || true
     info "Stale __pycache__/*.pyc purged under ${APP_DIR} (venv preserved)"
 
-    # ---- 2c  Python virtual environment ------------------------------------ #
-    step "2c — Setting up Python virtual environment"
-    if [[ ! -f "${APP_DIR}/venv/bin/python3" ]]; then
-        python3 -m venv "${APP_DIR}/venv"
-        info "venv created at ${APP_DIR}/venv"
-    else
-        info "venv already exists — skipping creation"
+    # ---- 2c  Immutable candidate runtime ----------------------------------- #
+    step "2c — Building and validating the initial immutable runtime"
+    local _arch _pyver _abi _dkind _dig _lock _wh _version _candidate_id
+    local _install_attempt _candidate_py _current_id=""
+    _arch="$(uname -m)"
+    _pyver="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
+    _abi="$(/usr/bin/python3 -c "import sysconfig;print(sysconfig.get_config_var('SOABI') or '')")"
+    _version="$(_read_version_file "${APP_DIR}/backend/_version.py")" \
+        || die "installed APP_VERSION declaration is invalid"
+    _wh="${CCC_WHEELHOUSE_DIR:-${SCRIPT_DIR}/wheelhouse-armhf}"
+    case "${_arch}" in
+        armv7l)
+            [[ -f "${_wh}/SHA256SUMS" ]] \
+                || die "wheelhouse SHA256SUMS missing for initial runtime identity"
+            _dkind="wheelhouse-sha256sums"
+            _dig="$(sha256sum "${_wh}/SHA256SUMS" | awk '{print $1}')"
+            ;;
+        aarch64)
+            _lock="${APP_DIR}/requirements-aarch64.lock"
+            [[ -f "${_lock}" ]] || die "aarch64 dependency lock missing for initial runtime identity"
+            _dkind="aarch64-lock"
+            _dig="$(sha256sum "${_lock}" | awk '{print $1}')"
+            ;;
+        *) die "Unsupported architecture '${_arch}' for initial runtime provisioning.";;
+    esac
+    _candidate_id="$(/usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+        candidate-id "${_version}" "${INSTALL_SOURCE_COMMIT}" "${_arch}" \
+        "${_pyver}" "${_abi}" "${_dkind}" "${_dig}")" \
+        || die "initial runtime identity computation failed"
+    _install_attempt="${_candidate_id:0:32}"
+
+    if [[ -L "${APP_DIR}/venv" ]]; then
+        _current_id="$(/usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-selector \
+            | sed -n 's/^RUNTIME_SELECTOR=OK id=//p')" \
+            || die "existing runtime selector is invalid"
+        [[ "${_current_id}" == "${_candidate_id}" ]] \
+            || die "This host already has a different active runtime. Use the signed updater, not install.sh."
+    elif [[ -e "${APP_DIR}/venv" ]]; then
+        die "A legacy real-directory runtime already exists. Use the v0.3.19 Owner bootstrap ceremony."
     fi
-    "${APP_DIR}/venv/bin/pip" install --quiet --upgrade pip
-    install_python_deps "${APP_DIR}/venv/bin/pip" "${APP_DIR}/requirements.txt" "${CCC_WHEELHOUSE_DIR:-${SCRIPT_DIR}/wheelhouse-armhf}" || die "Python dependency installation failed."
-    info "Python dependencies installed"
+
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+        reconcile-candidate "${_candidate_id}" "${_install_attempt}" >/dev/null \
+        || die "cannot reconcile prior initial-runtime candidate publication"
+    if [[ -d "${APP_DIR}/.venvs/${_candidate_id}" && ! -L "${APP_DIR}/.venvs/${_candidate_id}" ]]; then
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime revalidate "${_candidate_id}" \
+            || die "existing initial candidate failed live revalidation"
+        info "existing initial candidate live-revalidated"
+    else
+        _candidate_py="$(/usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+            stage-candidate "${_candidate_id}" "${_install_attempt}")" \
+            || die "initial candidate staging failed"
+        if ! install_python_deps "${_candidate_py}" "${APP_DIR}/requirements.txt" "${_wh}"; then
+            /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+                discard-staging "${_install_attempt}" >/dev/null 2>&1 || true
+            die "Python dependency installation failed; no runtime selector was published."
+        fi
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+            finalize-candidate "${_candidate_id}" "${_install_attempt}" \
+            "app_version=${_version}" "commit=${INSTALL_SOURCE_COMMIT}" \
+            "tag=${INSTALL_SOURCE_TAG}" "arch=${_arch}" \
+            "python_version=${_pyver}" "abi=${_abi}" \
+            "input_digest=${_dig}" "input_digest_kind=${_dkind}" \
+            || die "initial candidate validation/publication failed; selector remains absent"
+        info "initial candidate dependencies installed and fully validated"
+    fi
+    if [[ -z "${_current_id}" ]]; then
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime \
+            activate-initial "${_candidate_id}" \
+            || die "initial runtime selector publication failed"
+    fi
+    /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-runtime validate-selector >/dev/null \
+        || die "initial runtime selector failed the final gate"
+    info "initial immutable runtime active (${_candidate_id:0:16}...)"
 
     # ---- 2d  Configuration directory --------------------------------------- #
     step "2d — Creating configuration directory ${CONF_DIR}"
@@ -1025,17 +1385,31 @@ phase2_install() {
 
     # ---- 2f  Write .env ---------------------------------------------------- #
     step "2f — Writing ${CONF_DIR}/.env"
+    # Epic-1 A3 object-type gate BEFORE any branch: a live OR DANGLING symlink
+    # (or any non-regular object) fails closed -- `-f` follows links and lets a
+    # dangling symlink fall through to the create branch, where a redirection
+    # would write through it as root (the F2-class .env exploit).
+    if [[ -L "${CONF_DIR}/.env" ]] || { [[ -e "${CONF_DIR}/.env" ]] && [[ ! -f "${CONF_DIR}/.env" ]]; }; then
+        echo "ERROR: ${CONF_DIR}/.env is not a regular file (symlink/foreign object); refusing" >&2
+        exit 1
+    fi
     if [[ -f "${CONF_DIR}/.env" ]]; then
         # Idempotent reinstall: preserve SESSION_SECRET, CF_API_TOKEN, and
         # other runtime values set after first install.  Only ADMIN_USERNAME
         # is updated here; ADMIN_PASSWORD_HASH is updated in Phase 2g.
         info ".env already exists — preserving (SESSION_SECRET and credentials kept)"
-        if grep -q "^ADMIN_USERNAME=" "${CONF_DIR}/.env"; then
-            sed -i "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=${ADMIN_USERNAME}|" \
-                "${CONF_DIR}/.env"
-        else
-            printf 'ADMIN_USERNAME=%s\n' "${ADMIN_USERNAME}" >> "${CONF_DIR}/.env"
-        fi
+        # Epic-1 (F7): VALIDATE before mutation. Never chown/chmod an existing
+        # path first: a hardlink is `-f` and would mutate a second inode name
+        # before the canonical single-link gate could reject it.
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-env \
+            assert-contract "${CONF_DIR}/.env" >/dev/null \
+            || die "existing .env violates the canonical object/mode/ownership contract"
+        # Canonical writer only (A3): value via bounded stdin from the Bash
+        # BUILTIN printf (never an external argv), atomic replace inside.
+        builtin printf '%s' "${ADMIN_USERNAME}" | \
+            /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-env \
+                set-key "${CONF_DIR}/.env" ADMIN_USERNAME \
+            || die "canonical .env writer failed for ADMIN_USERNAME"
     else
         local _session_secret
         _session_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
@@ -1043,26 +1417,33 @@ phase2_install() {
         # Write all variables.  ADMIN_PASSWORD_HASH is left empty and written
         # by Phase 2g after the venv is ready.  CF_API_TOKEN is written here
         # because scripts/cloudflare-ddns.sh reads it from this file.
-        cat > "${CONF_DIR}/.env" <<EOF
-# Conduit Control Center — runtime configuration
+        # Canonical writer only (A3): full initial content via bounded stdin
+        # (Bash BUILTIN printf; secrets never in any argv/environment). The
+        # writer enforces regular-file-only, 0600, exact ownership, atomic
+        # replace + fsync internally.
+        local _env_content
+        _env_content="# Conduit Control Center — runtime configuration
 # Generated by install.sh — do not edit unless instructed.
 # See .env.example for documentation of each variable.
 
-ADMIN_USERNAME=${ADMIN_USERNAME}
+ADMIN_USERNAME='${ADMIN_USERNAME}'
 ADMIN_PASSWORD_HASH=
 
-SESSION_SECRET=${_session_secret}
+SESSION_SECRET='${_session_secret}'
 
-CF_API_TOKEN=${CF_API_TOKEN}
-CF_ZONE_NAME=${CF_ZONE_NAME}
-CF_RECORD_NAME=${CF_RECORD_NAME}
+CF_API_TOKEN='${CF_API_TOKEN}'
+CF_ZONE_NAME='${CF_ZONE_NAME}'
+CF_RECORD_NAME='${CF_RECORD_NAME}'
 
-TLS_CERT_PATH=${TLS_CERT_PATH}
-TLS_KEY_PATH=${TLS_KEY_PATH}
-EOF
-        chown "${APP_USER}:${APP_USER}" "${CONF_DIR}/.env"
-        chmod 600 "${CONF_DIR}/.env"
-        info ".env written (600, ${APP_USER})"
+TLS_CERT_PATH='${TLS_CERT_PATH}'
+TLS_KEY_PATH='${TLS_KEY_PATH}'
+"
+        builtin printf '%s' "${_env_content}" | \
+            /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-env \
+                init "${CONF_DIR}/.env" \
+            || die "canonical .env writer failed (init)"
+        unset _env_content
+        info ".env written via canonical writer (600, ${APP_USER})"
     fi
 
     # ---- 2g  Hash admin password ------------------------------------------- #
@@ -1083,12 +1464,13 @@ print(bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12)).decode())')"
     # Single-quote the hash so that bash `source .env` under `set -euo pipefail`
     # does not interpret the $2b$12$... prefix as unbound positional parameters.
     # pydantic-settings strips surrounding single quotes before loading the value.
-    if grep -q "^ADMIN_PASSWORD_HASH=" "${CONF_DIR}/.env"; then
-        sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH='${_pw_hash}'|" \
-            "${CONF_DIR}/.env"
-    else
-        printf "ADMIN_PASSWORD_HASH='%s'\n" "${_pw_hash}" >> "${CONF_DIR}/.env"
-    fi
+    # Canonical writer only (A3): the hash travels via bounded stdin from the
+    # Bash BUILTIN printf -- never in any process argv or environment. The
+    # writer single-quotes the value itself (bash-source safety preserved).
+    builtin printf '%s' "${_pw_hash}" | \
+        /usr/bin/python3 -I /opt/conduit-cc/bin/ccc-env \
+            set-key "${CONF_DIR}/.env" ADMIN_PASSWORD_HASH \
+        || die "canonical .env writer failed for ADMIN_PASSWORD_HASH"
     info "ADMIN_PASSWORD_HASH written to .env"
 
     # ---- 2h  config.json --------------------------------------------------- #
@@ -1258,6 +1640,13 @@ PYEOF
         "${APP_DIR}/deployment/bin/ccc-update-apply" \
         /opt/conduit-cc/bin/ccc-update-apply
     up_helper_meta="$(stat -c '%U:%a' /opt/conduit-cc/bin/ccc-update-apply)"
+    # Epic-1 (F12): the Owner trust-anchor ceremony tool (root 0755; the anchor
+    # itself is provisioned OUT-OF-BAND by the Owner, never by install).
+    install -o root -g root -m 0755 \
+        "${APP_DIR}/deployment/bin/ccc-provision-trust-anchor" \
+        /opt/conduit-cc/bin/ccc-provision-trust-anchor
+    _verify_bin_dir
+    _verify_trust_dir
     [ "${up_helper_meta}" = "root:755" ] || die \
         "Update helper ownership/perms wrong (${up_helper_meta}); expected root:755"
     info "Update helper installed (root:root 0755)"
@@ -1279,9 +1668,18 @@ PYEOF
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl start conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl stop conduit
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart conduit
+# REVIEWED EXCEPTION (Epic 1 A1): ccc-apply-conduit-config keeps a bare-path
+# grant because it is a parameterized privileged API -- fixed verbs (apply/
+# rollback), bounded INTEGER-only options, hardcoded destinations, no path/
+# unit/free-string argument anywhere (contract-tested). Sudoers cannot express
+# "any integer within bounds", so the helper's own parser is the firewall.
 ${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-apply-conduit-config
-${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-restore-apply
-${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-update-apply
+# EXACT public surface: only the literal 'apply' verb is authorized. The
+# internal '__run-worker' subcommand is reachable ONLY via the root-created
+# transient unit, never through these grants (missing/extra/substituted
+# arguments are rejected by sudoers exact-argument matching).
+${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-restore-apply apply
+${APP_USER} ALL=(root) NOPASSWD: /opt/conduit-cc/bin/ccc-update-apply apply
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-personal-compartment
 ${APP_USER} ALL=(conduit) NOPASSWD: /opt/conduit-cc/bin/ccc-ryve-claim
 EOF
@@ -1316,6 +1714,8 @@ EOF
     # ReadWritePaths=/var/log/conduit-cc-audit binds at service start.
     install -d -o root -g "${APP_USER}" -m 0750 /var/log/conduit-cc-audit
     info "/var/log/conduit-cc-audit created (0750, root:${APP_USER})"
+    # Epic-1: privileged updater state (root-only), public status, trust anchor dir.
+    _provision_priv_state_dirs
 
     # ---- 2m2  logrotate config for CCC logs (SD-card protection) ----------- #
     # Static config shipped in deployment/; rotates /var/log/conduit-cc/*.log.
@@ -1655,6 +2055,7 @@ phase3_summary() {
 #  Entry point                                                                 #
 # --------------------------------------------------------------------------- #
 
+_parse_install_args "$@"
 phase1_validate
 phase2_install
 phase3_summary

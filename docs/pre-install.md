@@ -271,10 +271,13 @@ TLS certificate (install.sh Phase 1g–1h)
   [ ] Modulus hash of cert and key match (see tls-setup.md)
 ```
 
-Once all items are checked, run the installer:
+Once all items are checked, follow the verify-before-extract procedure in
+[`docs/runbooks/clean-install-verify.md`](runbooks/clean-install-verify.md).
+The final installer command consumes the identity file written by the trusted
+release verifier:
 
 ```bash
-sudo bash install.sh
+sudo bash install.sh --authorized-identity-file /absolute/path/verified-install-identity.json
 ```
 
 ---
@@ -310,7 +313,8 @@ and makes no firewall changes**, and prints the evidence it found. Re-run with a
 explicit, sudo-safe override naming your intended local SSH port(s):
 
 ```bash
-sudo env CCC_SSH_PORTS=1222 bash install.sh
+sudo env CCC_SSH_PORTS=1222 bash install.sh \
+  --authorized-identity-file /absolute/path/verified-install-identity.json
 ```
 
 The override must include the port your current SSH session is using; an

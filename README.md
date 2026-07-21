@@ -122,14 +122,31 @@ If you are not using the Cloudflare proxy, Let's Encrypt is supported. See [docs
 # 1. Complete the Cloudflare pre-install checklist (~10 minutes)
 #    Read: docs/pre-install.md
 
-# 2. Clone the repository
+# 2. Clone a trusted verifier checkout (do not run the downloaded installer yet)
 git clone https://github.com/kiavash599/conduit-control-center.git
 cd conduit-control-center
 
-# 3. Run the installer
-chmod +x install.sh
-sudo ./install.sh
+# 3. Download the four release files, then verify BEFORE extraction.
+#    The verifier prints the canonical artifact filename and writes the signed
+#    source identity used by the installer.
+IDENTITY="$PWD/verified-install-identity.json"
+python3 deployment/bin/ccc-verify-release \
+  --manifest ccc-X.Y.Z.manifest.json \
+  --signature ccc-X.Y.Z.manifest.json.sig \
+  --artifact "ccc-X.Y.Z-$(uname -m).tar.gz" \
+  --trust-store /path/to/out-of-band/allowed_signers \
+  --write-install-identity "$IDENTITY"
+
+# 4. Only after VERIFIED: extract and install the authenticated tree.
+mkdir ccc-install
+tar -xzf "ccc-X.Y.Z-$(uname -m).tar.gz" -C ccc-install
+cd ccc-install
+sudo bash install.sh --authorized-identity-file "$IDENTITY"
 ```
+
+See [the clean-install verification runbook](docs/runbooks/clean-install-verify.md)
+for the trust-anchor and release-download details. A raw clone or extracted but
+unverified artifact is not an authorized install source.
 
 The installer will:
 
@@ -151,9 +168,12 @@ Open the dashboard URL printed by the installer, sign in with the admin password
 ## Updating & Uninstalling
 
 ```bash
-sudo ./update.sh      # pull and apply the latest version
 sudo ./uninstall.sh   # cleanly remove CCC from the system
 ```
+
+Updates are applied through CCC's signed One-Click Update flow. The direct
+`update.sh` engine is an internal, source-identity-bound worker and is not a
+replacement for signature verification.
 
 ---
 

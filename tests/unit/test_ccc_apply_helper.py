@@ -401,9 +401,11 @@ def test_conduit_unit_has_personal_clients_knob():
 
 def test_unit_has_only_narrow_readwritepaths():
     # conduit-cc.service keeps ProtectSystem=strict and adds ONLY narrow paths to
-    # ReadWritePaths: the drop-in dir (M2), the Conduit data dir (C6e Personal
-    # Mode helper), and the append-only audit dir (E3/ADR-0003 Phase B,
-    # /var/log/conduit-cc-audit) -- never broad /etc/systemd, never broad /var/lib/conduit.
+    # ReadWritePaths: the two root-owned updater state roots, the drop-in dir
+    # (M2), the Conduit data dir (C6e Personal Mode helper), and the append-only
+    # audit dir (E3/ADR-0003 Phase B).  The service uid remains unable to write
+    # the updater roots by Unix ownership; the mount grants are for the bounded
+    # root helpers executed inside the service namespace.
     repo = pathlib.Path(__file__).resolve().parents[2]
     unit = (repo / "deployment" / "conduit-cc.service").read_text()
     assert "ProtectSystem=strict" in unit
@@ -411,6 +413,8 @@ def test_unit_has_only_narrow_readwritepaths():
     rwp = [ln.strip() for ln in unit.splitlines() if ln.strip().startswith("ReadWritePaths=")]
     assert rwp == [
         "ReadWritePaths=/etc/conduit-cc",
+        "ReadWritePaths=/var/lib/ccc-update",
+        "ReadWritePaths=/var/lib/ccc-status",
         "ReadWritePaths=/etc/systemd/system/conduit.service.d",
         "ReadWritePaths=/var/lib/conduit/data",
         "ReadWritePaths=/var/log/conduit-cc-audit",

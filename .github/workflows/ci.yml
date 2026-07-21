@@ -217,6 +217,11 @@ jobs:
             echo "update.sh not yet created — skipping"
           fi
 
+      - name: Check first-transition bootstrap syntax
+        run: |
+          bash -n deployment/bootstrap/ccc-bootstrap.sh
+          shellcheck deployment/bootstrap/ccc-bootstrap.sh
+
       - name: Check scripts directory
         run: |
           for f in scripts/*.sh; do
@@ -225,3 +230,23 @@ jobs:
             bash -n "$f"
             shellcheck "$f"
           done
+
+  # Epic-1/2 A7: THE cumulative invariant gate. Runs the SAME committed entry
+  # point the v0.3.19 qualification runbook uses. Full unweakened Linux
+  # discovery + conftest + bash/ShellCheck gates + the required-invariant
+  # inventory (deletion guard). Only this entry point may claim
+  # INVARIANT_SUITE=PASS.
+  invariant-suite:
+    name: Invariant suite (authoritative Linux gate)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck rsync
+      - name: Run the cumulative invariant suite
+        run: python -m tests.invariant_suite --platform linux -q
