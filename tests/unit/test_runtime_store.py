@@ -351,6 +351,30 @@ def test_build_candidate_full_lifecycle(tmp_path):
     assert not [n for n in os.listdir(app / ".venvs") if n.startswith(".staging-")]
 
 
+def test_candidate_venv_creation_does_not_inherit_ambient_umask(tmp_path):
+    """GitHub runners use 0002; candidate trust must remain deterministic."""
+    app, priv = _converted(tmp_path)
+    rid = "e" * 64
+    previous_umask = os.umask(0o002)
+    try:
+        got = RS.build_candidate(
+            str(app), str(priv), rid, attempt_id="abcdefabcdef",
+            install_cmd=_install_nothing,
+            manifest_fields={"input_digest": "f" * 64},
+            owner_uid=UID, smoke_imports=(),
+        )
+        observed_umask = os.umask(0o002)
+        assert observed_umask == 0o002
+    finally:
+        os.umask(previous_umask)
+
+    assert got == rid
+    activate = app / ".venvs" / rid / "bin" / "activate"
+    assert stat.S_IMODE(activate.stat().st_mode) & 0o022 == 0
+    RS.validate_target(str(app), rid, UID)
+    RS.validate_runtime_tree(str(app), rid, UID)
+
+
 def test_build_candidate_failure_leaves_active_untouched_and_no_validated_manifest(tmp_path):
     app, priv = _converted(tmp_path)
     rid = "e" * 64

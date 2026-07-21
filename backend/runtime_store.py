@@ -977,8 +977,13 @@ def stage_candidate(app_dir: str, runtime_id: str, attempt_id: str,
     staging = os.path.join(store, f".staging-{attempt_id}")
     if os.path.lexists(staging):
         raise RuntimeStoreError(f"staging {staging!r} already exists (diagnose/clean first)")
+    # Popen's POSIX-only ``umask`` parameter changes only the venv child.  The
+    # staged runtime must not depend on a caller/runner's ambient umask (for
+    # example 0002 would otherwise create bin/activate as group-writable), and
+    # changing the parent process umask would be unsafe for library callers.
     r = subprocess.run([_sys_python(), "-m", "venv", staging],
-                       capture_output=True, text=True, env=_clean_env())
+                       capture_output=True, text=True, env=_clean_env(),
+                       umask=0o022)
     if r.returncode != 0:
         raise RuntimeStoreError(f"venv creation failed: {r.stderr.strip()[:200]}")
     return os.path.join(staging, "bin", "python3")
