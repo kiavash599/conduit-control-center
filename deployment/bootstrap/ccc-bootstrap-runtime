@@ -24,7 +24,7 @@ ROLLBACK RESERVE until the final acceptance marker.
 Operations: identical surface to ccc-runtime (candidate-id, stage-candidate,
 finalize-candidate, validate-target, revalidate, validate-selector,
 convert-legacy, rollback-conversion, activate, rollback-activation, gc,
-diagnose, reserve-ready, reserve-accept, discard-staging,
+diagnose, reserve-ready, reserve-accept, reserve-discard-failed, discard-staging,
 reconcile-candidate).
 Transaction evidence also exposes ``attempt-backups`` for record-authorized
 post-success backup retention.
@@ -107,6 +107,11 @@ def main(argv=None) -> int:
             return 0
         if len(argv) == 4 and argv[0] == "reserve-accept":
             doc = rs.accept_bootstrap_reserve(
+                PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 4 and argv[0] == "reserve-discard-failed":
+            doc = rs.discard_failed_bootstrap_reserve(
                 PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
             print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
             return 0

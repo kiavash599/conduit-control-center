@@ -202,6 +202,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that directory only after identity-bound `reserve-accept` writes a durable
   acceptance intent. Crash-resume and substitution negatives are regression-
   tested.
+- **Device-rehearsal correction — PyYAML runtime smoke**: the candidate gate now
+  tests the supported public `yaml.safe_load`/`yaml.safe_dump` behavior instead
+  of requiring the optional `yaml._yaml` accelerator. This restores the signed
+  dependency contract that explicitly permits pure-Python PyYAML while keeping
+  every required native backend probe unchanged.
+- **Failed bootstrap reserves have a record-authorized terminal lifecycle**:
+  `reserve-discard-failed` accepts only an identity- and baseline-bound
+  `diagnostic_failure` that never reached downtime, persists a failure-discard
+  intent, and removes only the exact recorded root-owned tree. Successful,
+  post-downtime, substituted and foreign reserves remain protected.
 - **Executable integration proofs**: every forward transaction phase has a
   terminalization matrix, and parameterized real-filesystem legacy-layout models build
   the candidate before downtime, converts/activates/deploys, injects a health

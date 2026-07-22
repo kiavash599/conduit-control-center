@@ -110,13 +110,26 @@ shutdown, and `conduit-cc.service` uses `KillMode=control-group` so all
 service-created descendants are terminated before root mutates executable
 state.
 
-**The v0.3.18 first-transition reserve has an explicit acceptance lifecycle.**
+**The v0.3.19 first-transition reserve has explicit success and failure
+lifecycles.**
 The Owner bootstrap writes a durable reserve record before creating staging,
 retains that root-only staging tree after a successful update, and marks it
 `ready` only after the bound update transaction reaches `success`. Qualification
 ends with an explicit source-identity-bound `reserve-accept`; it writes
 `acceptance_intent` before deleting exactly the recorded directory and is safe
-to resume after interruption. No filename/prefix sweep authorizes deletion.
+to resume after interruption. A pre-downtime `diagnostic_failure` may instead
+use `reserve-discard-failed`: it additionally proves that `downtime_started`
+was never reached, binds the same source identity and legacy baseline, writes
+`failure_discard_intent`, and deletes only the exact recorded tree. Successful,
+rolled-back, post-downtime, foreign, and substituted reserves are refused. No
+filename/prefix sweep authorizes deletion.
+
+**Runtime smoke checks follow the signed dependency contract.** Native modules
+that are required by the platform closure are imported explicitly. PyYAML is
+the documented exception: its pure-Python implementation is supported, so the
+probe exercises public `safe_load`/`safe_dump` behavior without requiring the
+optional `yaml._yaml` accelerator. Candidate publication and collision reuse
+run the same committed probe set.
 
 ## Consequences
 

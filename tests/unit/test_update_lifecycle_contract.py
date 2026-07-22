@@ -62,6 +62,16 @@ def test_candidate_crash_recovery_is_wired_through_both_runtime_clis():
     assert '_rt reconcile-candidate "${_old_candidate}" "${_old_id}"' in recovery
 
 
+def test_failed_bootstrap_reserve_discard_is_wired_through_both_runtime_clis():
+    for rel in (
+        "deployment/bin/ccc-runtime",
+        "deployment/bootstrap/ccc-bootstrap-runtime",
+    ):
+        cli = (ROOT / rel).read_text()
+        assert 'argv[0] == "reserve-discard-failed"' in cli
+        assert "discard_failed_bootstrap_reserve" in cli
+
+
 def test_pre_downtime_failure_reconciles_candidate_before_terminal_record():
     on_exit = UPDATE[UPDATE.index("_on_exit() {"):UPDATE.index("_print_manual_recovery() {")]
     assert '"${_durable_phase:-}" == "candidate_intent"' in on_exit

@@ -15,6 +15,8 @@ Operations (exact allowlist):
     reserve-ready <attempt>      -- bind bootstrap reserve to update success
     reserve-accept <attempt> <commit> <tag>
                                  -- explicit record-authorized reserve cleanup
+    reserve-discard-failed <attempt> <commit> <tag>
+                                 -- discard one pre-downtime failed reserve
     reconcile-candidate <id> <attempt>
                                  -- recover an interrupted candidate publication
     gc                           -- manifest-authorized retention cleanup
@@ -93,6 +95,11 @@ def main(argv=None) -> int:
             return 0
         if len(argv) == 4 and argv[0] == "reserve-accept":
             doc = rs.accept_bootstrap_reserve(
+                PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
+            print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
+            return 0
+        if len(argv) == 4 and argv[0] == "reserve-discard-failed":
+            doc = rs.discard_failed_bootstrap_reserve(
                 PRIVATE_DIR, argv[1], source_commit=argv[2], source_tag=argv[3])
             print("BOOTSTRAP_RESERVE=" + json.dumps(doc, sort_keys=True))
             return 0
@@ -190,6 +197,7 @@ def main(argv=None) -> int:
            "rollback-activation|gc|diagnose|"
            "attempt-begin|attempt-mark|attempt-show|attempt-incomplete|attempt-backups|"
            "reserve-ready <attempt>|reserve-accept <attempt> <commit> <tag>|"
+           "reserve-discard-failed <attempt> <commit> <tag>|"
            "discard-staging <attempt>|reconcile-candidate <id> <attempt>|"
            "validate-legacy-shape|validate-legacy")
 

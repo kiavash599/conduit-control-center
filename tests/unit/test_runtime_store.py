@@ -766,13 +766,46 @@ def test_finalize_never_chmods_external_directory_symlink_target(tmp_path):
     assert not (app / ".venvs" / rid).exists()
 
 
-def test_committed_smoke_set_covers_native_platform_contract():
-    required = {
+def test_committed_smoke_set_covers_native_and_pure_python_contract():
+    required_native = {
         "pydantic_core", "cryptography.hazmat.bindings._rust", "bcrypt._bcrypt",
         "_cffi_backend", "httptools", "markupsafe._speedups", "psutil",
-        "yaml._yaml", "uvloop", "watchfiles", "websockets",
+        "uvloop", "watchfiles", "websockets",
     }
-    assert required <= set(RS.SMOKE_IMPORTS)
+    assert required_native <= set(RS.SMOKE_IMPORTS)
+    assert "yaml" in RS.SMOKE_IMPORTS
+    assert "yaml._yaml" not in RS.SMOKE_IMPORTS
+    yaml_probe = dict(RS.SMOKE_PROBES)["yaml"]
+    assert "safe_load" in yaml_probe and "safe_dump" in yaml_probe
+    assert "yaml._yaml" not in yaml_probe
+
+
+def test_committed_yaml_smoke_executes_public_semantics(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    RS._run_import_smoke("/candidate/bin/python3")
+
+    yaml_calls = [call for call in calls if call[0][-1] == dict(RS.SMOKE_PROBES)["yaml"]]
+    assert len(yaml_calls) == 1
+    assert yaml_calls[0][0][:3] == ["/candidate/bin/python3", "-I", "-c"]
+
+
+def test_committed_yaml_smoke_failure_is_fatal(monkeypatch):
+    yaml_code = dict(RS.SMOKE_PROBES)["yaml"]
+
+    def fake_run(argv, **_kwargs):
+        rc = 1 if argv[-1] == yaml_code else 0
+        stderr = "public PyYAML behavior unavailable" if rc else ""
+        return subprocess.CompletedProcess(argv, rc, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RS.RuntimeStoreError, match="runtime smoke failed for 'yaml'"):
+        RS._run_import_smoke("/candidate/bin/python3")
 
 
 def test_runtime_tree_rejects_hardlinked_file(tmp_path):
@@ -1210,6 +1243,123 @@ def test_bootstrap_reserve_acceptance_resumes_after_delete_crash(tmp_path):
         str(private), aid, source_commit="a" * 40,
         source_tag="v0.3.19", owner_uid=UID)
     assert resumed["state"] == "accepted"
+
+
+def _advance_pre_downtime_failure(private, aid, previous_version="0.3.18"):
+    for phase, facts in _success_steps(aid, previous_version)[:5]:
+        RS.mark_update_attempt(
+            str(private), aid, phase, facts=facts, owner_uid=UID)
+    return RS.mark_update_attempt(
+        str(private), aid, "diagnostic_failure", owner_uid=UID)
+
+
+def test_failed_bootstrap_reserve_discards_only_bound_pre_downtime_tree(tmp_path):
+    private = _private_state(tmp_path)
+    aid = "123456789abc"
+    work = _bootstrap_reserve(private, aid)
+    RS.begin_update_attempt(
+        str(private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    _advance_pre_downtime_failure(private, aid)
+
+    discarded = RS.discard_failed_bootstrap_reserve(
+        str(private), aid, source_commit="a" * 40,
+        source_tag="v0.3.19", owner_uid=UID)
+    assert discarded["state"] == "failure_discarded"
+    assert discarded["history"][-2:] == [
+        "failure_discard_intent", "failure_discarded"]
+    assert not work.exists()
+    # The immutable failure transaction remains as durable evidence.
+    assert (
+        RS.read_update_attempt(str(private), aid, UID)["phase"]
+        == "diagnostic_failure"
+    )
+    # Exact-identity retry is idempotent after completion.
+    assert RS.discard_failed_bootstrap_reserve(
+        str(private), aid, source_commit="a" * 40,
+        source_tag="v0.3.19", owner_uid=UID) == discarded
+
+
+def test_failed_bootstrap_reserve_discard_resumes_after_delete_crash(tmp_path):
+    private = _private_state(tmp_path)
+    aid = "123456789abc"
+    work = _bootstrap_reserve(private, aid)
+    RS.begin_update_attempt(
+        str(private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    _advance_pre_downtime_failure(private, aid)
+    doc = RS.read_bootstrap_reserve(str(private), aid, UID)
+    doc["state"] = "failure_discard_intent"
+    doc["history"].append("failure_discard_intent")
+    RS._write_json_atomic(
+        RS._bootstrap_reserve_path(str(private), aid), doc, 0o600)
+    work.rmdir()
+
+    resumed = RS.discard_failed_bootstrap_reserve(
+        str(private), aid, source_commit="a" * 40,
+        source_tag="v0.3.19", owner_uid=UID)
+    assert resumed["state"] == "failure_discarded"
+
+
+def test_failed_bootstrap_reserve_discard_refuses_unsafe_states(tmp_path):
+    # Successful transaction: its reserve is rollback evidence until accepted.
+    success_root = tmp_path / "success"
+    success_root.mkdir()
+    success_private = _private_state(success_root)
+    aid = "123456789abc"
+    success_work = _bootstrap_reserve(success_private, aid)
+    RS.begin_update_attempt(
+        str(success_private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    _advance_success(success_private, aid)
+    with pytest.raises(RS.RuntimeStoreError, match="pre-downtime diagnostic failure"):
+        RS.discard_failed_bootstrap_reserve(
+            str(success_private), aid, source_commit="a" * 40,
+            source_tag="v0.3.19", owner_uid=UID)
+    assert success_work.is_dir()
+
+    # A diagnostic failure after downtime may still be needed for recovery.
+    failed_root = tmp_path / "post-downtime"
+    failed_root.mkdir()
+    failed_private = _private_state(failed_root)
+    failed_work = _bootstrap_reserve(failed_private, aid)
+    RS.begin_update_attempt(
+        str(failed_private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    for phase, facts in _success_steps(aid)[:8]:
+        RS.mark_update_attempt(
+            str(failed_private), aid, phase, facts=facts, owner_uid=UID)
+    RS.mark_update_attempt(
+        str(failed_private), aid, "diagnostic_failure", owner_uid=UID)
+    with pytest.raises(RS.RuntimeStoreError, match="pre-downtime diagnostic failure"):
+        RS.discard_failed_bootstrap_reserve(
+            str(failed_private), aid, source_commit="a" * 40,
+            source_tag="v0.3.19", owner_uid=UID)
+    assert failed_work.is_dir()
+
+
+def test_failed_bootstrap_reserve_discard_refuses_identity_and_substitution(tmp_path):
+    private = _private_state(tmp_path)
+    aid = "123456789abc"
+    work = _bootstrap_reserve(private, aid)
+    RS.begin_update_attempt(
+        str(private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    _advance_pre_downtime_failure(private, aid)
+    with pytest.raises(RS.RuntimeStoreError, match="identity mismatch"):
+        RS.discard_failed_bootstrap_reserve(
+            str(private), aid, source_commit="b" * 40,
+            source_tag="v0.3.19", owner_uid=UID)
+
+    work.rmdir()
+    victim = tmp_path / "failure-victim"
+    victim.mkdir()
+    work.symlink_to(victim, target_is_directory=True)
+    with pytest.raises(RS.RuntimeStoreError, match="changed during discard"):
+        RS.discard_failed_bootstrap_reserve(
+            str(private), aid, source_commit="a" * 40,
+            source_tag="v0.3.19", owner_uid=UID)
+    assert victim.is_dir()
 
 
 def test_bootstrap_reserve_refuses_identity_mismatch_and_substitution(tmp_path):

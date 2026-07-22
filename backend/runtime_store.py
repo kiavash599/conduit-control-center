@@ -39,29 +39,37 @@ import re
 import stat
 import tempfile
 
-# Committed runtime import-smoke set (finding 6): the application entry stack
-# plus every ABI-sensitive/optional server backend shipped by the two platform
-# locks.  Importing ``uvicorn`` alone does *not* load uvloop/httptools/websockets,
+# Committed runtime smoke probes (finding 6): the application entry stack plus
+# every ABI-sensitive/optional server backend shipped by the two platform
+# locks. Importing ``uvicorn`` alone does *not* load uvloop/httptools/websockets,
 # and importing a pure wrapper does not prove its native extension can load, so
-# those modules are named explicitly.  Both candidate finalization and collision
-# revalidation consume this exact tuple through ``_run_import_smoke``.
-SMOKE_IMPORTS = (
-    "fastapi",
-    "uvicorn",
-    "pydantic",
-    "pydantic_core",
-    "aiosqlite",
-    "cryptography.hazmat.bindings._rust",
-    "bcrypt._bcrypt",
-    "_cffi_backend",
-    "httptools",
-    "markupsafe._speedups",
-    "psutil",
-    "yaml._yaml",
-    "uvloop",
-    "watchfiles",
-    "websockets",
+# those modules are named explicitly. PyYAML is deliberately different: the
+# release contract accepts its pure-Python implementation, so its probe checks
+# public safe-load/safe-dump behavior and never requires the optional
+# ``yaml._yaml`` accelerator. Candidate finalization and collision revalidation
+# consume this exact tuple through ``_run_import_smoke``.
+SMOKE_PROBES = (
+    ("fastapi", "import fastapi"),
+    ("uvicorn", "import uvicorn"),
+    ("pydantic", "import pydantic"),
+    ("pydantic_core", "import pydantic_core"),
+    ("aiosqlite", "import aiosqlite"),
+    ("cryptography.hazmat.bindings._rust",
+     "import cryptography.hazmat.bindings._rust"),
+    ("bcrypt._bcrypt", "import bcrypt._bcrypt"),
+    ("_cffi_backend", "import _cffi_backend"),
+    ("httptools", "import httptools"),
+    ("markupsafe._speedups", "import markupsafe._speedups"),
+    ("psutil", "import psutil"),
+    ("yaml",
+     "import yaml; data = yaml.safe_load('enabled: true\\n'); "
+     "assert data == {'enabled': True}; "
+     "assert yaml.safe_load(yaml.safe_dump(data)) == data"),
+    ("uvloop", "import uvloop"),
+    ("watchfiles", "import watchfiles"),
+    ("websockets", "import websockets"),
 )
+SMOKE_IMPORTS = tuple(label for label, _code in SMOKE_PROBES)
 
 STORE_NAME = ".venvs"
 SELECTOR_NAME = "venv"
@@ -516,6 +524,8 @@ def read_bootstrap_reserve(private_dir: str, attempt_id: str,
         ["staged", "ready"],
         ["staged", "ready", "acceptance_intent"],
         ["staged", "ready", "acceptance_intent", "accepted"],
+        ["staged", "failure_discard_intent"],
+        ["staged", "failure_discard_intent", "failure_discarded"],
     )
     history = doc.get("history")
     if history not in allowed_histories or doc.get("state") != history[-1]:
@@ -591,6 +601,66 @@ def accept_bootstrap_reserve(private_dir: str, attempt_id: str, *,
         _fsync_dir(private_dir)
     doc["state"] = "accepted"
     doc["history"].append("accepted")
+    _write_json_atomic(_bootstrap_reserve_path(private_dir, attempt_id), doc, 0o600)
+    return doc
+
+
+def discard_failed_bootstrap_reserve(private_dir: str, attempt_id: str, *,
+                                      source_commit: str, source_tag: str,
+                                      owner_uid: int = OWNER_UID) -> dict:
+    """Delete one exact reserve after a bound PRE-DOWNTIME failed bootstrap.
+
+    The failed update transaction is immutable evidence and remains in place.
+    Only a ``diagnostic_failure`` transaction that never crossed
+    ``downtime_started`` authorizes this operation. Intent is durable before
+    deletion, making a crash after deletion safely resumable. Successful,
+    rolled-back, post-downtime, foreign, or substituted reserves are refused.
+    """
+    import shutil as _sh
+
+    doc = read_bootstrap_reserve(private_dir, attempt_id, owner_uid)
+    if doc["source_commit"] != source_commit or doc["source_tag"] != source_tag:
+        raise RuntimeStoreError("failed bootstrap discard identity mismatch")
+
+    tx = read_update_attempt(private_dir, attempt_id, owner_uid)
+    if tx["phase"] != "diagnostic_failure" \
+            or "downtime_started" in tx["history"] \
+            or tx["facts"].get("downtime_started") is not None:
+        raise RuntimeStoreError(
+            "bootstrap reserve discard requires a pre-downtime diagnostic failure")
+    if tx["source_commit"] != doc["source_commit"] \
+            or tx["source_tag"] != doc["source_tag"] \
+            or tx["target_version"] != doc["target_version"] \
+            or tx["facts"].get("previous_version") \
+            != doc["expected_installed_version"]:
+        raise RuntimeStoreError("failed bootstrap reserve/update identity mismatch")
+
+    if doc["state"] == "failure_discarded":
+        return doc
+    if doc["state"] == "staged":
+        doc["state"] = "failure_discard_intent"
+        doc["history"].append("failure_discard_intent")
+        _write_json_atomic(_bootstrap_reserve_path(private_dir, attempt_id), doc, 0o600)
+    elif doc["state"] != "failure_discard_intent":
+        raise RuntimeStoreError("bootstrap reserve is not a failed staged reserve")
+
+    work = doc["work"]
+    try:
+        st = os.lstat(work)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) \
+                or st.st_uid != owner_uid or stat.S_IMODE(st.st_mode) != 0o700:
+            raise RuntimeStoreError(
+                "failed bootstrap reserve work tree changed during discard")
+        current = os.lstat(work)
+        if (current.st_dev, current.st_ino) != (st.st_dev, st.st_ino):
+            raise RuntimeStoreError("failed bootstrap reserve work tree was replaced")
+        _sh.rmtree(work)
+        _fsync_dir(private_dir)
+    doc["state"] = "failure_discarded"
+    doc["history"].append("failure_discarded")
     _write_json_atomic(_bootstrap_reserve_path(private_dir, attempt_id), doc, 0o600)
     return doc
 
@@ -981,13 +1051,14 @@ def _run_import_smoke(python_path: str,
                       smoke_imports: "tuple[str, ...] | None" = None) -> None:
     """Load the exact committed runtime probes with the candidate interpreter."""
     import subprocess
-    modules = SMOKE_IMPORTS if smoke_imports is None else smoke_imports
-    for mod in modules:
-        r = subprocess.run([python_path, "-I", "-c", f"import {mod}"],
+    probes = (SMOKE_PROBES if smoke_imports is None
+              else tuple((mod, f"import {mod}") for mod in smoke_imports))
+    for label, code in probes:
+        r = subprocess.run([python_path, "-I", "-c", code],
                            capture_output=True, text=True, env=_clean_env())
         if r.returncode != 0:
             raise RuntimeStoreError(
-                f"import smoke failed for {mod!r}: {r.stderr.strip()[:200]}")
+                f"runtime smoke failed for {label!r}: {r.stderr.strip()[:200]}")
 
 
 def _dist_record(python_path: str) -> str:
