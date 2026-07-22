@@ -676,7 +676,7 @@ def test_stage_candidate_rejects_symlinked_store(tmp_path):
 
 
 def test_open_store_rejects_service_writable_app_dir(tmp_path):
-    """First-transition exploit: exact v0.3.18 app dir is service-writable.
+    """First-transition exploit: a legacy app dir is service-writable.
     open_store must refuse a group/other-writable app root."""
     app = tmp_path / "app"
     app.mkdir()
@@ -832,13 +832,13 @@ def _private_state(tmp_path):
     return private
 
 
-def _success_steps(aid):
+def _success_steps(aid, previous_version="0.3.18"):
     return (
     ("ownership_intent", {}),
     ("ownership_complete", {}),
     ("backup_intent", {
         "backup_dir": f"/var/backups/conduit-cc/20260721-120000-{aid}"}),
-    ("backup_complete", {"previous_version": "0.3.18"}),
+    ("backup_complete", {"previous_version": previous_version}),
     ("candidate_intent", {"candidate_id": "e" * 64}),
     ("candidate_ready", {}),
     ("downtime_intent", {}),
@@ -858,9 +858,9 @@ def _success_steps(aid):
     )
 
 
-def _advance_success(private, aid):
+def _advance_success(private, aid, previous_version="0.3.18"):
     doc = None
-    for phase, facts in _success_steps(aid):
+    for phase, facts in _success_steps(aid, previous_version):
         doc = RS.mark_update_attempt(
             str(private), aid, phase, facts=facts, owner_uid=UID)
     return doc
@@ -1010,29 +1010,30 @@ def test_every_normal_interruption_is_terminalizable(tmp_path):
         assert RS.incomplete_update_attempts(str(private), UID) == []
 
 
-def test_v0318_layout_model_rehearsal_rolls_back_code_and_runtime(tmp_path):
-    """Executable v0.3.18-layout model over the production primitives.
+@pytest.mark.parametrize("baseline", ("0.3.14", "0.3.15", "0.3.18"))
+def test_supported_legacy_layout_model_rolls_back_code_and_runtime(tmp_path, baseline):
+    """Executable supported-legacy-layout model over production primitives.
 
     This is deliberately not called the exact-device rehearsal: it models the
-    relevant v0.3.18 layout (real-directory legacy venv plus old root-owned
-    code/helper bytes) while exercising the real runtime/transaction module.
-    The exact tagged v0.3.18 installation and systemd behavior remain a device
-    gate. It builds the candidate before downtime, converts, activates and
+    relevant legacy layout (real-directory legacy venv plus old code/helper
+    bytes) while exercising the real runtime/transaction module. Exact-device
+    behavior remains a separate gate. It builds the candidate before downtime,
+    converts, activates and
     deploys, then injects the post-activation health failure and completes the
     durable rollback sequence.
     """
     app, private = _mk_app(tmp_path)
     version_file = app / "backend" / "_version.py"
     version_file.parent.mkdir()
-    version_file.write_text('APP_VERSION = "0.3.18"\n')
+    version_file.write_text(f'APP_VERSION = "{baseline}"\n')
     helper = app / "bin" / "ccc-update-apply"
     helper.parent.mkdir()
-    helper.write_bytes(b"v0.3.18-helper\n")
+    helper.write_bytes(f"v{baseline}-helper\n".encode())
     _tighten(app)
     old_cfg = (app / "venv" / "pyvenv.cfg").read_bytes()
     old_helper = helper.read_bytes()
 
-    # Candidate exists and validates while the v0.3.18 real-dir runtime remains
+    # Candidate exists and validates while the legacy real-dir runtime remains
     # active: the expensive dependency phase precedes downtime.
     RS.open_store(str(app), UID, create=True)
     candidate = _second_runtime(app, rid="e" * 64)
@@ -1040,7 +1041,7 @@ def test_v0318_layout_model_rehearsal_rolls_back_code_and_runtime(tmp_path):
     RS.begin_update_attempt(
         str(private), aid, target_version="0.3.19",
         source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
-    for phase, facts in _success_steps(aid):
+    for phase, facts in _success_steps(aid, baseline):
         if phase == "candidate_intent":
             facts = {"candidate_id": candidate}
         if phase == "conversion_intent":
@@ -1070,7 +1071,7 @@ def test_v0318_layout_model_rehearsal_rolls_back_code_and_runtime(tmp_path):
     assert RS.rollback_activation(str(app), str(private), UID) == RS.LEGACY_ID
     RS.rollback_conversion(str(app), str(private), UID)
     RS.mark_update_attempt(str(private), aid, "runtime_restored", owner_uid=UID)
-    version_file.write_text('APP_VERSION = "0.3.18"\n')
+    version_file.write_text(f'APP_VERSION = "{baseline}"\n')
     helper.write_bytes(old_helper)
     RS.mark_update_attempt(str(private), aid, "files_restored", owner_uid=UID)
     RS.mark_update_attempt(
@@ -1081,7 +1082,7 @@ def test_v0318_layout_model_rehearsal_rolls_back_code_and_runtime(tmp_path):
     assert final["phase"] == "rolled_back"
     assert (app / "venv").is_dir() and not (app / "venv").is_symlink()
     assert (app / "venv" / "pyvenv.cfg").read_bytes() == old_cfg
-    assert version_file.read_text() == 'APP_VERSION = "0.3.18"\n'
+    assert version_file.read_text() == f'APP_VERSION = "{baseline}"\n'
     assert helper.read_bytes() == old_helper
     assert (app / ".venvs" / candidate).is_dir()  # immutable rollback reserve
 
@@ -1142,7 +1143,8 @@ def test_incomplete_attempt_discovery_rejects_foreign_objects(tmp_path):
 
 # --- bootstrap rollback-reserve acceptance --------------------------------- #
 
-def _bootstrap_reserve(private, aid, *, commit="a" * 40, tag="v0.3.19"):
+def _bootstrap_reserve(private, aid, *, commit="a" * 40, tag="v0.3.19",
+                       expected_installed_version="0.3.18"):
     records = private / RS.BOOTSTRAP_RESERVE_DIR
     records.mkdir(mode=0o700)
     os.chmod(records, 0o700)
@@ -1150,12 +1152,13 @@ def _bootstrap_reserve(private, aid, *, commit="a" * 40, tag="v0.3.19"):
     work.mkdir(mode=0o700)
     os.chmod(work, 0o700)
     doc = {
-        "schema": 1,
+        "schema": 2,
         "attempt_id": aid,
         "work": str(work.resolve()),
         "source_commit": commit,
         "source_tag": tag,
         "target_version": tag[1:],
+        "expected_installed_version": expected_installed_version,
         "state": "staged",
         "history": ["staged"],
     }
@@ -1232,3 +1235,23 @@ def test_bootstrap_reserve_refuses_identity_mismatch_and_substitution(tmp_path):
             str(private), aid, source_commit="a" * 40,
             source_tag="v0.3.19", owner_uid=UID)
     assert victim.is_dir()
+
+
+def test_bootstrap_reserve_refuses_previous_version_mismatch(tmp_path):
+    private = _private_state(tmp_path)
+    aid = "123456789abc"
+    _bootstrap_reserve(private, aid, expected_installed_version="0.3.14")
+    RS.begin_update_attempt(
+        str(private), aid, target_version="0.3.19",
+        source_commit="a" * 40, source_tag="v0.3.19", owner_uid=UID)
+    _advance_success(private, aid, previous_version="0.3.15")
+    with pytest.raises(RS.RuntimeStoreError, match="identity mismatch"):
+        RS.mark_bootstrap_reserve_ready(str(private), aid, UID)
+
+
+def test_bootstrap_reserve_rejects_unsupported_baseline(tmp_path):
+    private = _private_state(tmp_path)
+    aid = "123456789abc"
+    _bootstrap_reserve(private, aid, expected_installed_version="0.3.99")
+    with pytest.raises(RS.RuntimeStoreError, match="legacy baseline is invalid"):
+        RS.read_bootstrap_reserve(str(private), aid, UID)

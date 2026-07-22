@@ -1,4 +1,4 @@
-"""tests/unit/test_bootstrap_ceremony.py -- v0.3.18->v0.3.19 bootstrap.
+"""tests/unit/test_bootstrap_ceremony.py -- qualified legacy->v0.3.19 bootstrap.
 
 Text/behavioral contracts over the ceremony script, the staged runner and the
 engine ordering. The runner's implementation/target separation and the
@@ -20,7 +20,7 @@ BOOT = ROOT / "deployment" / "bootstrap" / "ccc-bootstrap.sh"
 RUNNER = ROOT / "deployment" / "bootstrap" / "ccc-bootstrap-runtime"
 
 
-def test_ceremony_never_delegates_to_installed_v0318_updater():
+def test_ceremony_never_delegates_to_installed_legacy_updater():
     s = BOOT.read_text(encoding="utf-8")
     # the STAGED engine is executed; the installed updater is never invoked
     assert 'bash "${SNAP}/update.sh"' in s
@@ -39,6 +39,31 @@ def test_ceremony_binds_owner_authorized_source_identity_outside_payload():
     assert '--authorized-source-tag "${SOURCE_TAG}"' in s
 
 
+def test_ceremony_binds_exact_supported_legacy_baseline_before_mutation():
+    s = BOOT.read_text(encoding="utf-8")
+    assert "--expected-installed-version" in s
+    for version in ("0.3.14", "0.3.15", "0.3.18"):
+        assert version in s
+    assert 'stat -c \'%h\' "${INSTALLED_VERSION_FILE}"' in s
+    checked = s.index("installed legacy baseline verified")
+    first_mutation = s.index("install -d -o root -g root -m 0700 /var/lib/ccc-update")
+    assert checked < first_mutation
+    assert '--expected-installed-version "${EXPECTED_INSTALLED_VERSION}"' in s
+    assert "BOOTSTRAP_EXPECTED_INSTALLED_VERSION=${EXPECTED_INSTALLED_VERSION}" in s
+
+    engine = (ROOT / "update.sh").read_text(encoding="utf-8")
+    assert "a staged bootstrap runtime requires --expected-installed-version" in engine
+    assert engine.count("_assert_expected_installed_version") == 3  # def + two calls
+    preflight = engine[engine.index("phase0_preflight() {"):
+                       engine.index("phase1_backup() {")]
+    assert preflight.index("CURRENT_VERSION=") < preflight.index(
+        "_assert_expected_installed_version"
+    )
+    assert preflight.rindex("_assert_expected_installed_version") < preflight.index(
+        "_rt attempt-begin"
+    )
+
+
 def test_ceremony_snapshot_rejects_nonregular_and_hardlinks():
     s = BOOT.read_text(encoding="utf-8")
     assert "! -type f ! -type d" in s          # symlink/special rejection
@@ -55,6 +80,8 @@ def test_ceremony_write_ahead_records_and_retains_rollback_reserve():
     assert record < create < handoff < ready
     assert "bootstrap-reserves" in s
     assert '"work": work' in s
+    assert '"schema": 2' in s
+    assert '"expected_installed_version": expected_installed_version' in s
     assert '"state": "staged"' in s
     assert '"history": ["staged"]' in s
     # The ceremony never deletes its reserve. Only the separate, explicit
@@ -117,7 +144,7 @@ def test_engine_backup_precedes_no_helper_mutation():
     assert order.index("phase1_backup") < order.index("phase3_deploy")
 
 
-def test_v0318_service_owned_app_root_is_transitioned_before_candidate_store():
+def test_legacy_service_owned_app_root_is_transitioned_before_candidate_store():
     s = (ROOT / "update.sh").read_text(encoding="utf-8")
     assert s.index("_tx_mark ownership_intent") < s.index("_secure_legacy_app_root", s.index("phase1_backup()"))
     assert s.index("_secure_legacy_app_root", s.index("phase1_backup()")) < s.index("stage-candidate")

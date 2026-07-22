@@ -68,6 +68,7 @@ SELECTOR_NAME = "venv"
 LEGACY_ID = "legacy-0"
 TRANSITION_RECORD = "runtime-transition.json"   # inside the PRIVATE state dir
 BOOTSTRAP_RESERVE_DIR = "bootstrap-reserves"
+SUPPORTED_BOOTSTRAP_BASELINES = frozenset({"0.3.14", "0.3.15", "0.3.18"})
 # Runtime IDs: either the explicit legacy id, or the FULL lowercase 64-hex
 # SHA-256 of the canonical candidate inputs (no truncation -- the complete
 # identity is preserved; `kind` lives in the manifest, never in the id).
@@ -495,9 +496,9 @@ def read_bootstrap_reserve(private_dir: str, attempt_id: str,
     doc = _read_json(path)
     required = {
         "schema", "attempt_id", "work", "source_commit", "source_tag",
-        "target_version", "state", "history",
+        "target_version", "expected_installed_version", "state", "history",
     }
-    if doc is None or set(doc) != required or doc.get("schema") != 1 \
+    if doc is None or set(doc) != required or doc.get("schema") != 2 \
             or doc.get("attempt_id") != attempt_id:
         raise RuntimeStoreError("malformed bootstrap reserve record")
     version = doc.get("target_version")
@@ -505,6 +506,8 @@ def read_bootstrap_reserve(private_dir: str, attempt_id: str,
             or doc.get("source_tag") != f"v{version}" \
             or not re.fullmatch(r"[0-9a-f]{40}", str(doc.get("source_commit"))):
         raise RuntimeStoreError("bootstrap reserve source identity is invalid")
+    if doc.get("expected_installed_version") not in SUPPORTED_BOOTSTRAP_BASELINES:
+        raise RuntimeStoreError("bootstrap reserve legacy baseline is invalid")
     expected_work = os.path.join(os.path.realpath(private_dir), f"bootstrap-{attempt_id}")
     if doc.get("work") != expected_work:
         raise RuntimeStoreError("bootstrap reserve work path is not the exact attempt path")
@@ -534,7 +537,9 @@ def mark_bootstrap_reserve_ready(private_dir: str, attempt_id: str,
         raise RuntimeStoreError("bootstrap reserve requires a successful update transaction")
     if tx["source_commit"] != doc["source_commit"] \
             or tx["source_tag"] != doc["source_tag"] \
-            or tx["target_version"] != doc["target_version"]:
+            or tx["target_version"] != doc["target_version"] \
+            or tx["facts"].get("previous_version") \
+            != doc["expected_installed_version"]:
         raise RuntimeStoreError("bootstrap reserve/update identity mismatch")
     work = doc["work"]
     st = os.lstat(work)

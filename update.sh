@@ -13,6 +13,8 @@
 #     sudo bash update.sh --source DIR \
 #       --authorized-source-commit <40-lowercase-hex> \
 #       --authorized-source-tag vX.Y.Z [--ccc-only] [--non-interactive]
+#   First-transition bootstrap callers must additionally supply:
+#       --expected-installed-version 0.3.14|0.3.15|0.3.18
 #
 #   sudo bash update.sh --help       Show this help
 #
@@ -252,10 +254,10 @@ _secure_legacy_venv() {
 }
 
 _secure_legacy_app_root() {
-    # Functional first-transition seam: v0.3.18 made APP_DIR itself owned by
-    # the service account. The immutable store cannot safely be created below
-    # such a parent. Tighten only the real root directory here, before the
-    # candidate build; the staged bootstrap runner imports no old APP_DIR code.
+    # Functional first-transition seam: the qualified legacy baselines made
+    # APP_DIR itself owned by the service account. The immutable store cannot
+    # safely be created below such a parent. Tighten only the real root here
+    # before the candidate build; the staged bootstrap runner imports no old APP_DIR code.
     # Full recursive root normalization and verification happens at deploy (or
     # rollback restore), while the still-running old service keeps read access.
     if [[ -L "${APP_DIR}" || ! -d "${APP_DIR}" ]]; then
@@ -363,11 +365,11 @@ SOURCE_DIR=""
 # ceremony passes its root-owned staging runner via --runtime-tool (argv only,
 # never environment). Validated by _validate_runtime_tool before first use;
 # a missing tool FAILS CLOSED directing to the bootstrap ceremony -- the first
-# v0.3.18->v0.3.19 transition must never silently fall back.
+# legacy->v0.3.19 transition must never silently fall back.
 CCC_RUNTIME_TOOL="/opt/conduit-cc/bin/ccc-runtime"
 # Canonical .env tool. The first-transition bootstrap supplies a root-owned,
-# byte-verified staging copy because v0.3.18 does not yet have the installed
-# helper. Ordinary updates use only the installed helper.
+# byte-verified staging copy because the qualified legacy baselines do not have
+# the installed helper. Ordinary updates use only the installed helper.
 CCC_ENV_TOOL="/opt/conduit-cc/bin/ccc-env"
 # Bootstrap-only trust-ceremony inputs (refinement 2): when BOTH are supplied,
 # anchor provisioning happens INSIDE the stopped-service transaction, before
@@ -379,6 +381,10 @@ CCC_TRUST_FINGERPRINT=""
 # first-transition bootstrap receives them as explicit Owner ceremony inputs.
 CCC_AUTHORIZED_SOURCE_COMMIT=""
 CCC_AUTHORIZED_SOURCE_TAG=""
+# Required for a staged first-transition bootstrap. It is supplied by the
+# Owner ceremony, allowlisted, and compared with independently parsed installed
+# bytes before any update transaction can begin.
+CCC_EXPECTED_INSTALLED_VERSION=""
 CCC_UPDATE_ATTEMPT_ID=""
 _TRANSACTION_BEGUN=false
 _ROLLBACK_ACTIVE=false
@@ -405,6 +411,8 @@ Owner bootstrap (deployment/bootstrap/ccc-bootstrap.sh) first."
         *)
             [[ "${CCC_RUNTIME_TOOL}" =~ ^/var/lib/ccc-update/bootstrap-([0-9a-f]{12,32})/source/deployment/bootstrap/ccc-bootstrap-runtime$ ]] \
                 || die "invalid --runtime-tool path: ${CCC_RUNTIME_TOOL}"
+            [[ -n "${CCC_EXPECTED_INSTALLED_VERSION}" ]] \
+                || die "a staged bootstrap runtime requires --expected-installed-version"
             _bootstrap_root="${CCC_RUNTIME_TOOL%%/source/deployment/bootstrap/ccc-bootstrap-runtime}"
             [[ ! -L "${_bootstrap_root}" && -d "${_bootstrap_root}" \
                && "$(readlink -f "${CCC_RUNTIME_TOOL}" 2>/dev/null || true)" == "${CCC_RUNTIME_TOOL}" \
@@ -554,6 +562,18 @@ _read_version() {
         }
         END { if (count != 1) exit 2; print value }
     ' "${_f}" 2>/dev/null || printf "unknown"
+}
+
+_assert_expected_installed_version() {
+    # Ordinary post-bootstrap updates do not use this first-transition input.
+    [[ -n "${CCC_EXPECTED_INSTALLED_VERSION}" ]] || return 0
+    case "${CCC_EXPECTED_INSTALLED_VERSION}" in
+        0.3.14|0.3.15|0.3.18) ;;
+        *) die "expected installed version is not an explicitly qualified legacy baseline";;
+    esac
+    [[ "${CURRENT_VERSION}" == "${CCC_EXPECTED_INSTALLED_VERSION}" ]] \
+        || die "installed version ${CURRENT_VERSION} does not match the Owner-authorized baseline ${CCC_EXPECTED_INSTALLED_VERSION}"
+    info "Owner-authorized legacy baseline confirmed: ${CURRENT_VERSION}"
 }
 
 # Purge stale Python bytecode under APP_DIR so the runtime never loads a cached
@@ -736,6 +756,14 @@ _parse_args() {
                 [[ "${_i}" -le "$#" ]] || die "--authorized-source-tag requires a value."
                 CCC_AUTHORIZED_SOURCE_TAG="${!_i}"
                 ;;
+            --expected-installed-version)
+                _i=$(( _i + 1 ))
+                [[ "${_i}" -le "$#" ]] || die "--expected-installed-version requires a value."
+                CCC_EXPECTED_INSTALLED_VERSION="${!_i}"
+                ;;
+            --expected-installed-version=*)
+                CCC_EXPECTED_INSTALLED_VERSION="${_arg#--expected-installed-version=}"
+                ;;
             --update-attempt-id)
                 _i=$(( _i + 1 ))
                 [[ "${_i}" -le "$#" ]] || die "--update-attempt-id requires a value."
@@ -751,7 +779,7 @@ _parse_args() {
                 ;;
             *)
                 printf "Unknown option: %s\n" "${_arg}" >&2
-                printf "Usage: sudo bash %s --source DIR --authorized-source-commit 40HEX --authorized-source-tag vX.Y.Z [--ccc-only] [--non-interactive]\n" "$0" >&2
+                printf "Usage: sudo bash %s --source DIR --authorized-source-commit 40HEX --authorized-source-tag vX.Y.Z [--expected-installed-version VERSION] [--ccc-only] [--non-interactive]\n" "$0" >&2
                 exit 1
                 ;;
         esac
@@ -917,6 +945,7 @@ phase0_preflight() {
     step "0c - Reading installed version"
     CURRENT_VERSION="$(_read_version "${APP_DIR}")"
     info "Installed version: ${CURRENT_VERSION}"
+    _assert_expected_installed_version
 
     step "0d - Verifying source directory: ${SOURCE_DIR}"
     [[ -f "${SOURCE_DIR}/backend/_version.py" ]] || die \
@@ -951,6 +980,8 @@ phase0_preflight() {
 
     step "0f1 - Reconciling any interrupted update transaction"
     _recover_incomplete_transaction
+    # Re-bind after recovery: a rollback may have restored installed bytes.
+    _assert_expected_installed_version
 
     step "0g - Confirming update"
     printf "\n"

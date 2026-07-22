@@ -82,7 +82,7 @@ def test_candidate_bytes_and_validated_manifest_are_durable_before_publication()
     assert finalize.index('state="validated"') < finalize.index("os.rename(staging, final)")
 
 
-def test_v0318_service_owned_app_root_is_tightened_before_store_creation():
+def test_legacy_service_owned_app_root_is_tightened_before_store_creation():
     assert "_secure_legacy_app_root()" in UPDATE
     execution = UPDATE[UPDATE.index("phase0_preflight\n"):]
     assert execution.index("phase1_backup") < execution.index("phase2_preinstall")
@@ -338,6 +338,7 @@ def _recovery_function() -> str:
 
 @pytest.mark.skipif(sys.platform != "linux" or shutil.which("bash") is None,
                     reason="executes the production Bash recovery function")
+@pytest.mark.parametrize("previous_version", ("0.3.14", "0.3.15", "0.3.18"))
 @pytest.mark.parametrize(
     "phase,service_active,expected",
     [
@@ -362,10 +363,10 @@ def _recovery_function() -> str:
     ],
 )
 def test_production_recovery_function_classifies_interrupted_state(
-        tmp_path, phase, service_active, expected):
+        tmp_path, phase, service_active, expected, previous_version):
     facts = {
         "backup_dir": "/var/backups/conduit-cc/20260721-120000-123456789abc",
-        "previous_version": "0.3.18",
+        "previous_version": previous_version,
     }
     if phase in {"candidate_intent", "candidate_ready", "downtime_intent",
                  "downtime_started"}:
@@ -406,7 +407,7 @@ _tx_mark() {{ printf 'mark:%s\n' "$1" >>"$CALL_LOG"; }}
 systemctl() {{ "$SERVICE_ACTIVE"; }}
 phase5_rollback() {{ printf 'rollback\n' >>"$CALL_LOG"; return 0; }}
 _validate_recorded_backup_dir() {{ return 0; }}
-_read_version() {{ printf '0.3.18\n'; }}
+_read_version() {{ printf '{previous_version}\n'; }}
 {_recovery_function()}
 _recover_incomplete_transaction
 """

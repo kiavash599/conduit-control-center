@@ -67,7 +67,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gc / diagnose).
 - **One-time legacy conversion** (write-ahead recorded in `/var/lib/ccc-update`, idempotent,
   resumable at every interruption boundary, locally reversible) runs inside the stopped-service
-  window only for the v0.3.18 transition. Fresh installs never create a legacy runtime: they
+  window only for explicitly qualified legacy transitions. Fresh installs never create a legacy runtime: they
   publish their first validated candidate directly with `activate-initial`.
 - **One shared lifecycle filter contract** (`CCC_LIFECYCLE_EXCLUDES`: anchored `/venv`, `/.venvs`,
   `/trust`, `/bin`) consumed by every backup/deploy/rollback rsync, the manual-recovery text and
@@ -100,7 +100,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `CF_RECORD_NAME` allowlist); install/reinstall/password-hash writes, updater preflight reads,
   and restore/checkpoint reads all flow through `backend/env_file.py`. Reads bind lstat/open
   inode identity and require a single regular 0600 canonical-owner file; live/dangling symlinks,
-  hardlinks, duplicate assignments and secret-key reads fail closed. The v0.3.18 bootstrap
+  hardlinks, duplicate assignments and secret-key reads fail closed. The legacy bootstrap
   stages a byte-verified root-owned CLI/module closure from the verified source snapshot.
 - **Installed-location bootstrap (A5)**: privileged helpers derive their app root from their own
   validated real location (`<root>/bin/<helper>`), proven by a `python -I` fake-root regression
@@ -115,11 +115,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/runbooks/v0.3.19-invariant-gate.md`.
 
 ### Combined Epic 1+2 correction pass (bootstrap, transactional runtime, hardened proofs)
-- **v0.3.18 -> v0.3.19 bootstrap ceremony** (`deployment/bootstrap/ccc-bootstrap.sh` +
+- **Qualified legacy -> v0.3.19 bootstrap ceremony** (`deployment/bootstrap/ccc-bootstrap.sh` +
   stdlib-only `ccc-bootstrap-runtime`): root-owned full-candidate snapshot with per-file SHA-256
   and exact-set verification (TOCTOU closed), a runner that imports its implementation ONLY from
   the verified snapshot while its mutation target is fixed to `/opt/conduit-cc`, and execution of
-  the STAGED engine — the installed v0.3.18 updater is never used for the first transition.
+  the STAGED engine — the installed legacy updater is never used for the first transition.
+- **Observed-baseline binding**: first transition is allowlisted to installed `0.3.14`, `0.3.15`,
+  or `0.3.18`. The Owner supplies `--expected-installed-version`; bootstrap checks it before its
+  first mutation, the staged engine independently checks it before transaction creation and after
+  reconciliation, and the schema-2 rollback reserve binds it to the transaction's immutable
+  `previous_version` fact. The integration model runs forward/failure/rollback for all three;
+  RPi2 `0.3.14` and RPi4 `0.3.15` remain separate exact-device gates.
 - **Integrated candidate-runtime lifecycle**: `backend/runtime_store.py` gains full 64-hex
   deterministic IDs, `validate_target` (pre-flip validation with post-flip selector restore),
   `stage_candidate`/`finalize_candidate`/`build_candidate` (fresh venv built in attempt-owned
@@ -156,7 +162,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   previous-selector, and already-restored real-directory disk states so every rollback checkpoint
   is replay-safe. Backup creation has an attempt-bound write-ahead intent and fresh-only path;
   partial-backup cleanup and post-success retention delete only transaction-record-authorized,
-  revalidated directories. The v0.3.18 service-owned app root is tightened before `.venvs`
+  revalidated directories. The legacy service-owned app root is tightened before `.venvs`
   creation under its own intent/completion checkpoints.
 - **Crash-safe candidate publication**: the attempt-bound validated manifest is durably written
   before the final-directory rename, after non-following durability flush of every candidate file
@@ -170,7 +176,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Host-independent candidate modes**: install and update pin `umask 022`, so identical signed
   inputs cannot pass or fail the recursive trust-closure gate merely because the invoking Owner or
   sudo policy supplied a different ambient umask.
-- **Legacy-runtime trust closure before execution**: the v0.3.18 real-directory venv now passes a
+- **Legacy-runtime trust closure before execution**: the legacy real-directory venv now passes a
   non-mutating hardlink/type/symlink shape gate while the service runs. The diagnostic legacy
   `pip freeze` was removed entirely: it was never a rollback input and executing the service-owned
   interpreter as root created needless risk. Mutation now occurs only after the service is stopped
@@ -191,16 +197,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can emit a mode-0600 install-identity record, so install identity is passed
   from the already-verified signed manifest without Git or payload self-claims.
 - **Bootstrap reserve acceptance is explicit and record-authorized**: the
-  v0.3.18 ceremony records staging before creation, binds it to the successful
+  legacy ceremony records staging before creation, binds it to the successful
   update transaction, preserves it through qualification, and deletes exactly
   that directory only after identity-bound `reserve-accept` writes a durable
   acceptance intent. Crash-resume and substitution negatives are regression-
   tested.
 - **Executable integration proofs**: every forward transaction phase has a
-  terminalization matrix, and a real-filesystem v0.3.18-layout model builds
+  terminalization matrix, and parameterized real-filesystem legacy-layout models build
   the candidate before downtime, converts/activates/deploys, injects a health
   failure, then restores the real legacy venv and exact old code/helper bytes.
-  This model does not replace the exact tagged-v0.3.18 device rehearsal.
+  These models do not replace the separate observed-baseline RPi2/RPi4 device rehearsals.
 
 ### Remaining release gates (not implementation claims)
 - Authoritative full Linux invariant-suite PASS; clean-device RPi2 and RPi4

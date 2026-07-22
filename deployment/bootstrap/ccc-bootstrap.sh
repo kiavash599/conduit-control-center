@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# ccc-bootstrap.sh -- Owner ceremony: the ONLY supported v0.3.18 -> v0.3.19
-# transition. Run as root on the device:
+# ccc-bootstrap.sh -- Owner ceremony for the explicitly qualified legacy
+# baselines (v0.3.14, v0.3.15, or v0.3.18) -> v0.3.19. Run as root on the
+# device:
 #
 #   sudo bash ccc-bootstrap.sh \
 #       --candidate <owner-transferred source tree> \
 #       --hashes <out-of-band per-file sha256 manifest> \
 #       --trust-anchor <out-of-band allowed_signers file> \
 #       --fingerprint SHA256:<independently-supplied-ed25519-fingerprint> \
+#       --expected-installed-version 0.3.14 \
 #       --source-commit <40-lowercase-hex> --source-tag v0.3.19
 #
 # Contract (accepted alignment):
@@ -28,31 +30,61 @@
 #   5. The staging (engine + runner) remains as the ROLLBACK RESERVE until the
 #      final acceptance marker; GC never removes it before then.
 #
-# The installed v0.3.18 updater is NEVER used for this transition.
+# The installed legacy updater is NEVER used for this transition.
 set -euo pipefail
 
 die() { echo "ccc-bootstrap: ERROR: $*" >&2; exit 1; }
 info() { echo "ccc-bootstrap: $*"; }
 
 CANDIDATE="" HASHES="" ANCHOR="" FPRINT="" SOURCE_COMMIT="" SOURCE_TAG=""
+EXPECTED_INSTALLED_VERSION=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --candidate)    CANDIDATE="${2:?}"; shift 2;;
         --hashes)       HASHES="${2:?}"; shift 2;;
         --trust-anchor) ANCHOR="${2:?}"; shift 2;;
         --fingerprint)  FPRINT="${2:?}"; shift 2;;
+        --expected-installed-version) EXPECTED_INSTALLED_VERSION="${2:?}"; shift 2;;
         --source-commit) SOURCE_COMMIT="${2:?}"; shift 2;;
         --source-tag)    SOURCE_TAG="${2:?}"; shift 2;;
         *) die "unknown argument: $1";;
     esac
 done
 [[ -n "${CANDIDATE}" && -n "${HASHES}" && -n "${ANCHOR}" && -n "${FPRINT}" \
-   && -n "${SOURCE_COMMIT}" && -n "${SOURCE_TAG}" ]] \
-    || die "usage: --candidate <dir> --hashes <file> --trust-anchor <file> --fingerprint SHA256:... --source-commit <40hex> --source-tag vX.Y.Z"
+   && -n "${EXPECTED_INSTALLED_VERSION}" && -n "${SOURCE_COMMIT}" \
+   && -n "${SOURCE_TAG}" ]] \
+    || die "usage: --candidate <dir> --hashes <file> --trust-anchor <file> --fingerprint SHA256:... --expected-installed-version 0.3.14|0.3.15|0.3.18 --source-commit <40hex> --source-tag vX.Y.Z"
 [[ "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "source commit must be exactly 40 lowercase hex"
+case "${EXPECTED_INSTALLED_VERSION}" in
+    0.3.14|0.3.15|0.3.18) ;;
+    *) die "expected installed version is not an explicitly qualified legacy baseline";;
+esac
 [[ "$(id -u)" == "0" ]] || die "must run as root"
 [[ -d "${CANDIDATE}" && ! -L "${CANDIDATE}" ]] || die "candidate must be a real directory"
 [[ -f "${HASHES}" && ! -L "${HASHES}" ]] || die "hash manifest must be a regular file"
+
+# Bind the Owner-declared legacy baseline before creating any update state.
+# The staged engine repeats this check from independently parsed installed
+# bytes before it can begin the transaction. The version file is data only;
+# no installed Python or updater code is executed.
+[[ -d /opt/conduit-cc && ! -L /opt/conduit-cc ]] \
+    || die "installed application root must be a real directory"
+[[ -d /opt/conduit-cc/backend && ! -L /opt/conduit-cc/backend ]] \
+    || die "installed backend directory must be a real directory"
+INSTALLED_VERSION_FILE="/opt/conduit-cc/backend/_version.py"
+[[ -f "${INSTALLED_VERSION_FILE}" && ! -L "${INSTALLED_VERSION_FILE}" ]] \
+    || die "installed version file must be a regular non-symlink file"
+[[ "$(stat -c '%h' "${INSTALLED_VERSION_FILE}" 2>/dev/null || true)" == "1" ]] \
+    || die "installed version file must have exactly one hard link"
+INSTALLED_VERSION="$(awk '
+    /^APP_VERSION = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
+        value=$0; sub(/^APP_VERSION = "/, "", value); sub(/"$/, "", value); count++
+    }
+    END { if (count != 1) exit 2; print value }
+' "${INSTALLED_VERSION_FILE}" 2>/dev/null || true)"
+[[ "${INSTALLED_VERSION}" == "${EXPECTED_INSTALLED_VERSION}" ]] \
+    || die "installed version does not match --expected-installed-version"
+info "installed legacy baseline verified: ${INSTALLED_VERSION}"
 
 # ---- 1. write-ahead record + root-owned staging ----------------------------- #
 install -d -o root -g root -m 0700 /var/lib/ccc-update
@@ -66,7 +98,7 @@ RESERVE_RECORDS="/var/lib/ccc-update/bootstrap-reserves"
 # runtime module does not exist yet, while this already-running Owner ceremony
 # is the trust root that is about to create the staging tree.
 /usr/bin/python3 -I - "${RESERVE_RECORDS}" "${BOOT_ID}" "${STAGING}" \
-    "${SOURCE_COMMIT}" "${SOURCE_TAG}" <<'PY'
+    "${SOURCE_COMMIT}" "${SOURCE_TAG}" "${EXPECTED_INSTALLED_VERSION}" <<'PY'
 import json
 import os
 import re
@@ -74,7 +106,7 @@ import stat
 import sys
 import tempfile
 
-records, attempt, work, commit, tag = sys.argv[1:]
+records, attempt, work, commit, tag, expected_installed_version = sys.argv[1:]
 st = os.lstat(records)
 if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
     raise SystemExit("reserve record root is not a real directory")
@@ -85,6 +117,8 @@ if not re.fullmatch(r"[0-9a-f]{12,32}", attempt):
 if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(
         r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
     raise SystemExit("invalid bootstrap source identity")
+if expected_installed_version not in {"0.3.14", "0.3.15", "0.3.18"}:
+    raise SystemExit("invalid bootstrap legacy baseline")
 expected = os.path.join(os.path.realpath(os.path.dirname(records)), f"bootstrap-{attempt}")
 if work != expected or os.path.lexists(work):
     raise SystemExit("bootstrap reserve path is not fresh and exact")
@@ -92,12 +126,13 @@ path = os.path.join(records, f"{attempt}.json")
 if os.path.lexists(path):
     raise SystemExit("bootstrap reserve record collision")
 doc = {
-    "schema": 1,
+    "schema": 2,
     "attempt_id": attempt,
     "work": work,
     "source_commit": commit,
     "source_tag": tag,
     "target_version": tag[1:],
+    "expected_installed_version": expected_installed_version,
     "state": "staged",
     "history": ["staged"],
 }
@@ -161,9 +196,10 @@ SNAP_VERSION="$(awk '
 # executable bits for the engine + runner (snapshot was normalized to 0600)
 chmod 0700 "${SNAP}/update.sh" "${SNAP}/deployment/bootstrap/ccc-bootstrap-runtime"
 
-# v0.3.18 has no installed ccc-env. Build a minimal root-owned installed-style
-# closure from the already hash-verified snapshot so the staged updater can
-# perform its pre-downtime canonical .env read without trusting the old tree.
+# The qualified legacy baselines have no installed ccc-env. Build a minimal
+# root-owned installed-style closure from the already hash-verified snapshot so
+# the staged updater can perform its pre-downtime canonical .env read without
+# trusting the old tree.
 ENV_ROOT="${STAGING}/env-tool"
 install -d -o root -g root -m 0700 "${ENV_ROOT}/bin" "${ENV_ROOT}/backend"
 install -o root -g root -m 0700 \
@@ -183,12 +219,13 @@ info "canonical env-tool staged from verified source bytes"
 
 # ---- 4. execute the STAGED engine ------------------------------------------- #
 RUNNER="${SNAP}/deployment/bootstrap/ccc-bootstrap-runtime"
-info "handing over to the staged engine (installed v0.3.18 updater is NOT used)"
+info "handing over to the staged engine (installed legacy updater is NOT used)"
 bash "${SNAP}/update.sh" --ccc-only --non-interactive \
     --source "${SNAP}" \
     --update-attempt-id "${BOOT_ID}" \
     --runtime-tool "${RUNNER}" \
     --env-tool "${ENV_RUNNER}" \
+    --expected-installed-version "${EXPECTED_INSTALLED_VERSION}" \
     --authorized-source-commit "${SOURCE_COMMIT}" \
     --authorized-source-tag "${SOURCE_TAG}" \
     --trust-anchor-file "${ANCHOR}" \
@@ -204,4 +241,5 @@ info "bootstrap complete; staging retained at ${STAGING} until the acceptance ma
 info "BOOTSTRAP_ATTEMPT_ID=${BOOT_ID}"
 info "BOOTSTRAP_SOURCE_COMMIT=${SOURCE_COMMIT}"
 info "BOOTSTRAP_SOURCE_TAG=${SOURCE_TAG}"
+info "BOOTSTRAP_EXPECTED_INSTALLED_VERSION=${EXPECTED_INSTALLED_VERSION}"
 info "next: complete device qualification, then run the exact reserve-accept command from the runbook"
