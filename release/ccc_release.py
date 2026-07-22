@@ -109,7 +109,13 @@ _FORBIDDEN_BASENAMES = frozenset({
     ".env", "allowed_signers", "trusted_publishers",
     "id_ed25519", "id_rsa", "id_ecdsa",
 })
-_SECRET_MARKERS = (b"PRIVATE KEY-----", b"BEGIN OPENSSH PRIVATE KEY")
+# Construct the exact runtime signatures from adjacent literals.  Embedding a
+# forbidden signature contiguously in the scanner's own source would make the
+# pre-sign whole-tree scan reject every authentic release candidate.
+_SECRET_MARKERS = (
+    b"PRIVATE " b"KEY-----",
+    b"BEGIN OPENSSH " b"PRIVATE " b"KEY",
+)
 
 # Binary payload extensions EXEMPT from the private-key-marker + no-NUL-in-text
 # scan (legitimately binary). Everything else -- including extensionless

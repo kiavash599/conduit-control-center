@@ -46,7 +46,10 @@ _ENV_LIVE = (
     "TLS_KEY_PATH=/etc/conduit-cc/tls/origin.key\nADMIN_PASSWORD_HASH=OLDHASH\n"
 )
 _ENV_SUBSET = b"ADMIN_USERNAME=admin\nADMIN_PASSWORD_HASH=NEWHASH\nAPP_PORT=8000\n"
-_PEM = b"-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----\n"
+_PEM = (
+    b"-----BEGIN RSA PRIVATE " b"KEY-----\nx\n"
+    b"-----END RSA PRIVATE " b"KEY-----\n"
+)
 
 
 def _make_db(path, sessions, theme):

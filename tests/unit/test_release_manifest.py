@@ -281,11 +281,30 @@ def test_source_tag_must_equal_v_version():
 def test_secret_scan_binary_exemption_and_text_scanning():
     with pytest.raises(R.ReleaseError):
         R._secret_scan({".env": b"S=1\n"})
+    private_key = b"-----BEGIN RSA PRIVATE " b"KEY-----\nactual-secret-material\n"
+    with pytest.raises(R.ReleaseError, match="private-key marker"):
+        R._secret_scan({"leaked-secret.txt": private_key})
     with pytest.raises(R.ReleaseError):
         R._secret_scan({"wheelhouse-armhf/SHA256SUMS": b"abc\x00"})
     with pytest.raises(R.ReleaseError):
         R._secret_scan({"scripts/ccc-unlock": b"#!/bin/sh\x00"})
     R._secret_scan({"wheelhouse-armhf/x.whl": b"PK\x00\x00"})
+
+
+@_git
+def test_exact_tracked_source_tree_passes_pre_sign_secret_scan():
+    """The scanner must accept its real production input, not only fixtures."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    listed = subprocess.run(
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    names = [name for name in listed.decode("utf-8", "strict").split("\0") if name]
+    assert "release/ccc_release.py" in names
+    assert "backend/backup/exclusion.py" in names
+    raw = {name: (root / pathlib.PurePosixPath(name)).read_bytes() for name in names}
+    R._secret_scan(R.canonicalize_tree(raw))
 
 
 # --- closed lock grammar (defect 2) ---------------------------------------- #

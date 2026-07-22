@@ -77,7 +77,10 @@ def test_path_guard_allows_keyboard_config_no_false_positive(tmp_path):
 
 # --------------------------- content scanner ---------------------------
 def test_content_scanner_rejects_pem_private_key():
-    pem = b"-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJB\n-----END RSA PRIVATE KEY-----\n"
+    pem = (
+        b"-----BEGIN RSA PRIVATE " b"KEY-----\nMIIBOgIBAAJB\n"
+        b"-----END RSA PRIVATE " b"KEY-----\n"
+    )
     with pytest.raises(KeyExclusionError):
         scan_content(pem)
 

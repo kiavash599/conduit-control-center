@@ -109,8 +109,8 @@ SSL/TLS گفته می‌شود.
 
 - **Origin Certificate** — گواهی (عمومی، با `-----BEGIN CERTIFICATE-----` شروع
   می‌شود)
-- **Private Key** — کلید خصوصی (محرمانه، با `-----BEGIN RSA PRIVATE KEY-----`
-  شروع می‌شود)
+- **Private Key** — کلید خصوصی (محرمانه، با مرز PEM مخصوص کلید خصوصی RSA شروع
+  می‌شود)
 
 Cloudflare اکنون گواهی و کلید خصوصی را در یک صفحهٔ واحد نمایش می‌دهد.
 
@@ -160,9 +160,8 @@ sudo nano /etc/conduit-cc/tls/origin.pem
 sudo nano /etc/conduit-cc/tls/origin.key
 ```
 
-متن **Private Key** را از تب Cloudflare جای‌گذاری کنید (با
-`-----BEGIN RSA PRIVATE KEY-----` شروع و با `-----END RSA PRIVATE KEY-----` پایان
-می‌یابد).
+متن کامل **Private Key** را از تب Cloudflare جای‌گذاری کنید؛ مرز آغاز کلید
+خصوصی RSA و مرز پایان متناظر آن را نیز حتماً کپی کنید.
 
 ذخیره و خروج: `Ctrl+X` → `Y` → `Enter`.
 

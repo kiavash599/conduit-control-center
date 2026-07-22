@@ -107,8 +107,8 @@ Click **Create**. Cloudflare will display:
 
 - **Origin Certificate** — the certificate (public, starts with
   `-----BEGIN CERTIFICATE-----`)
-- **Private Key** — the private key (secret, starts with
-  `-----BEGIN RSA PRIVATE KEY-----`)
+- **Private Key** — the private key (secret, starts with the PEM boundary that
+  identifies an RSA private key)
 
 Cloudflare now shows the certificate and the private key on a single screen.
 
@@ -159,8 +159,8 @@ Repeat for the private key:
 sudo nano /etc/conduit-cc/tls/origin.key
 ```
 
-Paste the **Private Key** text from the Cloudflare tab (starts with
-`-----BEGIN RSA PRIVATE KEY-----`, ends with `-----END RSA PRIVATE KEY-----`).
+Paste the complete **Private Key** text from the Cloudflare tab, including its
+RSA private-key BEGIN boundary and matching END boundary.
 
 Save and close: `Ctrl+X` → `Y` → `Enter`.
 

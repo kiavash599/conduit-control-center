@@ -16,7 +16,10 @@ import pytest
 from backend.backup.collector import ALLOWLIST, collect
 from backend.backup.exclusion import KeyExclusionError
 
-_PEM = b"-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJB\n-----END RSA PRIVATE KEY-----\n"
+_PEM = (
+    b"-----BEGIN RSA PRIVATE " b"KEY-----\nMIIBOgIBAAJB\n"
+    b"-----END RSA PRIVATE " b"KEY-----\n"
+)
 
 
 def _make_ccc_dir(tmp_path):

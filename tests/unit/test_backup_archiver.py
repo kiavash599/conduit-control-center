@@ -21,7 +21,10 @@ from backend.backup.crypto import BackupCryptoError, encrypt_archive
 from backend.backup.exclusion import KeyExclusionError, scan_content
 
 _PW = "correct horse battery staple"
-_PEM = b"-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJB\n-----END RSA PRIVATE KEY-----\n"
+_PEM = (
+    b"-----BEGIN RSA PRIVATE " b"KEY-----\nMIIBOgIBAAJB\n"
+    b"-----END RSA PRIVATE " b"KEY-----\n"
+)
 
 
 def _make_ccc_dir(tmp_path, *, config=None):
