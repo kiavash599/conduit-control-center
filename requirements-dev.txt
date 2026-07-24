@@ -21,7 +21,12 @@ httpx>=0.27.0,<1.0.0
 
 # Linting
 # SRS: NFR-M-01, CONTRIBUTING.md
-ruff>=0.4.0,<1.0.0
+# PINNED (not a range): `ruff check` has no repo config and uses ruff's default
+# rule set, which newer ruff releases expand — an unpinned range let CI pull a
+# newer ruff that flagged 544 pre-existing findings and turned the Lint job red
+# while the validated toolchain (this exact version) stayed green. Pin so CI
+# lints with the same ruff the release was qualified against; bump deliberately.
+ruff==0.15.17
 
 # Security audit — checks dependencies against known vulnerabilities
 # SRS: SEC-DEP-01, Issue #2 (CI pipeline)
