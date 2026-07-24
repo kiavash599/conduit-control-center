@@ -19,6 +19,8 @@ Operations (exact allowlist):
                                  -- discard one pre-downtime failed reserve
     reconcile-candidate <id> <attempt>
                                  -- recover an interrupted candidate publication
+    validate-store-shape         -- shape/ownership gate over the WHOLE store
+                                    (every candidate + its manifest), symlink-aware
     gc                           -- manifest-authorized retention cleanup
     diagnose                     -- read-only classification of transition state
 
@@ -171,6 +173,10 @@ def main(argv=None) -> int:
             rs.validate_legacy_runtime(APP_DIR)
             print("RUNTIME_LEGACY=OK")
             return 0
+        if argv == ["validate-store-shape"]:
+            rs.validate_store_shape(APP_DIR)
+            print("RUNTIME_STORE_SHAPE=OK")
+            return 0
         if argv == ["gc"]:
             removed = rs.gc(APP_DIR, PRIVATE_DIR)
             print(f"RUNTIME_GC=OK removed={','.join(removed) or 'none'}")
@@ -199,7 +205,7 @@ def main(argv=None) -> int:
            "reserve-ready <attempt>|reserve-accept <attempt> <commit> <tag>|"
            "reserve-discard-failed <attempt> <commit> <tag>|"
            "discard-staging <attempt>|reconcile-candidate <id> <attempt>|"
-           "validate-legacy-shape|validate-legacy")
+           "validate-legacy-shape|validate-legacy|validate-store-shape")
 
 
 if __name__ == "__main__":

@@ -23,9 +23,9 @@ ROLLBACK RESERVE until the final acceptance marker.
 
 Operations: identical surface to ccc-runtime (candidate-id, stage-candidate,
 finalize-candidate, validate-target, revalidate, validate-selector,
-convert-legacy, rollback-conversion, activate, rollback-activation, gc,
-diagnose, reserve-ready, reserve-accept, reserve-discard-failed, discard-staging,
-reconcile-candidate).
+validate-legacy-shape, validate-legacy, validate-store-shape, convert-legacy,
+rollback-conversion, activate, rollback-activation, gc, diagnose, reserve-ready,
+reserve-accept, reserve-discard-failed, discard-staging, reconcile-candidate).
 Transaction evidence also exposes ``attempt-backups`` for record-authorized
 post-success backup retention.
 """
@@ -160,6 +160,10 @@ def main(argv=None) -> int:
         if argv == ["validate-legacy"]:
             rs.validate_legacy_runtime(target)
             print("RUNTIME_LEGACY=OK")
+            return 0
+        if argv == ["validate-store-shape"]:
+            rs.validate_store_shape(target)
+            print("RUNTIME_STORE_SHAPE=OK")
             return 0
         if argv == ["convert-legacy"]:
             print(f"RUNTIME_CONVERT=OK id={rs.convert_legacy(target, PRIVATE_DIR)}")

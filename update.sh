@@ -179,14 +179,16 @@ _verify_bin_dir() {
 # Enforce the runtime-store boundary (post Epic-2): root-owned, no g/o write.
 _verify_store_ownership() {
     [[ -d "${APP_DIR}/.venvs" ]] || return 0
-    local _bad
-    _bad="$(find "${APP_DIR}/.venvs" \( -not -user root -o -perm /6022 \) \
-                 -print 2>/dev/null | head -20 || true)"
-    if [[ -n "${_bad}" ]]; then
-        echo "ERROR: runtime store invariant violated (non-root or writable/setuid):" >&2
-        echo "${_bad}" >&2
-        exit 1
-    fi
+    # The shared validator understands every candidate's narrowly allowed
+    # interpreter symlinks (bin/python, bin/python3, bin/python3.<N>) and
+    # validates every other entry -- including candidate manifests -- without
+    # following links. A raw `find -perm` scan over the whole store cannot
+    # make that distinction: those symlinks always report as mode 0777 under
+    # lstat regardless of umask, so it false-fails every candidate that has
+    # one (see _verify_venv_ownership's identical rationale for the selector
+    # and legacy-venv case).
+    _rt validate-store-shape >/dev/null \
+        || { echo "ERROR: runtime store failed the runtime-store shape gate" >&2; exit 1; }
 }
 
 _verify_venv_ownership() {
@@ -2267,21 +2269,31 @@ phase5_rollback() {
     step "5f - Re-applying nginx configuration"
     if command -v nginx &>/dev/null && [[ -n "${CF_RECORD_NAME:-}" ]] \
             && [[ -f "${APP_DIR}/deployment/conduit-cc.nginx" ]]; then
-        if sed "s|<CF_RECORD_NAME>|${CF_RECORD_NAME}|g" \
-                "${APP_DIR}/deployment/conduit-cc.nginx" \
-                > "${NGINX_AVAILABLE}" 2>/dev/null; then
-            info "nginx config re-applied"
-            if nginx -t 2>/dev/null; then
-                if systemctl is-active --quiet nginx 2>/dev/null; then
-                    if systemctl reload nginx 2>/dev/null; then
-                        info "nginx reloaded"
-                    fi
-                fi
-            else
-                warn "nginx -t failed after rollback - check config manually"
-            fi
+        # Mirror the forward deploy path (step 3d) exactly instead of the old
+        # hand-rolled partial substitution: that inline `sed` resolved only
+        # <CF_RECORD_NAME> and left <CF_HTTPS_PORT>/<CF_HTTPS_REDIRECT_SUFFIX>
+        # unresolved in the written file, and only warned (never restored) on
+        # a failed `nginx -t`. The shared helper renders every placeholder,
+        # backs up the previous site first, and restores that backup itself
+        # on failure, so this can never leave a half-rendered file on disk.
+        # ${CONF_DIR} was already restored from backup in step 5b above, so
+        # its https_port is the correct pre-attempt value, not the candidate's.
+        local _rb_https_port
+        _rb_https_port="$(json_get "d.get('web',{}).get('https_port',443)" \
+            < "${CONF_DIR}/config.json" 2>/dev/null || true)"
+        [[ "${_rb_https_port}" =~ ^[0-9]+$ ]] || _rb_https_port=443
+        # Rollback-context validators must never exit the process here (that
+        # would abort rollback before the service restart in 5g/5h); record a
+        # soft failure instead, same as every other check in this function.
+        if /opt/conduit-cc/bin/ccc-apply-https-port apply \
+                --port "${_rb_https_port}" --hostname "${CF_RECORD_NAME}" \
+                >/dev/null 2>&1; then
+            info "nginx config re-applied (HTTPS port ${_rb_https_port})"
         else
-            warn "nginx config not re-applied - check ${NGINX_AVAILABLE}"
+            error "nginx re-apply failed after rollback; the helper restores its" \
+                  "own last-known-good backup on failure, so the site on disk is" \
+                  "not broken, but verify with 'nginx -t' before relying on HTTPS"
+            _failed=true
         fi
     else
         warn "nginx rollback skipped (nginx absent, CF_RECORD_NAME empty," \

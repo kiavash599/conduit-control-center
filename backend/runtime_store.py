@@ -81,6 +81,7 @@ SUPPORTED_BOOTSTRAP_BASELINES = frozenset({"0.3.14", "0.3.15", "0.3.18"})
 # SHA-256 of the canonical candidate inputs (no truncation -- the complete
 # identity is preserved; `kind` lives in the manifest, never in the id).
 _ID_RE = re.compile(r"^(legacy-0|[0-9a-f]{64})$")
+_MANIFEST_NAME_RE = re.compile(r"^(legacy-0|[0-9a-f]{64})\.manifest\.json$")
 _ATTEMPT_RE = re.compile(r"^[0-9a-f]{12,32}$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 OWNER_UID = 0
@@ -958,6 +959,65 @@ def validate_runtime_tree(app_dir: str, runtime_id: str,
     Run BEFORE executing the runtime's interpreter, so a substituted or
     service-writable package below site-packages cannot execute first."""
     _validate_tree_path(os.path.join(app_dir, STORE_NAME, runtime_id), owner_uid)
+
+
+def validate_store_shape(app_dir: str, owner_uid: int = OWNER_UID) -> None:
+    """Validate the COMPLETE runtime store (every candidate directory and every
+    manifest directly inside it) without following any symlink and without
+    executing anything.
+
+    This exists because a raw shell ownership scan across the whole store
+    (e.g. ``find .venvs -not -user root -o -perm /6022``) cannot distinguish a
+    disallowed foreign symlink from one of the small number of standard venv
+    interpreter symlinks every real venv contains (``bin/python``,
+    ``bin/python3``, ``bin/python3.<N>``): those always report as
+    ``lrwxrwxrwx``/0777 under lstat regardless of umask, so a naive recursive
+    scan false-positives on every candidate. ``_allowed_runtime_symlink``
+    (used by ``_validate_tree_shape``/``_validate_tree_path``) already
+    resolves this correctly, but it is only meaningful relative to a SINGLE
+    candidate's own root -- an interpreter symlink lives exactly one level
+    below that root, at ``bin/python*``. This function therefore does not
+    walk the store as one flat tree; it validates the store root itself
+    (via ``open_store``), then re-applies the existing, already-relied-upon
+    per-candidate gate (``validate_runtime_tree``) to each candidate
+    directory found directly inside it, plus an explicit ownership/mode check
+    on each candidate's manifest file. Anything else directly inside the
+    store -- a symlink, or a name that is neither a valid runtime id nor a
+    manifest for one -- is a foreign object and fails closed.
+
+    This is a strict superset of the raw-find check it replaces: it also
+    catches hardlinked regular files and non-regular/non-directory objects
+    (via ``_validate_tree_shape``), which a bare ``-perm`` scan never checked.
+    """
+    store = open_store(app_dir, owner_uid, create=False)
+    for name in sorted(os.listdir(store)):
+        path = os.path.join(store, name)
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            raise RuntimeStoreError(
+                f"disallowed symlink directly in runtime store: {path!r}")
+        if _MANIFEST_NAME_RE.fullmatch(name):
+            if not stat.S_ISREG(st.st_mode):
+                raise RuntimeStoreError(
+                    f"runtime manifest is not a regular file: {path!r}")
+            if st.st_uid != owner_uid:
+                raise RuntimeStoreError(
+                    f"runtime manifest {path!r} owner uid {st.st_uid}, "
+                    f"expected {owner_uid}")
+            if st.st_mode & 0o022:
+                raise RuntimeStoreError(
+                    f"runtime manifest {path!r} is group/other writable")
+            if st.st_mode & 0o6000:
+                raise RuntimeStoreError(
+                    f"runtime manifest {path!r} is setuid/setgid")
+            continue
+        if _ID_RE.fullmatch(name):
+            if not stat.S_ISDIR(st.st_mode):
+                raise RuntimeStoreError(
+                    f"runtime store entry {path!r} is not a real directory")
+            validate_runtime_tree(app_dir, name, owner_uid)
+            continue
+        raise RuntimeStoreError(f"foreign object in runtime store: {path!r}")
 
 
 def validate_target(app_dir: str, runtime_id: str,

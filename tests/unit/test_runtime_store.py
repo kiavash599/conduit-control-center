@@ -838,6 +838,91 @@ def test_legacy_runtime_full_gate_accepts_real_tightened_venv(tmp_path):
     RS.validate_legacy_runtime(str(app), UID)
 
 
+# --- whole-store shape gate (rollback false-positive fix) -------------------- #
+#
+# update.sh's `_verify_store_ownership` used to run a raw
+# `find .venvs -not -user root -o -perm /6022`, which false-flags every
+# standard venv interpreter symlink (they always report as lrwxrwxrwx/0777
+# under lstat, regardless of umask). `validate_store_shape` replaces that scan
+# with the same symlink-aware primitive `validate_runtime_tree` already uses
+# per candidate, applied to every candidate directly inside the store, plus an
+# explicit ownership/mode check on each candidate's manifest file.
+
+def test_store_shape_accepts_real_multi_candidate_store(tmp_path):
+    app, priv = _converted(tmp_path)
+    _second_runtime(app)
+    # Sanity: confirm this fixture actually contains the exact false-positive
+    # class the fix targets, so acceptance below is a meaningful proof and not
+    # a vacuous pass on a tree with nothing to false-flag.
+    found_symlink = False
+    for root, dirs, files in os.walk(app / ".venvs"):
+        for name in dirs + files:
+            p = os.path.join(root, name)
+            if os.path.islink(p):
+                found_symlink = True
+                assert stat.S_IMODE(os.lstat(p).st_mode) == 0o777
+    assert found_symlink
+    RS.validate_store_shape(str(app), UID)  # must not raise
+
+
+def test_store_shape_rejects_hardlinked_file_in_a_candidate(tmp_path):
+    app, _priv = _converted(tmp_path)
+    rid = _second_runtime(app)
+    victim = tmp_path / "outside-hardlink"
+    victim.write_text("shared")
+    os.link(victim, app / ".venvs" / rid / "shared-hardlink")
+    with pytest.raises(RS.RuntimeStoreError, match="hardlinked file"):
+        RS.validate_store_shape(str(app), UID)
+    assert victim.read_text() == "shared"
+
+
+def test_store_shape_rejects_foreign_symlink_directly_in_store(tmp_path):
+    app, _priv = _converted(tmp_path)
+    (app / ".venvs" / "evil-link").symlink_to("/etc/passwd")
+    with pytest.raises(RS.RuntimeStoreError,
+                        match="disallowed symlink directly in runtime store"):
+        RS.validate_store_shape(str(app), UID)
+
+
+def test_store_shape_rejects_foreign_object_name(tmp_path):
+    app, _priv = _converted(tmp_path)
+    (app / ".venvs" / "not-a-valid-id").mkdir()
+    with pytest.raises(RS.RuntimeStoreError, match="foreign object in runtime store"):
+        RS.validate_store_shape(str(app), UID)
+
+
+def test_store_shape_rejects_group_writable_manifest(tmp_path):
+    app, _priv = _converted(tmp_path)
+    os.chmod(RS.manifest_path(str(app), RS.LEGACY_ID), 0o664)
+    with pytest.raises(RS.RuntimeStoreError, match="manifest.*writable"):
+        RS.validate_store_shape(str(app), UID)
+
+
+def test_store_shape_rejects_non_directory_masquerading_as_candidate_id(tmp_path):
+    app, _priv = _converted(tmp_path)
+    fake_id = "f" * 64
+    (app / ".venvs" / fake_id).write_text("not a venv")
+    with pytest.raises(RS.RuntimeStoreError, match="not a real directory"):
+        RS.validate_store_shape(str(app), UID)
+
+
+def test_store_shape_rejects_owner_mismatch(tmp_path):
+    app, _priv = _converted(tmp_path)
+    with pytest.raises(RS.RuntimeStoreError):
+        RS.validate_store_shape(str(app), owner_uid=999999)
+
+
+def test_store_shape_is_wired_through_both_runtime_clis():
+    root = pathlib.Path(__file__).resolve().parents[2]
+    for rel in (
+        "deployment/bin/ccc-runtime",
+        "deployment/bootstrap/ccc-bootstrap-runtime",
+    ):
+        cli = (root / rel).read_text()
+        assert 'argv == ["validate-store-shape"]' in cli
+        assert "validate_store_shape" in cli
+
+
 def test_clean_env_drops_interpreter_and_dynamic_loader_injection(monkeypatch):
     hostile = {
         "PYTHONPATH": "/attacker/python",

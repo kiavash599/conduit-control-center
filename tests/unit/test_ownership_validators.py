@@ -107,11 +107,25 @@ def test_clean_tree_passes(tmp_path):
     assert "VALIDATOR_PASSED" in r.stdout, r.stderr
 
 
-def test_store_validator_rejects_group_writable(tmp_path):
+def test_store_validator_delegates_and_is_not_bash_harness_testable(tmp_path):
+    # _verify_store_ownership now delegates to `_rt validate-store-shape`
+    # (backend/runtime_store.py::validate_store_shape) instead of a raw `find`
+    # -- fixing the same interpreter-symlink false-positive class that
+    # `_verify_venv_ownership` was already fixed for. Like that sibling, it is
+    # deliberately EXCLUDED from this minimal shell-only `_run_validator`
+    # harness: `_rt` is a python3 invocation of the installed CLI and is not
+    # defined here, so extracting just the function body and running it
+    # standalone would only prove "_rt: command not found" fails closed, not
+    # exercise real ownership/symlink semantics. The real behavior -- accepts
+    # a genuine multi-candidate store with real interpreter symlinks, rejects
+    # group-writable manifests/candidates, hardlinks, and foreign objects -- is
+    # covered against the real implementation, with real venvs, in
+    # tests/unit/test_runtime_store.py's test_store_shape_* suite.
     app = tmp_path / "app"
     (app / ".venvs" / "r1").mkdir(parents=True)
-    (app / ".venvs" / "r1").chmod(0o775)               # group-writable runtime
+    (app / ".venvs" / "r1").chmod(0o775)
     r = _run_validator(tmp_path, app, "_verify_store_ownership")
+    assert "_rt: command not found" in r.stderr
     assert "VALIDATOR_PASSED" not in r.stdout
 
 

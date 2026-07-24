@@ -124,6 +124,66 @@ def test_legacy_runtime_is_shape_gated_and_secured_before_root_executes_it():
     assert conversion.index("_secure_legacy_venv") < conversion.index("_rt convert-legacy")
 
 
+def test_store_ownership_verifier_delegates_to_shape_aware_validator():
+    # _verify_store_ownership used to run a raw `find .venvs -perm /6022`,
+    # which false-flags every standard venv interpreter symlink (mode 0777
+    # under lstat regardless of umask) -- the same false-positive class
+    # _verify_venv_ownership was already fixed for. It must now delegate to
+    # the shared, symlink-aware runtime-store CLI instead of re-implementing
+    # its own raw scan.
+    verifier = UPDATE[UPDATE.index("_verify_store_ownership() {"):
+                      UPDATE.index("_verify_venv_ownership() {")]
+    assert "_rt validate-store-shape" in verifier
+    assert 'find "${APP_DIR}/.venvs"' not in verifier
+    assert '[[ -d "${APP_DIR}/.venvs" ]] || return 0' in verifier
+
+
+def test_store_shape_validation_surface_exists_in_both_runtime_clis():
+    for rel in (
+        "deployment/bin/ccc-runtime",
+        "deployment/bootstrap/ccc-bootstrap-runtime",
+    ):
+        cli = (ROOT / rel).read_text()
+        assert "validate_store_shape" in cli
+
+
+def test_rollback_nginx_reapply_delegates_to_shared_helper_not_inline_sed():
+    # Step 5f used to run its own partial inline `sed` (only <CF_RECORD_NAME>,
+    # leaving <CF_HTTPS_PORT>/<CF_HTTPS_REDIRECT_SUFFIX> unresolved) and only
+    # warned -- never restored -- on a failed `nginx -t`. It must now mirror
+    # the forward deploy path (step 3d) by delegating to the same already-
+    # reviewed helper, which renders every placeholder and restores its own
+    # backup on failure.
+    step5f = UPDATE[UPDATE.index('step "5f - Re-applying nginx configuration"'):
+                    UPDATE.index('step "5g - Starting')]
+    assert "/opt/conduit-cc/bin/ccc-apply-https-port apply" in step5f
+    assert "--port" in step5f and "--hostname" in step5f
+    assert 'sed "s|<CF_RECORD_NAME>|' not in step5f
+    assert "NGINX_AVAILABLE" not in step5f
+    # Rollback-context contract (see _rollback_check's own comment): a
+    # validator/apply failure here must record _failed, never call `die`
+    # (which would abort rollback before the service restart in 5g/5h).
+    assert "die " not in step5f and not step5f.rstrip().endswith("die")
+    assert "_failed=true" in step5f
+
+
+def test_rollback_nginx_reapply_reads_port_from_restored_config():
+    # ${CONF_DIR} is restored from backup in step 5b, which runs before step
+    # 5f; the port read here must come from that already-restored file (the
+    # pre-attempt value), the same json_get pattern the forward path uses.
+    step5f = UPDATE[UPDATE.index('step "5f - Re-applying nginx configuration"'):
+                    UPDATE.index('step "5g - Starting')]
+    assert 'json_get "d.get(\'web\',{}).get(\'https_port\',443)"' in step5f
+    assert '< "${CONF_DIR}/config.json"' in step5f
+    step5b = UPDATE[UPDATE.index('step "5b - Restoring'):
+                    UPDATE.index('step "5c -')]
+    order = UPDATE[UPDATE.index('step "5b - Restoring'):
+                   UPDATE.index('step "5g - Starting')]
+    assert order.index('step "5b - Restoring') < order.index(
+        'step "5f - Re-applying nginx configuration"')
+    assert step5b  # 5b block is non-empty (restoration actually happens first)
+
+
 def test_legacy_validation_surface_exists_in_both_runtime_clis():
     for rel in (
         "deployment/bin/ccc-runtime",
