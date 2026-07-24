@@ -192,6 +192,10 @@ def _second_runtime(app, rid=R2_ID):
         for d in dirs:
             p = os.path.join(root, d)
             os.chmod(p, os.lstat(p).st_mode & ~0o022)
+        for f in files:
+            p = os.path.join(root, f)
+            if not os.path.islink(p):
+                os.chmod(p, os.lstat(p).st_mode & ~0o022)
     os.chmod(app / ".venvs" / rid, 0o755)
     RS.write_manifest(str(app), rid, kind="built", input_digest="digest-r2")
     return rid
