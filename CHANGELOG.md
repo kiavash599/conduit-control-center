@@ -11,15 +11,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.3.19] — 2026-07-21
+## [0.3.19] — 2026-07-24
 
 **Combined Epic 1+2 — privilege, ownership, immutable runtime, and transactional lifecycle.**
 
-> **IMPLEMENTATION IN PROGRESS — NOT YET QUALIFIED, TAGGED, SIGNED, OR RELEASED.** This entry
-> records the combined Epic 1+2 implementation unit. No `v0.3.19`
-> tag, signed asset, or GitHub Release exists, and neither Raspberry Pi device has run the
-> full install/update/rollback lifecycle for this architecture. The immutable `v0.3.18` tag and
-> all its evidence are unchanged; v0.3.18 remains unreleased.
+> **Qualified on both Raspberry Pi platforms.** RPi2 (armv7l, 0.3.14 baseline) and RPi4 (aarch64,
+> 0.3.15 baseline) each proved the complete first-transition lifecycle on real hardware — forward
+> install to v0.3.19 **and** a corrected post-downtime rollback to the exact prior version — in
+> addition to the full host invariant suite on Windows and Linux. The immutable `v0.3.17` and
+> `v0.3.18` tags and their evidence are unchanged.
+
+### Fixed — first-transition rollback path
+- **The `update.sh` rollback no longer stalls on the runtime-store ownership check.** The shell
+  `_verify_store_ownership` scanned `.venvs` with a raw `find … -perm /6022`, which false-flags the
+  standard venv interpreter symlinks (`bin/python*`, reported as mode 0777 under lstat regardless of
+  umask). It now delegates to a new symlink-aware `backend/runtime_store.py::validate_store_shape`
+  (exposed as `validate-store-shape` on both `ccc-runtime` and `ccc-bootstrap-runtime`), matching the
+  fix already applied to the sibling selector/legacy-venv validators — and, being the shared Python
+  gate, also enforces the hardlink/type/set-id boundary the raw `find` never checked. A post-downtime
+  rollback that previously stalled at `diagnostic_failure` now completes to `rolled_back`.
+- **The rollback's nginx re-apply now renders the full site config.** Rollback step 5f reimplemented
+  an inline `sed` that substituted only `<CF_RECORD_NAME>` (leaving `<CF_HTTPS_PORT>` and
+  `<CF_HTTPS_REDIRECT_SUFFIX>` unresolved) and only warned on a failed `nginx -t`, leaving a broken
+  on-disk site. It now calls the same `ccc-apply-https-port apply` helper the forward deploy path
+  uses, which renders every placeholder, backs up the prior site, runs `nginx -t` before reload, and
+  restores the backup on failure.
 
 ### Security — privileged trust boundary (F1, F2, F5, F6)
 - **Deployed code under `/opt/conduit-cc` is now root-owned and non-service-writable.** The broad

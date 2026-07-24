@@ -1,9 +1,9 @@
 # Conduit Control Center — Product Roadmap
 
 **Document:** CCC_Product_Roadmap_v1  
-**Revision:** 1.24<br>
-**Date:** 2026-07-14<br>
-**Status:** v0.3.16 release candidate (not tagged or published)<br>
+**Revision:** 1.25<br>
+**Date:** 2026-07-24<br>
+**Status:** v0.3.19 release candidate (not tagged or published)<br>
 **Author:** CCC Development Team
 
 ---
@@ -881,6 +881,7 @@ phase is active.
 | 1.22 | 2026-07-07 | CCC Development Team | **Reconciled to v0.3.14 (release references only).** Added shipped releases **v0.3.13** and **v0.3.14** to Release History; updated header revision/date/status. No feature scope changed; historical rev-≤1.21 rows intact; PDF not regenerated. |
 | 1.23 | 2026-07-08 | CCC Development Team | **Documentation reconciliation (roadmap Markdown).** Corrected stale forward-looking status without altering release history. Recorded **Artifact signing as delivered** (signed, reproducible release artifacts with fail-closed on-device verification, **ADR-0003**, shipped v0.3.13–v0.3.14) and removed it from *Next Phase / Candidate Drivers* and from the One-Click Update *deferred hardening* note. **Retired the Architecture Atlas** from repository planning — removed from the candidate drivers and the idle-state activity list; it has been relocated as a frozen, historical Owner reference outside the repository and is no longer a source of truth. Header revision/date bumped to 1.23 / 2026-07-08; status remains *Reconciled to v0.3.14*. No release history changed; historical rev-≤1.22 rows intact. By **Project-Owner decision** the exported roadmap PDF (`CCC_Product_Roadmap_v1.pdf`) is **retired and removed** from the repository; this Markdown document is the **sole authoritative roadmap** and no PDF will be regenerated or included in future State Synchronization. |
 | 1.24 | 2026-07-14 | CCC Development Team | **v0.3.16 release-candidate preparation.** Recorded the accepted ADR-0003 Amendment A1 V2 platform-artifact release model: one version, mandatory deterministic aarch64 + armv7l artifacts, one signed canonical manifest, independent privileged-helper platform enforcement, committed pre-tag dependency locks, and embedded armv7l wheelhouse provenance/runtime lock. Added the draft closure record at `docs/closure/v0.3.16-closure.md`. The Release History table is intentionally unchanged until tag/publication; header status explicitly remains a release candidate. Historical rev-≤1.23 rows intact; no future feature scope changed. |
+| 1.25 | 2026-07-24 | CCC Development Team | **v0.3.19 release-candidate preparation (combined Epic 1 + 2 + rollback-path correction).** Recorded the combined privilege-boundary + immutable-transactional-runtime unit and its field-corrected first-transition rollback: `_verify_store_ownership` now delegates to the symlink-aware `runtime_store.py::validate_store_shape` (Fix 1), and rollback step 5f re-applies nginx via the shared `ccc-apply-https-port` helper (Fix 2). Both fixes are proven on real hardware — RPi2 (armv7l, 0.3.14) and RPi4 (aarch64, 0.3.15) each passed a corrected post-downtime rollback (`rolled_back`) **and** a forward install to v0.3.19 — plus the full Windows + Linux invariant suites. Added the draft closure record `docs/closure/v0.3.19-closure.md`. Header status advanced to v0.3.19 release candidate; per convention the Release History table and `docs/PROJECT-STATUS.md` remain unchanged until tag/publication. Pre-existing roadmap drift for v0.3.15–v0.3.18 (never reconciled into Release History) is out of scope for this entry. Historical rev-≤1.24 rows intact; no feature scope changed. |
 
 ---
 
