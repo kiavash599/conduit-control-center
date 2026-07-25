@@ -1,19 +1,19 @@
 # Project Status — Conduit Control Center
 
 > **Authoritative operational status.** Tracks current state, open/closed work, and
-> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.26,
-> reconciled to v0.3.19) owns forward planning and feature catalogues; the
+> known issues. The **roadmap** (`docs/roadmap/CCC_Product_Roadmap_v1.md`, Rev 1.27,
+> reconciled to v0.3.20) owns forward planning and feature catalogues; the
 > **CHANGELOG** owns shipped history; **closure records** (`docs/closure/`) are
 > optional per-epic decision deep-dives. This file is the canonical closed-epic
 > index and links the three — it does not duplicate them.
 >
-> Last reconciled: 2026-07-25 · branch `main` · latest release `v0.3.19`.
+> Last reconciled: 2026-07-25 · branch `main` · latest release `v0.3.20`.
 
 ## 1. Current Release
 
 | Current Product Release | Current Documentation Release | Roadmap Revision | Status |
 |---|---|---|---|
-| **v0.3.19** (released 2026-07-25 — first-transition rollback-path correction; first **signed** public release, aarch64 + armv7l assets digest- and SSHSIG-verified; qualified on RPi2 + RPi4) · v0.3.14 (released 2026-07-07 — ADR-0003 Trusted Update Signing Phase-B audit + deploy-integrity fix `rsync --checksum`; Pi validated) · v0.3.13 (ADR-0003 signing groundwork) · v0.3.12 (frontend polish) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.26 | ✅ Released · One-Click Update **Maintenance Only**; ADR-0003 signing (Phase-B) landed (see §10 and `docs/closure/one-click-update-closure.md`) |
+| **v0.3.20** (released 2026-07-25 — opt-in traffic recording toggle + gradient-area history chart; one-click update v0.3.19→v0.3.20 validated on RPi2 (armv7l) + RPi4 (aarch64)) · v0.3.19 (released 2026-07-25 — first-transition rollback-path correction; first **signed** public release, aarch64 + armv7l assets digest- and SSHSIG-verified; qualified on RPi2 + RPi4) · v0.3.14 (released 2026-07-07 — ADR-0003 Trusted Update Signing Phase-B audit + deploy-integrity fix `rsync --checksum`; Pi validated) · v0.3.13 (ADR-0003 signing groundwork) · v0.3.12 (frontend polish) · v0.3.11 (One-Click Update production-proven) · v0.3.5 (Log Management / SD-Card Protection) · v0.3.2 (Features 1 + 2) | docs-v0.3 (2026-06-22, documentation milestone) | 1.27 | ✅ Released · One-Click Update **Maintenance Only**; ADR-0003 signing (Phase-B) landed (see §10 and `docs/closure/one-click-update-closure.md`) |
 
 Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered HTTPS port selection + one-click CCC update (Features 1 + 2, v0.3.2), Log Management / SD-Card Protection (v0.3.5, commit `a6b6bd4`), and the One-Click Update hardening/validation series culminating in **production-proven** on Raspberry Pi (v0.3.10 → v0.3.11) and the final frontend-polish validation (v0.3.11 → v0.3.12). The v0.3.13 → v0.3.14 line then delivered **ADR-0003 Trusted Update Signing** (Phase-B audit trail) and a **deploy-integrity fix** (`rsync --checksum`), Raspberry Pi-validated. One-Click Update / Trusted Update Engine is now **Completed / Production-Proven / Maintenance Only**: future work is limited to bug fixes, security hardening, and maintenance, and functional expansion requires a new ADR (ADR-0001 Accepted; closure `docs/closure/one-click-update-closure.md`). See §10.
 
@@ -118,6 +118,7 @@ Branch `main` · **v0.3.14 released** — the v0.3.2 → v0.3.12 line delivered 
 | v0.3.13 | 2026-07-04 | ADR-0003 signed-release groundwork (publisher signing, on-device fail-closed verification) |
 | v0.3.14 | 2026-07-07 | ADR-0003 Phase-B audit trail + deploy-integrity fix (`rsync --checksum`); Pi validated |
 | v0.3.19 | 2026-07-25 | First-transition rollback-path correction (Fix 1 symlink-aware store-shape validation; Fix 2 nginx port re-apply delegation). First **signed** public release (Logical Tree Digest v1, manifest format 3; aarch64 + armv7l assets digest- and SSHSIG-verified). Qualified on RPi2 (armv7l) + RPi4 (aarch64). **Note:** v0.3.15–v0.3.18 were tagged/RC-only and never published — superseded by v0.3.19; the v0.3.17 SRT-identity incident is remediated here (`docs/incidents/v0.3.17-unreleased.md`). |
+| v0.3.20 | 2026-07-25 | Opt-in traffic recording toggle (Settings switch + card CTA; app_settings-backed, no privileged config write) + gradient-area redesign of the Lifetime & History chart. No dependency changes (SRT reused the v0.3.19/v0.3.18 wheelhouse). **First end-to-end validation of the dashboard one-click update path** (v0.3.19 → v0.3.20) on RPi2 (armv7l) + RPi4 (aarch64). Known follow-up: the `static_url` mtime cache-bust token is pinned to `0` by deterministic release artifacts (every file ships `mtime=0`), so it never changes between releases → browsers serve stale cached JS/CSS until a hard refresh; v0.3.21 switches it to a content-hash token. |
 
 ## 9. Next Recommended Action
 

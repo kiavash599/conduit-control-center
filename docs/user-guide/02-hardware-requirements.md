@@ -36,10 +36,11 @@ Conduit and CCC can run on many types of Linux systems, but the Raspberry Pi is 
 
 **Validated configurations**
 
-- Raspberry Pi 4 (2 GB RAM)
-- Raspberry Pi 3 Model B (1 GB RAM)
+- Raspberry Pi 4 (2 GB RAM) — 64-bit (aarch64)
+- Raspberry Pi 3 Model B (1 GB RAM) — 64-bit (aarch64)
+- Raspberry Pi 2 Model B (1 GB RAM) — 32-bit (armv7l)
 
-CCC v0.3.1 has been successfully installed, configured, and operated on these configurations (see the validation record under `docs/health-checks/`).
+CCC v0.3.1 was successfully installed, configured, and operated on the Raspberry Pi 4 and Raspberry Pi 3 Model B (see the validation record under `docs/health-checks/`). The 32-bit **armv7l** path was additionally validated on a Raspberry Pi 2 Model B, which received the v0.3.20 signed release through the dashboard's one-click update. CCC publishes architecture-specific signed release artifacts for both 64-bit (**aarch64**) and 32-bit (**armv7l**) devices, so older 32-bit Pis are supported alongside the 64-bit models — note that a Raspberry Pi 2 must run a 32-bit operating system.
 
 **Recommended configuration**
 
