@@ -25,6 +25,7 @@ Production (managed by systemd)
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import mimetypes
 import time
@@ -93,24 +94,32 @@ _TEMPLATES_DIR = _PROJECT_ROOT / "frontend" / "templates"
 # ---------------------------------------------------------------------------
 # Static asset cache-busting
 # ---------------------------------------------------------------------------
-# static_url("css/base.css") -> "/static/css/base.css?v=<mtime>"
+# static_url("css/base.css") -> "/static/css/base.css?v=<content-hash>"
 #
-# The query token is the file's modification time, so the URL changes only when
-# the file changes. A new URL is a fresh cache key at the browser and at
-# Cloudflare (Standard caching keys the full query string), so frontend deploys
-# no longer require a manual CDN purge. Registered as a Jinja2 global and used in
-# templates via {{ static_url('js/app.js') }}.
+# The query token is a hash of the file's CONTENT, so the URL changes exactly
+# when the file's bytes change. A new URL is a fresh cache key at the browser and
+# at Cloudflare (Standard caching keys the full query string), so frontend
+# deploys no longer require a manual CDN purge. Registered as a Jinja2 global and
+# used in templates via {{ static_url('js/app.js') }}.
 #
-# Uncached on purpose: a stat() per asset (~10/page) is negligible on a Pi and
+# CONTENT, not mtime, on purpose: this helper was introduced as an mtime token in
+# 65f079e (2026-06-14) to stop Cloudflare/browser stale-asset reuse. Later,
+# release artifacts became deterministic — every file is stamped mtime=0
+# (release/ccc_release.py) and deployed with `rsync -a` — so an mtime token would
+# be a constant "0" across all releases and would never bust the cache after an
+# update. Hashing content is immune to that (and to the same-length-change class
+# DI-1 documented for rsync); it restores the original intent, determinism-proof.
+#
+# Uncached on purpose: a read()+hash per asset (~10/page) is small on a Pi and
 # guarantees the token reflects the on-disk file even if only static files
 # changed without a service restart. Falls back to APP_VERSION if the file is
 # missing (e.g. a mistyped path) so the page still renders.
 
 def static_url(path: str) -> str:
-    """Return a cache-busting URL for a file under /static."""
+    """Return a cache-busting URL for a file under /static (content-hash token)."""
     rel = path.lstrip("/")
     try:
-        token = str(int((_STATIC_DIR / rel).stat().st_mtime))
+        token = hashlib.sha256((_STATIC_DIR / rel).read_bytes()).hexdigest()[:16]
     except OSError:
         token = APP_VERSION
     return f"/static/{rel}?v={token}"

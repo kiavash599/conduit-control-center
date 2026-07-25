@@ -11,6 +11,30 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.21] — 2026-07-25
+
+**Fix: static-asset cache-busting defeated by deterministic builds.**
+
+> After a one-click update, browsers (and the Cloudflare edge) kept serving the *old* cached
+> JavaScript/CSS until a manual hard refresh, leaving a half-updated dashboard (new HTML wired to old
+> JS). Root cause: `static_url()` used each file's modification time as its `?v=` cache-bust token,
+> but deterministic release artifacts stamp every file `mtime=0`, so the token was a constant `0`
+> across all releases and never changed. Observed on both RPi2 (armv7l) and RPi4 (aarch64) updating
+> v0.3.19 → v0.3.20.
+
+### Fixed
+- **`static_url()` now derives its cache-bust token from the file's content** (a SHA-256 of the
+  bytes) instead of its mtime. The token changes exactly when a file's content changes and is immune
+  to the pinned `mtime=0` of deterministic artifacts (and to the same-length-change class documented
+  as DI-1 for `rsync`). This restores the original intent of the mtime helper (introduced `65f079e`,
+  2026-06-14, to stop Cloudflare/browser stale-asset reuse) — now determinism-proof. No build
+  pipeline, hashed filenames, nginx changes, or manual CDN purge are required; the helper stays
+  uncached so the token always reflects the on-disk file. Regression tests assert that identical
+  content at different mtimes yields the same token and that different content at the same mtime
+  yields different tokens.
+
+---
+
 ## [0.3.20] — 2026-07-25
 
 **Opt-in traffic recording toggle + gradient-area history chart.**
