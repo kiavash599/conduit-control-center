@@ -11,8 +11,9 @@
  *   GET /api/traffic/series?range=24h|7d|30d      chart data (range-aware refresh)
  *
  * Summary schema (backend/api/traffic.py, CI77)
- *   status, recording_since|null, last_ok_ts_utc|null,
+ *   status, enabled(bool), recording_since|null, last_ok_ts_utc|null,
  *   lifetime{bytes_up,bytes_down}|null, windows{last_24h,last_7d}
+ *   enabled=false -> recording is off (empty state shows a turn-on CTA button).
  * Series schema
  *   range, granularity("hour"|"day"), buckets:[{bucket_utc,bytes_up,bytes_down}]
  *   Dense + zero-filled. Invalid range -> 422. Auth required -> 401.
@@ -188,6 +189,27 @@
         showCardState(cardState);
     }
 
+    // Empty-state messaging depends on WHY there is no data:
+    //   enabled=false -> recording is off (show the turn-on CTA button)
+    //   enabled=true  -> recording on, first sample not yet persisted (waiting)
+    function updateEmptyState(enabled) {
+        var title = el('th-empty-title');
+        var hint  = el('th-empty-hint');
+        var btn   = el('th-enable-recording');
+        if (enabled) {
+            if (title) title.textContent = 'Waiting for first sample';
+            if (hint) hint.textContent =
+                'Recording is on. Lifetime & history appear within about a minute.';
+            if (btn) btn.hidden = true;
+        } else {
+            if (title) title.textContent = 'Traffic recording is off';
+            if (hint) hint.textContent =
+                'Turn it on to record lifetime & history — aggregate totals only, ' +
+                'no per-client data.';
+            if (btn) btn.hidden = false;
+        }
+    }
+
     function fetchSummaryPoll() {
         return fetch('/api/traffic/summary', {
             method: 'GET',
@@ -208,7 +230,8 @@
         .then(function (data) {
             if (!data) return;
             if (data.recording_since == null || data.lifetime == null) {
-                setNotRecording('empty');   // ship-dark / never recorded
+                updateEmptyState(!!data.enabled);   // off -> CTA; on -> waiting
+                setNotRecording('empty');
             } else {
                 renderPopulated(data);
             }
@@ -293,35 +316,82 @@
             'class': 'chart-axis', x1: x0, y1: y1, x2: x1, y2: y1,
         }));
 
-        // Grouped bars.
-        var groupW = plotW / n;
-        var barW = Math.max(1, groupW * 0.32);
-        var gap = groupW * 0.08;
-        var pairW = barW * 2 + gap;
-        var maxTicks = W < 400 ? 5 : 7;             // fewer x-labels on narrow widths
-        var step = Math.max(1, Math.ceil(n / maxTicks));
+        // Smooth gradient-filled area curves, one per series, sharing the Y
+        // scale. Received is drawn first (background); Sent is overlaid. Colour
+        // comes from CSS classes only (fill references a gradient by id — a
+        // presentation attribute, CSP-safe). The .sr-only table remains the
+        // accessible representation; the SVG is aria-hidden.
+        var xFor = function (i) {
+            return n > 1 ? x0 + (i / (n - 1)) * plotW : (x0 + x1) / 2;
+        };
+        var yFor = function (v) { return y1 - (Math.max(0, v) / top) * plotH; };
 
-        function bar(bx, val, cls, label, kind) {
-            if (val <= 0) return;
-            var h = (val / top) * plotH;
-            var rect = svgEl('rect', {
-                'class': cls, x: bx, y: y1 - h, width: barW, height: h,
-            });
-            var t = svgEl('title');
-            t.textContent = label + ' — ' + kind + ' ' + formatBytes(val);
-            rect.appendChild(t);
-            svg.appendChild(rect);
+        function smoothLine(pts) {
+            if (!pts.length) return '';
+            var d = 'M' + pts[0][0] + ',' + pts[0][1];
+            for (var i = 0; i < pts.length - 1; i++) {
+                var ax = pts[i][0], ay = pts[i][1];
+                var bx = pts[i + 1][0], by = pts[i + 1][1];
+                var mx = (ax + bx) / 2;
+                d += ' C' + mx + ',' + ay + ' ' + mx + ',' + by + ' ' + bx + ',' + by;
+            }
+            return d;
         }
 
+        function gradient(id, cls0, cls1) {
+            var lg = svgEl('linearGradient', {
+                id: id, x1: '0', y1: '0', x2: '0', y2: '1',
+            });
+            lg.appendChild(svgEl('stop', { offset: '0%', 'class': cls0 }));
+            lg.appendChild(svgEl('stop', { offset: '100%', 'class': cls1 }));
+            return lg;
+        }
+
+        var defs = svgEl('defs');
+        svg.appendChild(defs);
+
+        function series(key, gradId, gradCls0, gradCls1, lineCls) {
+            var pts = buckets.map(function (b, i) {
+                return [xFor(i), yFor(b[key] || 0)];
+            });
+            var line = smoothLine(pts);
+            if (!line) return;
+            var area = line
+                + ' L' + pts[pts.length - 1][0] + ',' + y1
+                + ' L' + pts[0][0] + ',' + y1 + ' Z';
+            defs.appendChild(gradient(gradId, gradCls0, gradCls1));
+            svg.appendChild(svgEl('path', {
+                'class': 'th-area', d: area, fill: 'url(#' + gradId + ')',
+            }));
+            svg.appendChild(svgEl('path', { 'class': lineCls, d: line }));
+        }
+
+        series('bytes_down', 'thGradDown', 'th-grad-down-0', 'th-grad-down-1',
+               'th-line th-line--down');
+        series('bytes_up', 'thGradUp', 'th-grad-up-0', 'th-grad-up-1',
+               'th-line th-line--up');
+
+        // Peak marker: a subtle vertical line at the highest-total bucket
+        // (echoes the "your result" marker from the reference design).
+        var peakIdx = 0, peakTot = -1;
         buckets.forEach(function (b, i) {
-            var center = x0 + groupW * (i + 0.5);
-            var left = center - pairW / 2;
-            var lbl = bucketLabel(b.bucket_utc, granularity);
-            bar(left, b.bytes_up || 0, 'chart-bar--up', lbl, 'sent');
-            bar(left + barW + gap, b.bytes_down || 0, 'chart-bar--down', lbl, 'received');
+            var t = (b.bytes_up || 0) + (b.bytes_down || 0);
+            if (t > peakTot) { peakTot = t; peakIdx = i; }
+        });
+        if (peakTot > 0) {
+            var px = xFor(peakIdx);
+            svg.appendChild(svgEl('line', {
+                'class': 'th-peak-marker', x1: px, y1: y0, x2: px, y2: y1,
+            }));
+        }
+
+        // X-axis labels (fewer on narrow widths).
+        var maxTicks = W < 400 ? 5 : 7;
+        var step = Math.max(1, Math.ceil(n / maxTicks));
+        buckets.forEach(function (b, i) {
             if (i % step === 0 || i === n - 1) {
                 var xt = svgEl('text', {
-                    'class': 'chart-label', x: center, y: H - 6, 'text-anchor': 'middle',
+                    'class': 'chart-label', x: xFor(i), y: H - 6, 'text-anchor': 'middle',
                 });
                 xt.textContent = shortLabel(b.bucket_utc, granularity);
                 svg.appendChild(xt);
@@ -439,6 +509,23 @@
             var b = el('th-range-' + x);
             if (b) b.addEventListener('click', function () { setRange(x); });
         });
+
+        // "Turn on traffic recording" CTA (shown only in the off state). A
+        // user-initiated action, so it uses apiFetch (CSRF + error toast) unlike
+        // the toast-silent polls. On success, re-poll to flip the card state.
+        var enableBtn = el('th-enable-recording');
+        if (enableBtn) {
+            enableBtn.addEventListener('click', function () {
+                enableBtn.disabled = true;
+                apiFetch('/api/traffic/recording', {
+                    method: 'POST',
+                    body: JSON.stringify({ enabled: true }),
+                })
+                .then(function () { return fetchSummaryPoll(); })
+                .catch(function () { /* apiFetch already toasts the error */ })
+                .then(function () { enableBtn.disabled = false; });
+            });
+        }
 
         // Summary poll (TC-1): 60 s, drives card state. Registered for logout.
         window.CCC.pollers.push(startPolling(fetchSummaryPoll, 60000));

@@ -111,6 +111,7 @@ tests/unit/test_static_url.py
 tests/unit/test_sudoers_contract.py
 tests/unit/test_theme_css.py
 tests/unit/test_theme_toggle_markup.py
+tests/unit/test_traffic_prefs.py
 tests/unit/test_traffic_repository.py
 tests/unit/test_traffic_schema.py
 tests/unit/test_transfer_manifest.py

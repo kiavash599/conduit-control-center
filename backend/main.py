@@ -46,6 +46,7 @@ from backend._version import APP_VERSION
 from backend.dependencies import AuthRedirect
 from backend.pages import router as pages_router
 from backend.traffic.collector import TrafficCollector
+from backend.traffic.prefs import effective_collector_enabled
 from backend.api import (
     advisor_router,
     auth_router,
@@ -126,13 +127,18 @@ def static_url(path: str) -> str:
 _COLLECTOR_SHUTDOWN_TIMEOUT_S: float = 8.0
 
 
-def _maybe_start_traffic_collector(app: FastAPI) -> None:
-    """Start the traffic collector as a background task, if enabled."""
+def _maybe_start_traffic_collector(app: FastAPI, enabled: bool) -> None:
+    """Start the traffic collector as a background task, if *enabled*.
+
+    *enabled* is the already-resolved effective setting (app_settings override
+    or config default) -- resolved by the async caller so this helper stays
+    sync and unit-testable without a database.
+    """
     cfg = get_app_config()
     app.state.traffic_collector = None
     app.state.traffic_collector_task = None
-    if not cfg.traffic_collector_enabled:
-        logger.info("Traffic collector disabled by config (ship-dark default)")
+    if not enabled:
+        logger.info("Traffic collector disabled (effective setting off)")
         return
     collector = TrafficCollector(
         interval_seconds=cfg.traffic_collect_interval_seconds,
@@ -166,7 +172,23 @@ async def _stop_traffic_collector(app: FastAPI) -> None:
             pass
     except asyncio.CancelledError:
         pass
+    app.state.traffic_collector_task = None
+    app.state.traffic_collector = None
     logger.info("Traffic collector stopped")
+
+
+async def reconcile_traffic_collector(app: FastAPI) -> None:
+    """Start or stop the collector so the running state matches the effective
+    setting. Idempotent: a no-op when already in the desired state. Used by the
+    runtime toggle endpoint (POST /api/traffic/recording) to apply a change
+    without a service restart.
+    """
+    enabled = await effective_collector_enabled()
+    running = getattr(app.state, "traffic_collector_task", None) is not None
+    if enabled and not running:
+        _maybe_start_traffic_collector(app, True)
+    elif not enabled and running:
+        await _stop_traffic_collector(app)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +216,9 @@ async def lifespan(app: FastAPI):
         _purge_loop(), name="session-purge"
     )
 
-    # Start the traffic collector (no-op unless explicitly enabled)
-    _maybe_start_traffic_collector(app)
+    # Start the traffic collector (no-op unless effectively enabled: an
+    # app_settings runtime override, else the ship-dark config default)
+    _maybe_start_traffic_collector(app, await effective_collector_enabled())
 
     # Initialise Contribution Advisor in-memory state (the asyncio.Lock is bound
     # to this running loop). In-memory + per-process -- valid under --workers 1,

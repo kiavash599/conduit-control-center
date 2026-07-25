@@ -1235,6 +1235,21 @@ a:hover {
     font-family: var(--font-family);
 }
 
+/* Area-curve restyle (TC-2b v2): smooth gradient-filled areas + stroked lines
+   + a subtle peak marker. Colour stays theme-aware via the same two chart
+   tokens; the gradient stops fade opacity from the top down to the baseline.
+   Stop colour/opacity are set here (CSS on <stop>), so no inline style is
+   needed — CSP style-src 'self' is preserved. */
+.th-area { stroke: none; }
+.th-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.th-line--up   { stroke: var(--color-chart-up); }
+.th-line--down { stroke: var(--color-chart-down); }
+.th-grad-up-0   { stop-color: var(--color-chart-up);   stop-opacity: 0.45; }
+.th-grad-up-1   { stop-color: var(--color-chart-up);   stop-opacity: 0.02; }
+.th-grad-down-0 { stop-color: var(--color-chart-down); stop-opacity: 0.45; }
+.th-grad-down-1 { stop-color: var(--color-chart-down); stop-opacity: 0.02; }
+.th-peak-marker { stroke: var(--color-text-dim); stroke-width: 1.5; opacity: 0.55; }
+
 
 /* ============================================================================
    CONTRIBUTION ADVISOR  (A1.4a)

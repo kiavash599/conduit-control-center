@@ -5,8 +5,11 @@ backend/api/traffic.py
 Read-only Traffic Read API for the dashboard "Lifetime & history" surface.
 
 Endpoints (registered under /api/traffic in main.py):
-  GET /api/traffic/summary           -> status, recording_since, lifetime, windows
-  GET /api/traffic/series?range=...  -> dense time buckets for the trend chart
+  GET  /api/traffic/summary           -> status, enabled, recording_since, lifetime,
+                                         windows
+  GET  /api/traffic/series?range=...  -> dense time buckets for the trend chart
+  POST /api/traffic/recording         -> opt-in toggle: persist enabled state and
+                                         start/stop the collector live (auth + CSRF)
 
 All endpoints:
   - require an authenticated session (get_current_user -> 401);
@@ -26,12 +29,17 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 from backend.database import get_db
-from backend.dependencies import AuthenticatedUser, get_current_user
+from backend.dependencies import (
+    AuthenticatedUser,
+    get_current_user,
+    require_csrf_token,
+)
 from backend.traffic import reads
+from backend.traffic.prefs import effective_collector_enabled, set_collector_enabled
 
 router = APIRouter(tags=["traffic"])
 
@@ -57,10 +65,24 @@ class TrafficWindows(BaseModel):
 
 class TrafficSummary(BaseModel):
     status: str
+    enabled: bool
     recording_since: Optional[str] = None
     last_ok_ts_utc: Optional[str] = None
     lifetime: Optional[BytesPair] = None
     windows: TrafficWindows
+
+
+class RecordingToggle(BaseModel):
+    """Body for POST /api/traffic/recording -- the operator's opt-in choice."""
+
+    enabled: bool
+
+
+class RecordingState(BaseModel):
+    """Effective recording state after a toggle (and its persisted status)."""
+
+    enabled: bool
+    status: str
 
 
 class SeriesBucket(BaseModel):
@@ -93,7 +115,37 @@ async def traffic_summary(
 ) -> TrafficSummary:
     async with get_db() as db:
         data = await reads.get_summary(db, now_ts=_now_utc())
+    # Effective opt-in state (app_settings override, else config default) so the
+    # dashboard can distinguish "recording is off" (show a turn-on CTA) from
+    # "recording on, no data yet".
+    data["enabled"] = await effective_collector_enabled()
     return TrafficSummary(**data)
+
+
+@router.post(
+    "/recording",
+    response_model=RecordingState,
+    summary="Enable or disable persistent traffic recording (opt-in)",
+    responses={401: {"description": "Not authenticated"}},
+)
+async def set_recording(
+    body: RecordingToggle,
+    request: Request,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+) -> RecordingState:
+    """Persist the operator's opt-in choice and apply it live (no restart).
+
+    Writes the non-secret ``app_settings`` override, then reconciles the running
+    collector to match. Idempotent: re-sending the same value is a safe no-op.
+    """
+    # Deferred import avoids a circular import (backend.main imports this router).
+    from backend import main as app_main
+
+    await set_collector_enabled(body.enabled)
+    await app_main.reconcile_traffic_collector(request.app)
+    enabled = await effective_collector_enabled()
+    return RecordingState(enabled=enabled, status="running" if enabled else "disabled")
 
 
 @router.get(

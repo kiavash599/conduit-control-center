@@ -67,7 +67,7 @@ async def test_disabled_does_not_construct_or_start(monkeypatch):
         main, "TrafficCollector", lambda **kw: made.append(kw) or _SpyCollector(**kw)
     )
     app = _App()
-    main._maybe_start_traffic_collector(app)
+    main._maybe_start_traffic_collector(app, False)
     assert app.state.traffic_collector is None
     assert app.state.traffic_collector_task is None
     assert made == []  # never constructed
@@ -78,7 +78,7 @@ async def test_enabled_starts_with_config_and_stops(monkeypatch):
     monkeypatch.setattr(main, "get_app_config", lambda: _cfg(True))
     monkeypatch.setattr(main, "TrafficCollector", _SpyCollector)
     app = _App()
-    main._maybe_start_traffic_collector(app)
+    main._maybe_start_traffic_collector(app, True)
 
     col = app.state.traffic_collector
     task = app.state.traffic_collector_task
@@ -97,7 +97,7 @@ async def test_stop_cancels_when_graceful_times_out(monkeypatch):
     monkeypatch.setattr(main, "TrafficCollector", _StubbornCollector)
     monkeypatch.setattr(main, "_COLLECTOR_SHUTDOWN_TIMEOUT_S", 0.05)
     app = _App()
-    main._maybe_start_traffic_collector(app)
+    main._maybe_start_traffic_collector(app, True)
     col = app.state.traffic_collector
     task = app.state.traffic_collector_task
     await asyncio.wait_for(col.run_started.wait(), timeout=1.0)
@@ -112,3 +112,61 @@ async def test_stop_with_no_task_is_safe():
     app.state.traffic_collector = None
     app.state.traffic_collector_task = None
     await main._stop_traffic_collector(app)  # must not raise
+
+
+def _effective(value: bool):
+    async def _f():
+        return value
+    return _f
+
+
+async def test_reconcile_starts_when_enabled_and_not_running(monkeypatch):
+    monkeypatch.setattr(main, "get_app_config", lambda: _cfg(True))
+    monkeypatch.setattr(main, "TrafficCollector", _SpyCollector)
+    monkeypatch.setattr(main, "effective_collector_enabled", _effective(True))
+    app = _App()
+    app.state.traffic_collector = None
+    app.state.traffic_collector_task = None
+
+    await main.reconcile_traffic_collector(app)
+    col = app.state.traffic_collector
+    assert isinstance(col, _SpyCollector)
+    await asyncio.wait_for(col.run_started.wait(), timeout=1.0)
+    await main._stop_traffic_collector(app)
+
+
+async def test_reconcile_stops_when_disabled_and_running(monkeypatch):
+    monkeypatch.setattr(main, "get_app_config", lambda: _cfg(True))
+    monkeypatch.setattr(main, "TrafficCollector", _SpyCollector)
+    monkeypatch.setattr(main, "effective_collector_enabled", _effective(True))
+    app = _App()
+    app.state.traffic_collector = None
+    app.state.traffic_collector_task = None
+    await main.reconcile_traffic_collector(app)  # now running
+    assert app.state.traffic_collector_task is not None
+
+    monkeypatch.setattr(main, "effective_collector_enabled", _effective(False))
+    await main.reconcile_traffic_collector(app)  # should stop
+    assert app.state.traffic_collector_task is None
+    assert app.state.traffic_collector is None
+
+
+async def test_reconcile_is_idempotent(monkeypatch):
+    monkeypatch.setattr(main, "get_app_config", lambda: _cfg(True))
+    monkeypatch.setattr(main, "TrafficCollector", _SpyCollector)
+    # disabled + not running -> no-op
+    monkeypatch.setattr(main, "effective_collector_enabled", _effective(False))
+    app = _App()
+    app.state.traffic_collector = None
+    app.state.traffic_collector_task = None
+    await main.reconcile_traffic_collector(app)
+    assert app.state.traffic_collector_task is None
+
+    # enabled -> starts; second reconcile must NOT replace the running task
+    monkeypatch.setattr(main, "effective_collector_enabled", _effective(True))
+    await main.reconcile_traffic_collector(app)
+    first_task = app.state.traffic_collector_task
+    assert first_task is not None
+    await main.reconcile_traffic_collector(app)
+    assert app.state.traffic_collector_task is first_task
+    await main._stop_traffic_collector(app)
