@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 
 import backend.database as dbmod
 from backend.api.traffic import router
+from backend.auth.cookies import CSRF_COOKIE_NAME
 from backend.dependencies import AuthenticatedUser, get_current_user
 from backend.traffic.schema import (
     SCHEMA_VERSION,
@@ -53,6 +54,13 @@ def _seed(path, *, populated):
         c.execute("PRAGMA foreign_keys=ON")
         for ddl in TRAFFIC_DDL:
             c.execute(ddl)
+        # app_settings is created by database.create_tables() in production; the
+        # summary endpoint now reads the traffic_collector_enabled override from
+        # it (via effective_collector_enabled), so seed it here too.
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS app_settings "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME NOT NULL)"
+        )
         c.execute(SEED_HEALTH_SQL, ("2026-01-01T00:00:00Z",))
         c.execute(STAMP_VERSION_SQL, (SCHEMA_VERSION, "2026-01-01T00:00:00Z"))
         if populated:
@@ -188,3 +196,90 @@ class TestSeries:
         _seed(db_path, populated=False)
         r = _client(authed=True).get("/api/traffic/series?range=bogus")
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Summary: effective enabled state (drives the card CTA)
+# ---------------------------------------------------------------------------
+
+
+def _set_override(path, value):
+    c = sqlite3.connect(path)
+    try:
+        c.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+            "VALUES ('traffic_collector_enabled', ?, '2026-01-01T00:00:00Z')",
+            (value,),
+        )
+        c.commit()
+    finally:
+        c.close()
+
+
+class TestSummaryEnabledField:
+    def test_enabled_false_by_default(self, db_path):
+        _seed(db_path, populated=False)  # no override -> config default (false)
+        j = _client(authed=True).get("/api/traffic/summary").json()
+        assert j["enabled"] is False
+
+    def test_enabled_true_when_override_set(self, db_path):
+        _seed(db_path, populated=False)
+        _set_override(db_path, "true")
+        j = _client(authed=True).get("/api/traffic/summary").json()
+        assert j["enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# POST /api/traffic/recording (opt-in toggle)
+# ---------------------------------------------------------------------------
+
+
+def _csrf_client(monkeypatch):
+    """Authed client with a CSRF cookie set and reconcile stubbed to a no-op
+    (the bare test app has no lifespan; we must not spawn a real collector)."""
+    async def _noop(_app):
+        return None
+
+    monkeypatch.setattr("backend.main.reconcile_traffic_collector", _noop)
+    client = _client(authed=True)
+    client.cookies.set(CSRF_COOKIE_NAME, "tok")
+    return client
+
+
+class TestRecordingToggle:
+    def test_requires_auth(self, db_path):
+        _seed(db_path, populated=False)
+        r = _client(authed=False).post("/api/traffic/recording", json={"enabled": True})
+        assert r.status_code == 401
+
+    def test_requires_csrf(self, db_path):
+        _seed(db_path, populated=False)
+        # Authed but no CSRF cookie/header -> 403.
+        r = _client(authed=True).post("/api/traffic/recording", json={"enabled": True})
+        assert r.status_code == 403
+
+    def test_enable_persists_and_reports(self, db_path, monkeypatch):
+        _seed(db_path, populated=False)
+        client = _csrf_client(monkeypatch)
+        r = client.post(
+            "/api/traffic/recording",
+            json={"enabled": True},
+            headers={"X-CSRF-Token": "tok"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"enabled": True, "status": "running"}
+        # Persisted: a follow-up summary reports enabled true.
+        assert client.get("/api/traffic/summary").json()["enabled"] is True
+
+    def test_disable_persists_and_reports(self, db_path, monkeypatch):
+        _seed(db_path, populated=False)
+        _set_override(db_path, "true")
+        client = _csrf_client(monkeypatch)
+        r = client.post(
+            "/api/traffic/recording",
+            json={"enabled": False},
+            headers={"X-CSRF-Token": "tok"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"enabled": False, "status": "disabled"}
+        assert client.get("/api/traffic/summary").json()["enabled"] is False

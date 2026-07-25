@@ -182,9 +182,55 @@
             .catch(function () { /* non-critical; leave the placeholder */ });
     }
 
+    /* ------------------------------------------------------------------
+       wireTrafficRecording
+       Opt-in traffic recording toggle. Reads the effective state from
+       GET /api/traffic/summary, and POSTs /api/traffic/recording on change
+       (apiFetch adds CSRF + toasts errors). Reverts the checkbox on failure.
+    ------------------------------------------------------------------ */
+
+    function wireTrafficRecording() {
+        var box = el('settings-traffic-recording');
+        if (!box) return;
+        var status = el('settings-traffic-status');
+        function setStatus(msg) {
+            if (!status) return;
+            status.textContent = msg || '';
+            status.hidden = !msg;
+        }
+        // Initial state (best-effort; leave unchecked on failure).
+        fetch('/api/traffic/summary', {
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin',
+        })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) { if (d) box.checked = !!d.enabled; })
+            .catch(function () { /* non-critical */ });
+
+        box.addEventListener('change', function () {
+            var enabled = box.checked;
+            box.disabled = true;
+            setStatus(enabled ? 'Turning on…' : 'Turning off…');
+            apiFetch('/api/traffic/recording', {
+                method: 'POST',
+                body: JSON.stringify({ enabled: enabled }),
+            })
+                .then(function (d) {
+                    box.checked = !!(d && d.enabled);
+                    setStatus(box.checked ? 'Recording is on.' : 'Recording is off.');
+                })
+                .catch(function () {
+                    box.checked = !enabled;   // revert; apiFetch already toasted
+                    setStatus('');
+                })
+                .then(function () { box.disabled = false; });
+        });
+    }
+
     onReady(function () {
-        wireThemeToggle();   // independent of the password form below
-        loadConfigInfo();    // read-only HTTPS port display (transparency)
+        wireThemeToggle();       // independent of the password form below
+        loadConfigInfo();        // read-only HTTPS port display (transparency)
+        wireTrafficRecording();  // opt-in traffic recording toggle
 
         var form      = el('settings-password-form');
         var submitBtn = el('settings-submit-btn');

@@ -11,6 +11,36 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.20] — 2026-07-25
+
+**Opt-in traffic recording toggle + gradient-area history chart.**
+
+> A small, user-facing release. The "Lifetime & history" card was showing its empty state on both
+> Raspberry Pis because the persistent traffic collector is ship-dark (disabled by default) and there
+> was no in-dashboard way to turn it on. v0.3.20 adds that control and restyles the history chart. No
+> dependency changes — the runtime closure is identical to v0.3.19.
+
+### Added
+- **Dashboard opt-in to record traffic history.** A new Settings → "Traffic recording" toggle, plus
+  an off-state call-to-action in the Lifetime & History card, enable or disable the collector. The
+  choice is persisted in the existing `app_settings` key/value store in `ccc.db` as
+  `traffic_collector_enabled` — **no privileged `config.json` write**, so the v0.3.19 root-owned
+  config boundary is untouched and `config.json` remains only the install default. New
+  `POST /api/traffic/recording` (session + CSRF) applies the change **live** via a collector
+  start/stop reconcile, with no service restart. `GET /api/traffic/summary` now reports the effective
+  `enabled` state so the card distinguishes "recording is off" from "recording on, no data yet".
+
+### Changed
+- **Lifetime & History chart restyled to smooth gradient-filled area curves** (received + sent),
+  replacing the grouped bars. Built as inline SVG with CSS-class gradient stops and theme-aware
+  colours (no inline styles — CSP `style-src 'self'` preserved); the accessible screen-reader data
+  table is retained unchanged.
+
+Recording stays **opt-in and off by default** — aggregate sent/received totals only, no per-client
+data.
+
+---
+
 ## [0.3.19] — 2026-07-24
 
 **Combined Epic 1+2 — privilege, ownership, immutable runtime, and transactional lifecycle.**

@@ -458,11 +458,19 @@
                      role="status"
                      aria-live="polite"
                      hidden>
-                    Not recording
-                    <p class="empty-state__hint">
-                        Persistent traffic totals appear here once the collector is
-                        enabled (traffic_collector_enabled).
+                    <span id="th-empty-title">Not recording</span>
+                    <p class="empty-state__hint" id="th-empty-hint">
+                        Persistent traffic totals appear here once traffic
+                        recording is turned on.
                     </p>
+                    <!-- Shown by traffic_history.js only when recording is OFF.
+                         Click -> POST /api/traffic/recording {enabled:true}. -->
+                    <button type="button"
+                            id="th-enable-recording"
+                            class="btn btn--primary mt-2"
+                            hidden>
+                        Turn on traffic recording
+                    </button>
                 </div>
 
                 <!-- populated: lifetime totals + recent windows -->
@@ -1042,6 +1050,41 @@
                     <dt class="label">HTTPS port (configured)</dt>
                     <dd id="settings-https-port">—</dd>
                 </dl>
+            </div>
+
+            <!--
+              Traffic recording (opt-in). settings.js reads the effective state
+              from GET /api/traffic/summary and POSTs /api/traffic/recording on
+              change (CSRF via apiFetch). Off by default (ship-dark); enabling is
+              applied live with no service restart.
+            -->
+            <div class="card" id="settings-traffic-card">
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Traffic recording</h2>
+                        <p class="card__subtitle">
+                            Opt-in — record aggregate lifetime &amp; history
+                        </p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="label" for="settings-traffic-recording">
+                        <input type="checkbox"
+                               id="settings-traffic-recording"
+                               name="traffic_recording">
+                        Record traffic history
+                    </label>
+                    <p class="form-hint">
+                        Stores aggregate sent/received totals over time in the
+                        local database. Aggregate only — no per-client data. Off
+                        by default; you can turn it off again anytime.
+                    </p>
+                    <p class="form-status"
+                       id="settings-traffic-status"
+                       role="status"
+                       aria-live="polite"
+                       hidden></p>
+                </div>
             </div>
 
             <div class="card" id="settings-card">
