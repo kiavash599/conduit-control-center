@@ -45,8 +45,14 @@ after v0.2 had already closed.
 
 8. **Reconcile status.** Update `docs/PROJECT-STATUS.md` (release, resolved issues, timeline).
 
-**Never publish:** `trusted_publishers`/`allowed_signers`, the signing private key, or any asset
-other than the three `ccc-X.Y.Z.*` files. The device trust anchor is provisioned out-of-band.
+**Never publish:** `trusted_publishers`/`allowed_signers`, the signing private key, the Phase-B
+bundle or locks, or any asset other than the `ccc-X.Y.Z.*` release files — **four** under the V2
+platform-artifact model (`-aarch64.tar.gz`, `-armv7l.tar.gz`, `.manifest.json`,
+`.manifest.json.sig`). The device trust anchor is provisioned out-of-band.
+
+> **Walkthrough:** for the ordered ceremony with the actual commands (bundle-reuse decision, tag,
+> build+sign, local qualification, publish, post-publish verification), see
+> `docs/runbooks/owner-release-guide.md`.
 
 ## Why this is enforced, not just documented
 
