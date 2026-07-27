@@ -199,6 +199,15 @@ ccc.db-shm
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
 #  refer to https://docs.
-# ADR-0003 / operator artifacts — never commit
+# ADR-0003 / operator artifacts ï¿½ never commit
 trusted_publishers
 *.patch
+
+# Test debris guard. A test that hands an ABSOLUTE WINDOWS path to `bash`
+# (which cannot resolve C:\...) makes bash create a file with that literal name
+# in the current directory â€” i.e. the repository root. The offending test was
+# fixed to use cwd + relative names; this guard stops any recurrence from being
+# committed. Systemd units live under deployment/, never at the repo root.
+/*out.service
+/*.service
+/C:*

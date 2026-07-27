@@ -320,26 +320,35 @@ class CrlfUnitFileTests(unittest.TestCase):
 
     _GREP = 'grep -qE "^Environment=CCC_MAX_PERSONAL_CLIENTS=0$"'
 
+    # Paths are passed to bash as RELATIVE names with cwd=<tempdir>. An absolute
+    # Windows path (C:\Users\...\out.service) is meaningless to bash, which would
+    # (a) make the "before" grep fail merely because the file was not found -- a
+    # false green -- and (b) create a file with that literal name in the CURRENT
+    # directory, leaking test debris into the repository. Relative names keep the
+    # assertions meaningful and the temp directory self-contained.
     def test_crlf_fails_before_and_passes_after_normalization(self):
         d = tempfile.mkdtemp()
         src = os.path.join(d, "conduit.service")
         with open(src, "wb") as f:
             f.write(b"[Service]\r\nEnvironment=CCC_MAX_PERSONAL_CLIENTS=0\r\n")
         # reproduces the field bug: $-anchored grep fails on the trailing CR
-        r = subprocess.run(["bash", "-c", f'{self._GREP} "{src}"'])
+        r = subprocess.run(["bash", "-c", f"{self._GREP} conduit.service"], cwd=d)
         self.assertNotEqual(r.returncode, 0)
         # the installer's normalization makes it pass deterministically
-        dst = os.path.join(d, "out.service")
-        r = subprocess.run(["bash", "-c",
-                            f"sed 's/\\r$//' '{src}' > '{dst}'; {self._GREP} '{dst}'"])
+        r = subprocess.run(
+            ["bash", "-c",
+             f"sed 's/\\r$//' conduit.service > out.service; {self._GREP} out.service"],
+            cwd=d,
+        )
         self.assertEqual(r.returncode, 0)
+        self.assertTrue(os.path.isfile(os.path.join(d, "out.service")))
 
     def test_validation_not_weakened_when_default_missing(self):
         d = tempfile.mkdtemp()
         dst = os.path.join(d, "out.service")
         with open(dst, "w") as f:
             f.write("[Service]\nEnvironment=SOMETHING_ELSE=1\n")
-        r = subprocess.run(["bash", "-c", f'{self._GREP} "{dst}"'])
+        r = subprocess.run(["bash", "-c", f"{self._GREP} out.service"], cwd=d)
         self.assertNotEqual(r.returncode, 0)
 
 
