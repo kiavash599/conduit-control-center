@@ -38,6 +38,7 @@ from backend.dependencies import (
     get_current_user,
     require_csrf_token,
 )
+from backend.display_prefs import effective_timezone, effective_timezone_name
 from backend.traffic import reads
 from backend.traffic.prefs import effective_collector_enabled, set_collector_enabled
 
@@ -89,11 +90,15 @@ class SeriesBucket(BaseModel):
     bucket_utc: str
     bytes_up: int
     bytes_down: int
+    # Set only when a local-day boundary bisected a UTC hour whose deltas had
+    # already aged out, so the hour was attributed to the day it starts in.
+    approximate: bool = False
 
 
 class TrafficSeries(BaseModel):
     range: str
     granularity: str
+    timezone: str
     buckets: list[SeriesBucket]
 
 
@@ -161,6 +166,12 @@ async def traffic_series(
     range_: TrafficRange = Query(default=TrafficRange.h24, alias="range"),
     _user: AuthenticatedUser = Depends(get_current_user),
 ) -> TrafficSeries:
+    # Daily ranges are re-aggregated into LOCAL calendar days when a display
+    # timezone is set (storage stays UTC); hourly buckets are instants.
+    tz = await effective_timezone()
     async with get_db() as db:
-        data = await reads.get_series(db, range_key=range_.value, now_ts=_now_utc())
+        data = await reads.get_series(
+            db, range_key=range_.value, now_ts=_now_utc(), tz=tz
+        )
+    data["timezone"] = await effective_timezone_name()
     return TrafficSeries(**data)

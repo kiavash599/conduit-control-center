@@ -63,6 +63,11 @@ from backend.auth.cookies import (
 from backend.auth.login import hash_password, verify_password
 from backend.auth.sessions import delete_all_sessions
 from backend.config import get_app_config, get_env_file_path, get_settings
+from backend.display_prefs import (
+    effective_timezone_name,
+    list_timezones,
+    set_timezone,
+)
 from backend.dependencies import (
     AuthenticatedUser,
     get_current_user,
@@ -153,6 +158,19 @@ class SettingsInfo(BaseModel):
     """Read-only configuration surfaced on the dashboard. No secrets."""
 
     https_port: int
+    timezone: str
+
+
+class TimezoneRequest(BaseModel):
+    """Body for POST /api/settings/timezone — an IANA zone name."""
+
+    timezone: str
+
+
+class TimezoneResponse(BaseModel):
+    """Effective display timezone after the change."""
+
+    timezone: str
 
 
 @router.get(
@@ -174,7 +192,56 @@ async def get_settings_info(
     web.https_port; defaults to 443 on older installs). Read-only by design:
     the port is changed only via install.sh / a future CLI, never here.
     """
-    return SettingsInfo(https_port=get_app_config().web_https_port)
+    return SettingsInfo(
+        https_port=get_app_config().web_https_port,
+        timezone=await effective_timezone_name(),
+    )
+
+
+@router.get(
+    "/timezones",
+    summary="Available IANA timezone names (for the Settings picker)",
+    responses={
+        200: {"description": "Timezone list returned"},
+        401: {"description": "Not authenticated"},
+    },
+)
+async def get_timezones(
+    _user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
+    """Return the IANA zone names available on this host, plus the effective one."""
+    return {
+        "timezones": list_timezones(),
+        "effective": await effective_timezone_name(),
+    }
+
+
+@router.post(
+    "/timezone",
+    response_model=TimezoneResponse,
+    summary="Set the dashboard display timezone (display only; storage stays UTC)",
+    responses={
+        200: {"description": "Timezone saved"},
+        401: {"description": "Not authenticated"},
+        403: {"description": "CSRF token invalid or missing"},
+        422: {"description": "Unknown IANA timezone"},
+    },
+)
+async def set_timezone_endpoint(
+    body: TimezoneRequest,
+    _user: AuthenticatedUser = Depends(get_current_user),
+    _csrf: None = Depends(require_csrf_token),
+) -> TimezoneResponse:
+    """Persist the operator's display timezone.
+
+    Affects rendering only — stored and transmitted times remain UTC, and
+    Conduit's HH:MM **UTC** reduced-mode schedule contract is unchanged.
+    """
+    try:
+        saved = await set_timezone(body.timezone)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return TimezoneResponse(timezone=saved)
 
 
 # ---------------------------------------------------------------------------

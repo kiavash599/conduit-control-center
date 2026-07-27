@@ -74,14 +74,12 @@
         return Math.floor(delta / 86400) + ' days ago';
     }
 
-    // ISO 8601 -> "YYYY-MM-DD HH:MM UTC" (always UTC; ledger semantics).
+    // ISO 8601 -> "YYYY-MM-DD HH:MM <Zone>" in the effective display timezone
+    // (v0.3.22). Storage/transport remain UTC; this is rendering only.
     function formatUtc(isoStr) {
         if (!isoStr) return '—';
-        var dt = new Date(isoStr);
-        if (isNaN(dt.getTime())) return '—';
-        function p(n) { return (n < 10 ? '0' : '') + n; }
-        return dt.getUTCFullYear() + '-' + p(dt.getUTCMonth() + 1) + '-' + p(dt.getUTCDate())
-             + ' ' + p(dt.getUTCHours()) + ':' + p(dt.getUTCMinutes()) + ' UTC';
+        var s = formatTime(isoStr);
+        return s === '—' ? s : s + ' ' + displayZoneLabel();
     }
 
     // A bucket_utc is "YYYY-MM-DD" (daily) or "YYYY-MM-DDTHH:MM:SSZ" (hourly).
@@ -90,18 +88,18 @@
         return new Date(bucketUtc.length <= 10 ? (bucketUtc + 'T00:00:00Z') : bucketUtc);
     }
 
+    // Daily bucket keys are already LOCAL calendar dates when a display
+    // timezone is set (the backend re-aggregates them), so they are shown
+    // as-is with the zone named. Hourly buckets are instants -> converted.
     function bucketLabel(bucketUtc, granularity) {
-        if (granularity === 'day') return bucketUtc + ' UTC';
+        if (granularity === 'day') return bucketUtc + ' (' + displayZoneLabel() + ')';
         return formatUtc(bucketUtc);
     }
 
-    // Compact axis label: daily -> "MM-DD"; hourly -> "HH:00" (UTC).
+    // Compact axis label: daily -> "MM-DD"; hourly -> "HH:MM" in the zone.
     function shortLabel(bucketUtc, granularity) {
         if (granularity === 'day') return bucketUtc.slice(5);
-        var d = parseBucketStart(bucketUtc);
-        if (isNaN(d.getTime())) return '';
-        var hh = d.getUTCHours();
-        return (hh < 10 ? '0' : '') + hh + ':00';
+        return formatHourLabel(bucketUtc);
     }
 
     /* ===================== SVG chart helpers (TC-2b) ===================== */
@@ -419,6 +417,9 @@
     }
 
     function renderSeries(data) {
+        // The series response carries the effective display timezone so every
+        // label (and the daily grid the backend already localised) agree.
+        if (data.timezone) setDisplayTimezone(data.timezone);
         var buckets = data.buckets || [];
         var total = 0;
         buckets.forEach(function (b) {
