@@ -172,14 +172,80 @@
 
     function loadConfigInfo() {
         var portEl = el('settings-https-port');
-        if (!portEl) return;
+        var tzEl = el('settings-timezone-current');
+        if (!portEl && !tzEl) return;
         apiFetch('/api/settings/info')
             .then(function (data) {
-                if (data && typeof data.https_port !== 'undefined') {
+                if (!data) return;
+                if (portEl && typeof data.https_port !== 'undefined') {
                     portEl.textContent = String(data.https_port);
+                }
+                if (data.timezone) {
+                    setDisplayTimezone(data.timezone);
+                    if (tzEl) tzEl.textContent = data.timezone;
                 }
             })
             .catch(function () { /* non-critical; leave the placeholder */ });
+    }
+
+    /* ------------------------------------------------------------------
+       wireTimezone
+       Display-timezone picker. Storage/transport stay UTC; this changes
+       rendering only (and the local-day grid the backend builds for 7d/30d).
+       The select is populated from the host's IANA zone list and pre-selects
+       the browser-detected zone when nothing has been saved yet, so opting in
+       is one click without changing behaviour for existing installs.
+    ------------------------------------------------------------------ */
+
+    function wireTimezone() {
+        var sel = el('settings-timezone');
+        if (!sel) return;
+        var status = el('settings-timezone-status');
+        var curEl = el('settings-timezone-current');
+        function setStatus(msg) {
+            if (!status) return;
+            status.textContent = msg || '';
+            status.hidden = !msg;
+        }
+
+        apiFetch('/api/settings/timezones')
+            .then(function (d) {
+                if (!d || !d.timezones) return;
+                var effective = d.effective || 'UTC';
+                var preselect = (effective === 'UTC') ? (browserTimezone() || 'UTC') : effective;
+                sel.textContent = '';
+                d.timezones.forEach(function (z) {
+                    var o = document.createElement('option');
+                    o.value = z;
+                    o.textContent = z;
+                    if (z === preselect) o.selected = true;
+                    sel.appendChild(o);
+                });
+                if (effective === 'UTC' && preselect !== 'UTC') {
+                    setStatus('Currently UTC. ' + preselect +
+                              ' detected from this browser — save to apply.');
+                }
+            })
+            .catch(function () { /* non-critical; picker stays empty */ });
+
+        sel.addEventListener('change', function () {
+            var zone = sel.value;
+            sel.disabled = true;
+            setStatus('Saving…');
+            apiFetch('/api/settings/timezone', {
+                method: 'POST',
+                body: JSON.stringify({ timezone: zone }),
+            })
+                .then(function (d) {
+                    var saved = (d && d.timezone) || zone;
+                    setDisplayTimezone(saved);
+                    if (curEl) curEl.textContent = saved;
+                    setStatus('Times now shown in ' + saved +
+                              '. Stored data remains UTC.');
+                })
+                .catch(function () { setStatus(''); })
+                .then(function () { sel.disabled = false; });
+        });
     }
 
     /* ------------------------------------------------------------------
@@ -229,8 +295,9 @@
 
     onReady(function () {
         wireThemeToggle();       // independent of the password form below
-        loadConfigInfo();        // read-only HTTPS port display (transparency)
+        loadConfigInfo();        // read-only HTTPS port + effective timezone
         wireTrafficRecording();  // opt-in traffic recording toggle
+        wireTimezone();          // display-timezone picker (rendering only)
 
         var form      = el('settings-password-form');
         var submitBtn = el('settings-submit-btn');

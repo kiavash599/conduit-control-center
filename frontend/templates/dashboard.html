@@ -1049,7 +1049,41 @@
                 <dl class="settings-info">
                     <dt class="label">HTTPS port (configured)</dt>
                     <dd id="settings-https-port">—</dd>
+                    <dt class="label">Display timezone</dt>
+                    <dd id="settings-timezone-current">—</dd>
                 </dl>
+            </div>
+
+            <!--
+              Display timezone (v0.3.22). Rendering only: stored and transmitted
+              times remain UTC, and Conduit's reduced-mode schedule keeps its
+              HH:MM UTC contract (shown alongside its local equivalent).
+              settings.js populates the select from GET /api/settings/timezones
+              and POSTs /api/settings/timezone on change.
+            -->
+            <div class="card" id="settings-timezone-card">
+                <div class="card__header">
+                    <div>
+                        <h2 class="card__title">Display timezone</h2>
+                        <p class="card__subtitle">
+                            How dates and times are shown on this dashboard
+                        </p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="label" for="settings-timezone">Timezone</label>
+                    <select class="input" id="settings-timezone" name="timezone"></select>
+                    <p class="form-hint">
+                        Affects display only — traffic is always recorded and stored
+                        in UTC, and the bandwidth schedule keeps its UTC value (its
+                        local equivalent is shown next to it).
+                    </p>
+                    <p class="form-status"
+                       id="settings-timezone-status"
+                       role="status"
+                       aria-live="polite"
+                       hidden></p>
+                </div>
             </div>
 
             <!--

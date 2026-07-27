@@ -73,6 +73,7 @@ tests/unit/test_dependencies.py
 tests/unit/test_deploy_checksum_contract.py
 tests/unit/test_deploy_checksum_regression.py
 tests/unit/test_deploy_pyc_purge_contract.py
+tests/unit/test_display_prefs.py
 tests/unit/test_env_checkpoint.py
 tests/unit/test_env_file.py
 tests/unit/test_epic1_ownership_contract.py
@@ -85,6 +86,7 @@ tests/unit/test_gen_active_inputs.py
 tests/unit/test_installed_layout.py
 tests/unit/test_invariant_suite.py
 tests/unit/test_lifecycle_filter_contract.py
+tests/unit/test_local_day_buckets.py
 tests/unit/test_lockout.py
 tests/unit/test_logical_tree.py
 tests/unit/test_login.py

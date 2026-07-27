@@ -56,19 +56,24 @@
     /* ----- reduced-mode helpers (BS3.2): UTC <-> browser-local preview ----- */
     var RE_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
     function localTz() {
-        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'; }
+        // The operator-selected display timezone (Settings), not the browser's.
+        try { return displayZoneLabel() || 'local'; }
         catch (e) { return 'local'; }
     }
-    function pad2(n) { return (n < 10 ? '0' : '') + n; }
-    // Convert "HH:MM" UTC to the browser's local "HH:MM" using today's offset
-    // (DST-aware). Returns null for malformed input. Display-only; tunnel-core
-    // always evaluates the window in UTC, so the schedule itself is unaffected.
+    // Convert "HH:MM" UTC to "HH:MM" in the display timezone, using today's
+    // offset (DST-aware). Returns null for malformed input.
+    //
+    // DISPLAY ONLY — and deliberately never converted in place: Conduit's
+    // InproxyReducedStartTime/EndTime are HH:MM **UTC** by contract and
+    // tunnel-core always evaluates the window in UTC. The field therefore keeps
+    // an explicit UTC value and shows the local equivalent alongside it, so the
+    // window can never be set in the wrong frame.
     function utcHHMMToLocal(hhmm) {
         if (!RE_HHMM.test(hhmm || '')) return null;
         var p = ('' + hhmm).split(':');
         var d = new Date();
         d.setUTCHours(parseInt(p[0], 10), parseInt(p[1], 10), 0, 0);
-        return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+        return formatTime(d.toISOString(), { date: false, time: true });
     }
     function renderReduced(r) {
         var sum = el('cc-reduced-summary');
@@ -82,8 +87,12 @@
         sum.textContent = r.start + '–' + r.end + ' UTC · max ' +
             r.max_common_clients + ' clients · ' + r.bandwidth_mbps + ' Mbps';
         if (loc) {
+            // Dual display: the UTC value Conduit actually uses, and its local
+            // equivalent — e.g. "21:00 UTC = 03:30 Asia/Yangon".
             var ls = utcHHMMToLocal(r.start), le = utcHHMMToLocal(r.end);
-            loc.textContent = (ls && le) ? (' (' + ls + '–' + le + ' ' + localTz() + ')') : '';
+            loc.textContent = (ls && le)
+                ? (' — ' + r.start + '–' + r.end + ' UTC = ' + ls + '–' + le + ' ' + localTz())
+                : '';
         }
     }
 

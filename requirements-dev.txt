@@ -32,6 +32,14 @@ ruff==0.15.17
 # SRS: SEC-DEP-01, Issue #2 (CI pipeline)
 pip-audit>=2.7.0,<3.0.0
 
+# IANA time-zone database for `zoneinfo` (dashboard display timezone, v0.3.22).
+# DEV/TEST ONLY, and deliberately NOT in requirements.txt: Linux — the only
+# supported runtime target — resolves zones from the system tz database in
+# /usr/share/zoneinfo, so the 30-package runtime closure is unchanged. Windows
+# has no system tz database, so without this the timezone tests would fail on
+# the Owner's Windows invariant run while passing on Linux/CI.
+tzdata>=2024.1
+
 # Release-tooling dependency (ADR-0003 A5): standard PEP 440 semantics for Requires-Python at
 # active-input generation, reuse-authz validation, and connected acquisition. Declared DIRECTLY
 # here (not transitively) so the release/generation tooling on the Owner PC + CI + WSL always has

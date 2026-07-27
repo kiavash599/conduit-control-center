@@ -11,6 +11,42 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.22] — 2026-07-25
+
+**Dashboard display timezone.**
+
+> Absolute times on the dashboard were always rendered in UTC, which is unhelpful for an operator
+> running a node in their own timezone. v0.3.22 adds an operator-selected IANA timezone that affects
+> **rendering only** — traffic is still recorded, stored, and transmitted in UTC, and Conduit's
+> reduced-mode schedule keeps its HH:MM **UTC** contract.
+
+### Added
+- **Settings → Display timezone.** Pick any IANA zone (e.g. `Europe/Stockholm`, `Asia/Yangon`).
+  The preference is stored in the existing `app_settings` table — **no privileged `config.json`
+  write**, so the root-owned config boundary is untouched. Default remains **UTC**, so existing
+  installs are unchanged until the setting is saved; the picker pre-selects the browser-detected
+  zone to make opting in a single click. Unknown or hand-edited values fail closed to UTC.
+
+### Changed
+- **Lifetime & History timestamps and hourly chart labels** now render in the selected zone, with
+  the zone named rather than a bare "UTC".
+- **7d/30d charts now show true local calendar days.** A UTC day is not a local day (in
+  `Asia/Yangon`, +06:30, the UTC day spans 06:30-to-06:30 local), so relabelling the UTC-day rollup
+  would misstate it. Local days are instead re-aggregated at read time from `traffic_rollup_hourly`
+  — the documented source of truth, retained far longer than these views need — leaving the stored
+  rollups, the collector, and retention untouched. DST days are correctly 23 or 25 hours. For zones
+  whose offset is not a whole hour, the two boundary hours per day are resolved **exactly** from
+  `traffic_delta`; if those deltas have aged out, the hour is attributed to the day it starts in and
+  the bucket is flagged `approximate` rather than silently split.
+- **Bandwidth schedule now shows both frames** — e.g. `21:00–03:00 UTC = 03:30–09:30 Asia/Yangon`.
+  The value entered, validated, stored, and sent to Conduit **remains UTC**, so the throttling
+  window can never be set in the wrong frame.
+
+Development note: `tzdata` is added to `requirements-dev.txt` only — Linux resolves zones from the
+system tz database, so the runtime dependency closure is unchanged.
+
+---
+
 ## [0.3.21] — 2026-07-25
 
 **Fix: static-asset cache-busting defeated by deterministic builds.**

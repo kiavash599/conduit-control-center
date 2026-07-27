@@ -142,9 +142,84 @@ function onReady(fn) {
 
 
 /* ============================================================================
+   Display timezone (v0.3.22)
+   ----------------------------------------------------------------------------
+   Storage and transport stay UTC everywhere; this affects rendering only. The
+   effective IANA zone is set server-side (Settings -> Display timezone) and
+   published here once, so every card formats times identically.
+
+   Conduit's reduced-mode schedule is HH:MM UTC by contract — that field shows
+   BOTH UTC and local and is never converted in place (see conduit_config.js).
+   ============================================================================ */
+
+var CCC_TZ = 'UTC';   // effective zone; replaced by setDisplayTimezone()
+
+function setDisplayTimezone(name) {
+    if (name && typeof name === 'string') CCC_TZ = name;
+}
+
+function getDisplayTimezone() { return CCC_TZ; }
+
+/** The browser's own IANA zone, or '' when unavailable (Settings pre-select). */
+function browserTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+/**
+ * Format an ISO-8601 UTC instant in the effective display timezone.
+ * Returns an em dash for null/invalid input (matching the card placeholders).
+ *
+ * @param {string} isoStr        ISO instant, e.g. "2026-07-25T12:03:00Z"
+ * @param {object} [opts]        {date:bool, time:bool, zone:bool}
+ */
+function formatTime(isoStr, opts) {
+    if (!isoStr) return '—';
+    var dt = new Date(isoStr);
+    if (isNaN(dt.getTime())) return '—';
+    var o = opts || {};
+    var fmt = {
+        timeZone: CCC_TZ,
+        hour12: false,
+    };
+    if (o.date !== false) {
+        fmt.year = 'numeric'; fmt.month = '2-digit'; fmt.day = '2-digit';
+    }
+    if (o.time !== false) {
+        fmt.hour = '2-digit'; fmt.minute = '2-digit';
+    }
+    if (o.zone) fmt.timeZoneName = 'short';
+    try {
+        return new Intl.DateTimeFormat('sv-SE', fmt).format(dt);
+    } catch (e) {
+        // Unknown zone (or no tz data): fall back to a UTC rendering rather
+        // than breaking the card.
+        return isoStr;
+    }
+}
+
+/** "HH:MM" in the effective zone (chart axis labels). */
+function formatHourLabel(isoStr) {
+    return formatTime(isoStr, { date: false, time: true });
+}
+
+/** A short zone suffix for headings, e.g. "Asia/Yangon". */
+function displayZoneLabel() { return CCC_TZ; }
+
+
+/* ============================================================================
    Globals (no module system in v0.1 — scripts loaded via <script> tags)
    ============================================================================ */
 
-window.startPolling = startPolling;
-window.stopPolling  = stopPolling;
-window.onReady      = onReady;
+window.startPolling        = startPolling;
+window.stopPolling         = stopPolling;
+window.onReady             = onReady;
+window.setDisplayTimezone  = setDisplayTimezone;
+window.getDisplayTimezone  = getDisplayTimezone;
+window.browserTimezone     = browserTimezone;
+window.formatTime          = formatTime;
+window.formatHourLabel     = formatHourLabel;
+window.displayZoneLabel    = displayZoneLabel;
